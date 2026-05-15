@@ -1,0 +1,79 @@
+{
+  "success": [
+    {
+      "platform": "youtube",
+      "variant": "subtitle_video",
+      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "expected_media_kind": "video",
+      "require_text": true,
+      "require_source_media": true
+    },
+    {
+      "platform": "bilibili",
+      "variant": "subtitle_video",
+      "url": "https://www.bilibili.com/video/BV1tuwezwEi7/?share_source=copy_web&vd_source=42927ff15dcd4894af521f3933dcc9c0",
+      "expected_media_kind": "video",
+      "require_text": true,
+      "require_source_media": true
+    },
+    {
+      "platform": "xiaoyuzhou",
+      "variant": "transcript_audio",
+      "url": "https://www.xiaoyuzhoufm.com/episode/69b6b4fbf8b8079bfa778b80",
+      "expected_media_kind": "audio",
+      "require_text": true
+    },
+    {
+      "platform": "douyin",
+      "variant": "public_video",
+      "url": "https://www.douyin.com/video/7618917735157806321?previous_page=web_code_link",
+      "expected_media_kind": "video",
+      "require_text": true,
+      "require_source_media": true
+    },
+    {
+      "platform": "xiaohongshu",
+      "variant": "image",
+      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643?source=webshare&xhsshare=pc_web&xsec_token=ABIAUEIHIby3TGRVmZn_Oce6p4IAYr-b3Auu8v_nwk07Q=&xsec_source=pc_share",
+      "require_image_urls": true
+    },
+    {
+      "platform": "xiaohongshu",
+      "variant": "video",
+      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643?source=webshare&xhsshare=pc_web&xsec_token=ABIAUEIHIby3TGRVmZn_Oce6p4IAYr-b3Auu8v_nwk07Q=&xsec_source=pc_share"
+    },
+    {
+      "platform": "xiaohongshu",
+      "variant": "live",
+      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643?source=webshare&xhsshare=pc_web&xsec_token=ABIAUEIHIby3TGRVmZn_Oce6p4IAYr-b3Auu8v_nwk07Q=&xsec_source=pc_share"
+    },
+    {
+      "platform": "wechat_article",
+      "variant": "article",
+      "url": "https://mp.weixin.qq.com/s/_PuKS_OmS5Z7u5nSinMsnA",
+      "require_image_urls": true
+    }
+  ],
+  "failure": [
+    {
+      "platform": "youtube",
+      "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+    },
+    {
+      "platform": "bilibili",
+      "url": "https://www.bilibili.com/video/BV1111111111"
+    },
+    {
+      "platform": "xiaoyuzhou",
+      "url": "https://www.xiaoyuzhoufm.com/episode/67f0146e64f12bfc04dca0d1"
+    },
+    {
+      "platform": "douyin",
+      "url": "https://www.douyin.com/video/1234567890123456789"
+    },
+    {
+      "platform": "xiaohongshu",
+      "url": "http://xhslink.com/a/HFNEzlEk7tP3"
+    }
+  ]
+}

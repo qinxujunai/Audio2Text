@@ -1,0 +1,13 @@
+faster-whisper
+fastapi
+uvicorn
+python-multipart
+ctranslate2
+onnxruntime
+av
+httpx
+requests
+yt-dlp
+playwright
+youtube-transcript-api
+opencc-python-reimplemented
