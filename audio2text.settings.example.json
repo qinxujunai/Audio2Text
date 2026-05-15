@@ -1,0 +1,27 @@
+{
+  "api_host": "127.0.0.1",
+  "api_port": 8000,
+  "workspace_dir": "workspace",
+  "model_path": "workspace/runtime/models/faster-whisper/medium",
+  "ffmpeg_path": "workspace/runtime/ffmpeg/ffmpeg.exe",
+  "device": "auto",
+  "compute_type": "",
+  "language": "auto",
+  "beam_size": 1,
+  "vad_filter": true,
+  "max_upload_size_mb": 1024,
+  "transcription_provider": "local_faster_whisper",
+  "openai_compatible_base_url": "",
+  "openai_compatible_api_key": "",
+  "openai_compatible_model": "gpt-4o-mini-transcribe",
+  "allowed_origins": [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://127.0.0.1:5173",
+    "http://localhost:5173"
+  ],
+  "export_plain_text": true,
+  "export_timestamp_text": true,
+  "export_markdown": true,
+  "export_meta": true
+}

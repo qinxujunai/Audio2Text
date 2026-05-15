@@ -1,0 +1,6 @@
+name = "wanxiang-chengwen-proxy"
+main = "cf_worker_proxy.js"
+compatibility_date = "2026-05-14"
+
+[ai]
+binding = "AI"

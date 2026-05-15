@@ -1,0 +1,27 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+workspace/
+snapshots/
+tests_runtime/
+
+node_modules/
+dist/
+web/node_modules/
+frontend/dist/
+
+audio2text.settings.json
+tests/live_smoke_samples.local.json
+
+.playwright-mcp/
+scripts/.wrangler/
+
+.DS_Store
+Thumbs.db
+.wrangler/
+
+# Large model files - download via download_model.py
+Assets/Models/
