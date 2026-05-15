@@ -170,6 +170,13 @@ export function InputStage({
               ref={textareaRef}
               value={input}
               onChange={(event) => onInputChange(event.target.value)}
+              onPaste={(event) => {
+                const text = event.clipboardData.getData("text/plain");
+                if (text.trim()) {
+                  event.preventDefault();
+                  onInputChange(text);
+                }
+              }}
               onKeyDown={(event) => {
                 if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && input.trim() && !submitting) {
                   event.preventDefault();

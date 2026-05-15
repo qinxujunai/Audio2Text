@@ -337,14 +337,11 @@ export default function App() {
         setToast("\u5DF2\u4ECE\u526A\u8D34\u677F\u7C98\u8D34\u3002");
         return;
       } catch {
-        if (isMobile) {
-          setToast("\u8BF7\u957F\u6309\u8F93\u5165\u6846\u9009\u62E9\u201C\u7C98\u8D34\u201D\u3002");
-          return;
-        }
+        // clipboard API often fails on mobile \u2014 fall through to textarea focus
       }
     }
     if (isMobile) {
-      setToast("\u8BF7\u957F\u6309\u8F93\u5165\u6846\u9009\u62E9\u201C\u7C98\u8D34\u201D\u3002");
+      setToast('\u8BF7\u957F\u6309\u8F93\u5165\u6846\u9009\u62E9\u201C\u7C98\u8D34\u201D\u3002');
     } else {
       setToast("\u8BF7\u76F4\u63A5\u5728\u8F93\u5165\u6846\u4E2D\u6309 Ctrl+V \u7C98\u8D34\u94FE\u63A5\u3002");
     }
