@@ -1359,6 +1359,14 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
         return "这条小红书内容当前不可访问，或页面已经失效。请换一条公开图文或视频再试。"
     if reason_code == "xiaoyuzhou_audio_missing":
         return "这条小宇宙内容没有拿到可转写音频。请换一条公开节目再试。"
+    if reason_code == "source_fetch_failed":
+        return "当前网络环境没有稳定连上来源站点，请稍后重试。"
+    if reason_code == "extract_failed":
+        return "没有稳定拿到页面下的正文内容。请稍后重试，或换一条公开内容。"
+    if reason_code == "download_failed":
+        return "资源下载没有成功，请稍后重试，或换一条内容再试。"
+    if reason_code == "transcribe_failed":
+        return "媒体已拿到，但转写没有成功。建议稍后重试，或换一个更清晰的音视频文件。"
 
     default_message = PUBLIC_ERROR_MESSAGES.get(stage)
     if default_message:
