@@ -2283,18 +2283,18 @@ img {
   }
 
   .image-viewer-toolbar {
-    left: 12px;
-    right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom));
     transform: none;
     width: auto;
     max-width: none;
     box-sizing: border-box;
     justify-content: center;
     flex-wrap: wrap;
-    gap: 6px;
-    border-radius: 20px;
-    padding: 6px;
+    gap: 4px;
+    border-radius: 18px;
+    padding: 5px;
   }
 
   .image-viewer-overlay.is-chrome-visible .image-viewer-toolbar,
@@ -2303,17 +2303,17 @@ img {
   }
 
   .image-viewer-toolbar-button {
-    min-width: 40px;
-    height: 40px;
-    padding: 0 6px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0 5px;
     font-size: 12px;
   }
 
   .image-viewer-toolbar-group {
-    min-height: 40px;
+    min-height: 36px;
     flex-shrink: 1;
     min-width: 0;
-    gap: 6px;
+    gap: 4px;
   }
 
   .image-viewer-toolbar-group.is-navigation {
@@ -2323,18 +2323,13 @@ img {
   }
 
   .image-viewer-toolbar-group.is-image-tools {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     justify-content: center;
-  }
-
-  .image-viewer-toolbar-group:last-child {
-    flex: 0 0 auto;
-    order: 1;
   }
 
   .image-viewer-toolbar-button.is-download {
     background: rgba(255, 255, 255, 0.16);
-    padding: 0 10px;
+    padding: 0 8px;
   }
 
   .result-surface,
