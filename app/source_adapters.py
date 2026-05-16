@@ -1168,7 +1168,7 @@ class XiaohongshuAdapter(BaseSourceAdapter):
             return outcome
         raise ExtractionError(
             "extract",
-            "小红书图文没有拿到正文或图片。请确认链接来自小红书 App 的"复制链接"功能，而非浏览器地址栏。",
+            '小红书图文没有拿到正文或图片。请确认链接来自小红书 App 的"复制链接"功能，而非浏览器地址栏。',
             reason_code="text_or_images_missing",
             retryable=False,
         )
