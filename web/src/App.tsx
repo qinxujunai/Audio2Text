@@ -94,7 +94,8 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
-  const [bootstrapping, setBootstrapping] = useState(true);
+  const [bootstrapping, setBootstrapping] = useState(false);
+  const [loadingDeepLink, setLoadingDeepLink] = useState(false);
   const [toast, setToast] = useState("");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [pendingRemovals, setPendingRemovals] = useState<PendingRemoval[]>([]);
@@ -121,20 +122,24 @@ export default function App() {
   }, [selectedFile]);
 
   useEffect(() => {
+    const match = initialPathRef.current.match(/^\/c\/([^/]+)$/);
     const bootstrap = async () => {
+      // Load config and history in background \u2014 don't block the UI
       try {
         const [runtimeConfig, history] = await Promise.all([getConfig(), listCaptures()]);
         setConfig(runtimeConfig);
         setCaptures(history.items || []);
+      } catch {
+        // Config/history load failed \u2014 UI still works with defaults
+      }
 
-        const match = initialPathRef.current.match(/^\/c\/([^/]+)$/);
-        if (match?.[1]) {
+      if (match?.[1]) {
+        setLoadingDeepLink(true);
+        try {
           await openCapture(match[1]);
+        } finally {
+          setLoadingDeepLink(false);
         }
-      } catch (error) {
-        setWorkspaceError(error instanceof Error ? error.message : "\u521D\u59CB\u5316\u5931\u8D25\u3002");
-      } finally {
-        setBootstrapping(false);
       }
     };
 
@@ -503,7 +508,7 @@ export default function App() {
     setPendingRemovals((items) => [...items, removal]);
   }
 
-  const headerStatus = bootstrapping ? "processing" : phase;
+  const headerStatus = loadingDeepLink ? "processing" : phase;
   const pendingRemovalIds = useMemo(() => new Set(pendingRemovals.map((item) => item.item.id)), [pendingRemovals]);
   const recentCaptures = useMemo(
     () =>
@@ -534,7 +539,7 @@ export default function App() {
 
       <main className="main-stage">
         <AnimatePresence mode="wait">
-          {!bootstrapping && phase === "idle" ? (
+          {phase === "idle" ? (
             <motion.div
               key="idle"
               initial={{ opacity: 0, y: 10 }}
@@ -567,7 +572,7 @@ export default function App() {
             </motion.div>
           ) : null}
 
-          {(bootstrapping || phase === "processing" || phase === "failed") && (
+          {(loadingDeepLink || phase === "processing" || phase === "failed") && (
             <motion.div
               key={phase}
               initial={{ opacity: 0 }}
@@ -577,23 +582,23 @@ export default function App() {
               className="stage-shell stage-shell-processing"
             >
               <ProcessingStage
-                phase={bootstrapping ? "bootstrapping" : phase === "failed" ? "failed" : "processing"}
-                eyebrow={bootstrapping ? "\u6062\u590D\u5185\u5BB9" : processingCopy.eyebrow}
-                title={bootstrapping ? "\u6B63\u5728\u6062\u590D\u4E0A\u4E00\u6761\u5185\u5BB9" : processingCopy.title}
+                phase={loadingDeepLink ? "bootstrapping" : phase === "failed" ? "failed" : "processing"}
+                eyebrow={loadingDeepLink ? "\u6062\u590D\u5185\u5BB9" : processingCopy.eyebrow}
+                title={loadingDeepLink ? "\u6B63\u5728\u6062\u590D\u4E0A\u4E00\u6761\u5185\u5BB9" : processingCopy.title}
                 description={
-                  bootstrapping
+                  loadingDeepLink
                     ? "\u5982\u679C\u4F60\u662F\u4ECE\u6DF1\u94FE\u63A5\u8FDB\u5165\uFF0C\u8FD9\u91CC\u4F1A\u76F4\u63A5\u6062\u590D\u5230\u5BF9\u5E94\u5185\u5BB9\u7684\u5F53\u524D\u72B6\u6001\u3002"
                     : processingCopy.description
                 }
                 stageLabel={phase === "processing" ? stageLabel(currentCapture?.capture.current_stage || currentCapture?.capture.status) : undefined}
                 progressPercent={phase === "processing" ? currentCapture?.capture.progress_percent : undefined}
                 progressDetail={phase === "processing" ? currentCapture?.capture.progress_detail : undefined}
-                onReset={phase === "failed" || bootstrapping ? resetWorkspace : undefined}
+                onReset={phase === "failed" || loadingDeepLink ? resetWorkspace : undefined}
               />
             </motion.div>
           )}
 
-          {!bootstrapping && phase === "done" && currentCapture ? (
+          {phase === "done" && currentCapture ? (
             <motion.div
               key="done"
               initial={{ opacity: 0, y: 18, scale: 0.985 }}
