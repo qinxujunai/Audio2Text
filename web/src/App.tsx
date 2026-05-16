@@ -332,54 +332,20 @@ export default function App() {
   async function pasteFromClipboard() {
     let text = "";
 
-    // Method 1: Permissions API + readText (Chrome 76+, Android WebView)
-    if (navigator.permissions?.query && navigator.clipboard?.readText) {
+    // Method 1: navigator.clipboard.readText()
+    if (navigator.clipboard?.readText) {
       try {
-        const perm = await navigator.permissions.query({ name: "clipboard-read" as PermissionName });
-        if (perm.state !== "denied") {
-          text = (await navigator.clipboard.readText()).trim();
-        }
-      } catch {
-        if (navigator.clipboard?.readText) {
-          try { text = (await navigator.clipboard.readText()).trim(); } catch {}
-        }
-      }
-    } else if (navigator.clipboard?.readText) {
-      try { text = (await navigator.clipboard.readText()).trim(); } catch {}
-    }
-
-    if (text) { setInput(text); setToast("已从剪贴板粘贴。"); return; }
-
-    // Method 2: execCommand paste into the BUTTON itself
-    const btn = document.querySelector(".text-tool") as HTMLElement;
-    if (btn) {
-      try {
-        btn.contentEditable = "true";
-        btn.focus();
-        document.execCommand("paste");
-        text = (btn.innerText || "").replace(/ /g, " ").trim();
-        btn.contentEditable = "false";
-        btn.blur();
+        text = (await navigator.clipboard.readText()).trim();
       } catch {}
     }
 
-    if (text) { setInput(text); setToast("已从剪贴板粘贴。"); return; }
+    if (text) {
+      setInput(text);
+      setToast("已从剪贴板粘贴。");
+      return;
+    }
 
-    // Method 3: execCommand paste into temp contentEditable
-    try {
-      const div = document.createElement("div");
-      div.contentEditable = "true";
-      div.style.cssText = "position:fixed;top:0;left:-9999px;width:100px;height:100px;";
-      document.body.appendChild(div);
-      div.focus();
-      document.execCommand("paste");
-      text = (div.innerText || "").trim();
-      document.body.removeChild(div);
-    } catch {}
-
-    if (text) { setInput(text); setToast("已从剪贴板粘贴。"); return; }
-
-    // Method 4: clipboard.read() API
+    // Method 2: navigator.clipboard.read()
     if (navigator.clipboard?.read) {
       try {
         const items = await navigator.clipboard.read();
@@ -393,13 +359,16 @@ export default function App() {
       } catch {}
     }
 
-    if (text) { setInput(text); setToast("已从剪贴板粘贴。"); return; }
+    if (text) {
+      setInput(text);
+      setToast("已从剪贴板粘贴。");
+      return;
+    }
 
-    // Method 5: Focus textarea for manual paste
-    const ta = document.querySelector("textarea");
-    if (ta) (ta as HTMLTextAreaElement).focus();
-    setToast("请在输入框中粘贴链接。");
+    setToast("请长按输入框粘贴链接。");
   }
+
+
 
   async function submitText() {
     if (!input.trim()) {
