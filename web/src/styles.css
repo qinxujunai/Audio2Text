@@ -2339,6 +2339,14 @@ img {
     padding: 18px;
   }
 
+  .result-content-shell {
+    flex: 0 0 auto;
+  }
+
+  .result-prose {
+    min-height: auto;
+  }
+
   .result-actions {
     display: grid;
     grid-template-columns: 1fr;
