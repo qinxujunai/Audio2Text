@@ -308,3 +308,26 @@ HF Space 部署在海外（非中国 IP），无法直接访问小红书/抖音�
 **已部署**
 - GitHub: clean-main 分支（`e708c61`）
 - HF Space: `liamgrant/wanxiang-chengwen-preview`
+
+### 2026-05-16 桌面端两栏布局修复
+
+**根因**
+- 提交 `d6c59f5` 移除了 `@media (min-width: 1025px)` 内的两栏网格布局，改为所有宽度单栏自然流
+- 原因是桌面端 `height: 100vh` 高度锁定导致部分视口文案列被挤压至 ~25% 宽度
+- 修复方案过于激进，未区分桌面/手机断点，导致桌面端 UI 崩坏为手机端样式
+
+**修复内容**
+- 恢复 `body.has-result-stage` 高度锁定链：body → #root → .app-shell → .main-stage → .stage-shell-ready
+- 恢复 `.stage-shell-ready` 高度计算 `calc(100vh - 96px)` + `overflow: hidden` 级联
+- 恢复两栏网格：`.deliverable-workspace.has-images` → `grid-template-columns: minmax(0, 1.06fr) minmax(320px, 0.94fr)`
+- 恢复 `.deliverable-workspace.has-video` → `grid-template-columns: minmax(0, 1.06fr) minmax(360px, 0.94fr)`
+- 恢复面板内部滚动：`.result-content-shell` / `.image-gallery-body` 各自 `overflow: auto`
+- 手机端断点（≤960px / ≤640px）未触碰
+
+**验证**
+- 前端构建：CSS 39.22KB, JS 322.32KB
+- Playwright 截图验证：Desktop (1440×900) 两栏布局正确，Mobile (390×844) 单栏布局正确
+
+**已部署**
+- GitHub: clean-main 分支（`607226f`）
+- HF Space: `liamgrant/wanxiang-chengwen-preview`
