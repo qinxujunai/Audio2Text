@@ -12,65 +12,14 @@ type RequestError = Error & {
   status?: number;
 };
 
-const RAW_TECH_PATTERNS = [
-  /^[a-z_]+error/i,
-  /traceback\s*\(/i,
-  /file\s+"[^"]+\.py"/i,
-  /line\s+\d+/i,
-  /^\s*at\s+/i,
-  /exception\s*:/i,
-  /^\s*{/,
-  /^\s*\[/,
-  /unexpected\s+(token|char)/i,
-  /syntax\s*error/i,
-  /failed\s+to\s+fetch/i,
-  /networkerror/i,
-  /^\[object\s+\w+\]$/i,
-  /FileNotFoundError/i,
-  /PermissionError/i,
-  /ConnectionError/i,
-  /TimeoutError/i,
-  /ValueError/i,
-  /KeyError/i,
-  /AttributeError/i,
-  /ModuleNotFoundError/i,
-  /ImportError/i,
-  /RuntimeError/i,
-  /httpx\./i,
-  /playwright\./i,
-  /fastapi\./i,
-  /uvicorn\./i,
-  /starlette\./i,
-  /pydantic\./i,
-  /unpickle/i,
-  /serialize/i,
-  /deserialize/i,
-  /thread\s+pool/i,
-  /worker\s+(crash|died|killed)/i,
-  /segfault/i,
-  /stack\s+(trace|overflow|frame)/i,
-  /assertion\s*(error|failed)/i,
-  /\b[a-f0-9]{32,}\b/i,
-  /\b[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\b/i,
-];
-
-function _isRawTechnicalMessage(message: string): boolean {
-  const clean = message.trim();
-  if (!clean) return false;
-  return RAW_TECH_PATTERNS.some((pattern) => pattern.test(clean));
-}
-
 function _sanitizeErrorMessage(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed || trimmed === "Internal Server Error") {
-    return TEMPORARY_BUSY_MESSAGE;
-  }
+  if (!trimmed) return TEMPORARY_BUSY_MESSAGE;
+  // HTML response means the backend crashed — show generic message
   if (/^<!doctype html/i.test(trimmed) || /^<html/i.test(trimmed)) {
     return TEMPORARY_BUSY_MESSAGE;
   }
-  if (_isRawTechnicalMessage(trimmed)) {
-    return TEMPORARY_BUSY_MESSAGE;
-  }
+  // Backend always produces Chinese error messages; pass through directly
   return trimmed;
 }
 

@@ -483,8 +483,11 @@ def _extract_client_ip(request: Request) -> str | None:
     return None
 
 
-def _check_daily_rate_limit(client_ip: str | None) -> None:
+def _check_daily_rate_limit(client_ip: str | None, platform: str = "") -> None:
     if not client_ip or client_ip in ADMIN_IPS:
+        return
+    # Xiaohongshu image articles don't trigger transcription — free to use
+    if platform == "xiaohongshu":
         return
     from datetime import datetime, timezone
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -657,7 +660,6 @@ async def download_v1_artifact(capture_id: str, artifact_type: str) -> FileRespo
 @app.post("/v1/captures")
 async def create_v1_capture(request: Request, file: UploadFile | None = File(default=None)) -> dict[str, Any]:
     client_ip = _extract_client_ip(request)
-    _check_daily_rate_limit(client_ip)
 
     if file is not None:
         file_name, temp_path = await _stream_upload_to_temp(file)
@@ -705,6 +707,8 @@ async def create_v1_capture(request: Request, file: UploadFile | None = File(def
         resolved = resolve_url(raw_text)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _check_daily_rate_limit(client_ip, platform=resolved.platform)
 
     cached = _cache_lookup_by_resolved_input(resolved)
     if cached is not None:
