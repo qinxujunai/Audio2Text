@@ -25,3 +25,6 @@ Thumbs.db
 
 # Large model files - download via download_model.py
 Assets/Models/
+.claude/scheduled_tasks.lock
+.playwright-mcp/
+health-check.txt

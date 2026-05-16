@@ -1367,6 +1367,12 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
         return "资源下载没有成功，请稍后重试，或换一条内容再试。"
     if reason_code == "transcribe_failed":
         return "媒体已拿到，但转写没有成功。建议稍后重试，或换一个更清晰的音视频文件。"
+    if reason_code == "image_assets_missing":
+        return "这条内容没有拿到可用图片。请检查链接是否有效，或换一条公开内容再试。"
+    if reason_code == "media_or_subtitle_missing":
+        return "这条内容没有拿到可转写的媒体文件或字幕。请检查链接是否有效，稍后重试。"
+    if reason_code == "text_or_images_missing":
+        return "这条内容没有拿到正文或图片。请检查链接是否有效，稍后重试。"
 
     default_message = PUBLIC_ERROR_MESSAGES.get(stage)
     if default_message:
