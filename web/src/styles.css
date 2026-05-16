@@ -2232,8 +2232,13 @@ img {
   .hero-input-clear {
     top: 16px;
     right: 16px;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
+  }
+
+  .recent-inline-delete {
+    width: 44px;
+    height: 44px;
   }
 
   .recent-inline-list,
@@ -2303,14 +2308,14 @@ img {
   }
 
   .image-viewer-toolbar-button {
-    min-width: 36px;
-    height: 36px;
-    padding: 0 5px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 6px;
     font-size: 12px;
   }
 
   .image-viewer-toolbar-group {
-    min-height: 36px;
+    min-height: 44px;
     flex-shrink: 1;
     min-width: 0;
     gap: 4px;
