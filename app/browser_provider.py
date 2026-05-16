@@ -899,6 +899,8 @@ def fetch_douyin_media(url: str) -> BrowserMediaResult:
     try:
         with _launch_context() as context:
             page = context.pages[0] if context.pages else context.new_page()
+            if _browser_needs_relay("douyin"):
+                _setup_playwright_relay_routing(page, "douyin")
             observed_media_urls: list[str] = []
             observed_detail_urls: list[str] = []
             aweme_detail: dict | None = None
