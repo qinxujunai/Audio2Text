@@ -279,3 +279,32 @@ HF Space 部署在海外（非中国 IP），无法直接访问小红书/抖音�
 **已部署**
 - GitHub: clean-main 分支
 - HF Space: `liamgrant/wanxiang-chengwen-preview`
+
+### 2026-05-16 Apple HIG 合规 + 移动端布局全面优化
+
+**触控目标修复（3 个，≥ 44pt）**
+- `.hero-input-clear`：40→44px（清空输入按钮）
+- `.recent-inline-delete`：32→44px（删除记录按钮）
+- `.image-viewer-toolbar-button`：36→44px（图片查看器工具栏按钮）
+
+**工具栏布局统一**
+- `image-tools` 组 `flex: 1 1 auto` → `flex: 0 1 auto`，不再膨胀挤占空间
+- 普通图和 Live 图工具栏结构一致：导航+缩放在同一行，下载在第二行
+- 按钮 44→36px（桌面）/ 44px（移动端），间距统一 4-6px
+
+**正文区间距消除**
+- `.result-content-shell` 移动端 `flex: 1` → `flex: 0 0 auto`，不再撑满剩余空间
+- `.result-prose` 移动端 `min-height: 100%` → `auto`，内容自适应高度
+
+**跨平台字体一致性**
+- 根元素 `-webkit-text-size-adjust: 100%` + `text-size-adjust: 100%`，阻止 WeChat WebView 自动放大
+
+**验证**
+- 后端测试：122 passed / 1 skipped
+- TypeScript：零错误
+- 前端构建：CSS 37.98KB, JS 322.32KB
+- Playwright 四端截图：WeChat iPhone、Safari iPhone、Narrow Android、Desktop 全部布局正确
+
+**已部署**
+- GitHub: clean-main 分支（`e708c61`）
+- HF Space: `liamgrant/wanxiang-chengwen-preview`
