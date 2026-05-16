@@ -1147,22 +1147,13 @@ def fetch_wechat_page(url: str) -> BrowserMediaResult:
 
 
 def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
-    try:
-        final_url, page_title, html = _fetch_xiaohongshu_html(url)
-        note_payload = _extract_xiaohongshu_note_payload(html)
-        if note_payload:
-            title = (note_payload["title"] or page_title or "").strip()
-            return BrowserMediaResult(
-                final_url=final_url,
-                title=title or "Xiaohongshu content",
-                media_url=_prefer_https((note_payload["video_url"] or "").strip()) if note_payload["video_url"] else "",
-                body_text=_normalize_text(note_payload["desc"] or ""),
-                image_urls=[_prefer_https(item) for item in note_payload["image_urls"]],
-                live_photo_video_urls=[_prefer_https(item) if item else "" for item in note_payload.get("live_photo_video_urls") or []],
-            )
-    except BrowserProviderError:
-        pass
+    """Extract Xiaohongshu note data using browser (SPA requires JS rendering).
 
+    Strategy: skip HTTP relay (static HTML from SPA has empty state),
+    go straight to Playwright browser, extract note data directly from
+    window.__INITIAL_STATE__ via page.evaluate() — much faster than
+    transferring full page.content() HTML.
+    """
     try:
         with _launch_context() as context:
             page = context.pages[0] if context.pages else context.new_page()
@@ -1173,10 +1164,82 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
             page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_GOTO_TIMEOUT_MS)
             _settle_page(page)
 
+            # Wait for SPA to populate note data in __INITIAL_STATE__
+            try:
+                page.wait_for_function(
+                    """
+                    () => {
+                      const el = document.querySelector('script');
+                      if (!el) return false;
+                      const m = el.textContent?.match(/window\\.__INITIAL_STATE__\\s*=\\s*(.*?)<\\/script>/s);
+                      if (!m) return false;
+                      try {
+                        const s = JSON.parse(m[1].replace(/undefined/g, 'null').replace(/NaN/g, 'null'));
+                        const notes = s?.note?.noteDetailMap || {};
+                        for (const w of Object.values(notes)) {
+                          const n = w?.note;
+                          if (n && (n.title || n.desc || n.imageList?.length || n.video)) return true;
+                        }
+                      } catch {}
+                      return false;
+                    }
+                    """,
+                    timeout=BROWSER_GOTO_TIMEOUT_MS,
+                )
+            except Exception:
+                pass  # page may still have content even if wait times out
+
             final_url = page.url
             page_title = page.title()
-            html = page.content()
-            note_payload = _extract_xiaohongshu_note_payload(html)
+
+            # Extract note data directly via evaluate — no heavy HTML transfer
+            raw = page.evaluate(
+                """
+                () => {
+                  const scripts = [...document.querySelectorAll('script')];
+                  for (const s of scripts) {
+                    const m = s.textContent?.match(/window\\.__INITIAL_STATE__\\s*=\\s*(.*?)<\\/script>/s);
+                    if (!m) continue;
+                    try {
+                      const state = JSON.parse(m[1].replace(/undefined/g, 'null').replace(/NaN/g, 'null'));
+                      const notes = state?.note?.noteDetailMap || {};
+                      for (const [, wrapper] of Object.entries(notes)) {
+                        const note = wrapper?.note;
+                        if (!note || !(note.title || note.desc || note.imageList?.length || note.video)) continue;
+                        const images = [];
+                        const livePhotos = [];
+                        for (const img of note.imageList || []) {
+                          const url = img?.urlDefault || img?.urlPre || img?.url || '';
+                          if (url) images.push(url);
+                          const live = img?.media?.livePhotoUrl || img?.media?.motionPhotoUrl || '';
+                          livePhotos.push(live || '');
+                        }
+                        let videoUrl = '';
+                        const stream = note.video?.media?.stream;
+                        if (stream) {
+                          for (const codec of ['h264', 'h265']) {
+                            for (const item of stream[codec] || []) {
+                              const u = item?.masterUrl || '';
+                              if (u) { videoUrl = u; break; }
+                            }
+                            if (videoUrl) break;
+                          }
+                        }
+                        return {
+                          title: note.title || '',
+                          desc: note.desc || '',
+                          type: note.type || '',
+                          images,
+                          livePhotos,
+                          videoUrl
+                        };
+                      }
+                    } catch {}
+                  }
+                  return null;
+                }
+                """
+            )
 
             title = page_title
             body_text = ""
@@ -1184,48 +1247,14 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
             image_urls: list[str] = []
             live_photo_video_urls: list[str] = []
 
-            if note_payload:
-                title = note_payload["title"] or page_title
-                body_text = note_payload["desc"] or ""
-                media_url = note_payload["video_url"] or ""
-                if note_payload["type"] != "video":
-                    image_urls = note_payload["image_urls"]
-                    live_photo_video_urls = note_payload.get("live_photo_video_urls") or []
-
-            if not media_url and not body_text:
-                try:
-                    body_text = page.evaluate(
-                        """
-                        () => {
-                          const selectors = [
-                            '#detail-desc',
-                            '.note-content',
-                            '.desc',
-                            'article',
-                            'main',
-                            '[role="main"]',
-                          ];
-                          let best = '';
-                          for (const selector of selectors) {
-                            for (const node of Array.from(document.querySelectorAll(selector))) {
-                              const text = (node.innerText || '').trim();
-                              if (text.length > best.length) best = text;
-                            }
-                          }
-                          return best || '';
-                        }
-                        """
-                    )
-                except Exception:
-                    body_text = ""
-
-            if not media_url and not image_urls:
-                try:
-                    if page.locator("video").count():
-                        media_url = page.eval_on_selector("video", "el => el.currentSrc || el.src || ''")
-                except Exception:
-                    media_url = ""
-    except Exception as exc:  # noqa: BLE001
+            if raw:
+                title = raw.get("title") or page_title
+                body_text = raw.get("desc") or ""
+                media_url = raw.get("videoUrl") or ""
+                if raw.get("type") != "video":
+                    image_urls = [u for u in raw.get("images") or [] if u]
+                    live_photo_video_urls = [u for u in raw.get("livePhotos") or [] if u]
+    except Exception as exc:
         raise _normalize_browser_exception(exc, timeout_message="浏览器打开小红书页面超时，请稍后重试。") from exc
 
     state_error = _page_state_error(final_url, title, body_text)
