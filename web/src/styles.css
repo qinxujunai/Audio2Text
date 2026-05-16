@@ -46,6 +46,8 @@ body,
 #root {
   min-height: 100%;
   margin: 0;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
@@ -2292,8 +2294,6 @@ img {
     flex-wrap: wrap;
     border-radius: 26px;
     padding: 8px;
-    max-height: min(34vh, 176px);
-    overflow-y: auto;
   }
 
   .image-viewer-overlay.is-chrome-visible .image-viewer-toolbar,
@@ -2309,11 +2309,13 @@ img {
 
   .image-viewer-toolbar-group {
     min-height: 44px;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .image-viewer-toolbar-group.is-navigation {
     order: -2;
-    flex: 1 1 100%;
+    flex: 0 1 auto;
     justify-content: center;
   }
 
