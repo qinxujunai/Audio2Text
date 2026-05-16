@@ -59,7 +59,8 @@ async function handleForwardProxy(request) {
 
     const body = await upstream.text()
     const responseHeaders = new Headers()
-    responseHeaders.set('Content-Type', 'text/plain; charset=utf-8')
+    const upstreamContentType = upstream.headers.get('Content-Type') || 'text/html; charset=utf-8'
+    responseHeaders.set('Content-Type', upstreamContentType)
     responseHeaders.set('Access-Control-Allow-Origin', '*')
     responseHeaders.set('X-Proxied-Url', upstream.url)
     responseHeaders.set('X-Proxied-Status', String(upstream.status))

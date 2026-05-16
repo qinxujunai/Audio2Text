@@ -43,6 +43,9 @@ def _duration_detail(duration_seconds: float, detail: str | None = None) -> str:
 XIAOHONGSHU_PLACEHOLDER_TITLES = (
     "小红书 - 你的生活兴趣社区",
     "小红书 - 你访问的页面不见了",
+    "你访问的页面不见了",
+    "内容不存在",
+    "页面不存在",
 )
 XIAOHONGSHU_PLACEHOLDER_TEXT = (
     "行吟信息科技（上海）有限公司",
