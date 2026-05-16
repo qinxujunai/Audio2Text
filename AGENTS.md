@@ -331,3 +331,29 @@ HF Space 部署在海外（非中国 IP），无法直接访问小红书/抖音�
 **已部署**
 - GitHub: clean-main 分支（`607226f`）
 - HF Space: `liamgrant/wanxiang-chengwen-preview`
+
+### 2026-05-17 UI 回归修复 + 备份版本对齐
+
+**根因**
+- 多次增量修改导致 CSS 和组件代码与备份版本不一致
+- 组件使用 `deliverable-meta` 类名，但 CSS 已切换为 `fact-chip` 类名
+- `viewer-media-enter` 动画中的 `transform: scale()` 与图片查看器交互式 transform 冲突
+
+**修复内容**
+- 恢复备份版本的 CSS（`styles.css`）作为基础
+- 恢复备份版本的组件（`DeliverableStage.tsx`）作为基础
+- 仅叠加必要改动：hero 标签样式、`-webkit-text-size-adjust`
+- 移除冲突的动画 transform（只保留 opacity 淡入）
+
+**关键教训**
+- 备份版本的类名体系（`fact-chip`、`facts-strip-side`）与之前版本不同
+- 修改 CSS/组件时必须同时检查类名匹配
+- 动画中的 `transform` 会覆盖元素的交互式 `transform`，导致布局异常
+
+**验证**
+- 前端构建：CSS 41.30KB, JS 323.20KB
+- Playwright 截图验证：Desktop 居中正确，两栏布局正常
+
+**已部署**
+- GitHub: clean-main 分支
+- HF Space: `liamgrant/wanxiang-chengwen-preview`
