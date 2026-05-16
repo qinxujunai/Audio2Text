@@ -233,7 +233,27 @@ HF Space 部署在海外（非中国 IP），无法直接访问小红书/抖音�
 
 **额度限制（已实现）**
 - 每日次数：12 次/IP/天（环境变量 `DAILY_CAPTURE_LIMIT`）
+- **小红书图文免限流**：无转写，不消耗计算资源，不计入每日次数
 - 视频时长：≤ 30 分钟（环境变量 `MAX_VIDEO_DURATION_MINUTES`）
 - 文件大小：≤ 200MB（环境变量 `MAX_UPLOAD_SIZE_MB`）
 - 管理员 IP 免限制：环境变量 `ADMIN_IPS`（逗号分隔）
 - 用户隔离：基于客户端 IP（`X-Forwarded-For` / `CF-Connecting-IP`），每个 IP 只能看到自己的历史记录
+
+### 2026-05-16 架构简化 + Bug 修复
+
+**根因修复（4 个）**
+- 剪贴板粘贴：`execCommand('paste')` 移到 `await` 之前同步执行，保留用户手势（`App.tsx`）
+- Docker Chromium：加 `--no-sandbox --disable-gpu` 启动参数（`browser_provider.py`）
+- Worker Content-Type：保留原始 Content-Type，不再强制 `text/plain`，SPA 可正常渲染（`cf_worker_proxy.js`）
+- 小红书页面检测：补充 "你访问的页面不见了" 等 404 标题匹配（`source_adapters.py`）
+
+**架构剃刀**
+- 小红书提取：跳过 HTTP 中继静态抓取（SPA 空壳永远无数据），直接 Playwright + `page.evaluate()` 从 `window.__INITIAL_STATE__` 提取笔记 JSON。不再传输 `page.content()` 全文（521KB → 2KB），总耗时减少 30-40%（`browser_provider.py`）
+- 前端错误处理：砍掉 55 行 `RAW_TECH_PATTERNS` 正则黑名单，后端已产出中文错误信息，前端直接透传（`api.ts`）
+- 小红书限流豁免：`_check_daily_rate_limit` 移至 URL 解析后，按平台判断（`main.py`）
+
+**已部署**
+- GitHub: clean-main 分支
+- HF Space: `liamgrant/wanxiang-chengwen-preview`
+- Cloudflare Worker: `wanxiang-chengwen-proxy`（Content-Type 修复）
+- 自定义域名: `wanxiang.praxisai.online`
