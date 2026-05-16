@@ -257,3 +257,25 @@ HF Space 部署在海外（非中国 IP），无法直接访问小红书/抖音�
 - HF Space: `liamgrant/wanxiang-chengwen-preview`
 - Cloudflare Worker: `wanxiang-chengwen-proxy`（Content-Type 修复）
 - 自定义域名: `wanxiang.praxisai.online`
+
+### 2026-05-16 图片查看器工具栏 + 跨平台字体修复
+
+**根因修复（2 个）**
+- 工具栏膨胀：移动端 `.image-viewer-toolbar-group.is-navigation` 的 `flex: 1 1 100%` 强制占满整行，把图片工具组和下载按钮挤到额外行，工具栏从 2 行膨胀到 3 行（166px），遮挡图片（`styles.css`）
+- 跨平台字体差异：WeChat WebView 可能自动调整文本大小，导致字体渲染与 Safari 不一致（`styles.css`）
+
+**修复内容**
+- 移动端工具栏重排：导航组 `flex: 0 1 auto`，图片工具组 `flex: 1 1 auto`，下载按钮 `order: 1` 独占末行；按钮尺寸 44→40px，间距 8→6px，圆角 26→20px
+- 工具栏高度从 166px（3 行）降至 100px（2 行），不再遮挡图片
+- PC 端单行布局不受影响（桌面断点未修改）
+- 根元素添加 `-webkit-text-size-adjust: 100%` + `text-size-adjust: 100%`，阻止 WeChat WebView 自动放大文字
+
+**验证**
+- 后端测试：122 passed / 1 skipped
+- TypeScript：零错误
+- 前端构建：CSS 37.93KB, JS 322.32KB
+- Playwright 截图验证：WeChat iPhone (375×812)、Safari iPhone (390×844)、Narrow Android (360×780)、Desktop (1440×900) 四端工具栏布局正确
+
+**已部署**
+- GitHub: clean-main 分支
+- HF Space: `liamgrant/wanxiang-chengwen-preview`

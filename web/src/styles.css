@@ -2292,8 +2292,9 @@ img {
     box-sizing: border-box;
     justify-content: center;
     flex-wrap: wrap;
-    border-radius: 26px;
-    padding: 8px;
+    gap: 6px;
+    border-radius: 20px;
+    padding: 6px;
   }
 
   .image-viewer-overlay.is-chrome-visible .image-viewer-toolbar,
@@ -2302,15 +2303,17 @@ img {
   }
 
   .image-viewer-toolbar-button {
-    min-width: 44px;
-    height: 44px;
-    padding: 0 8px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0 6px;
+    font-size: 12px;
   }
 
   .image-viewer-toolbar-group {
-    min-height: 44px;
+    min-height: 40px;
     flex-shrink: 1;
     min-width: 0;
+    gap: 6px;
   }
 
   .image-viewer-toolbar-group.is-navigation {
@@ -2324,8 +2327,14 @@ img {
     justify-content: center;
   }
 
+  .image-viewer-toolbar-group:last-child {
+    flex: 0 0 auto;
+    order: 1;
+  }
+
   .image-viewer-toolbar-button.is-download {
     background: rgba(255, 255, 255, 0.16);
+    padding: 0 10px;
   }
 
   .result-surface,
