@@ -1147,13 +1147,29 @@ def fetch_wechat_page(url: str) -> BrowserMediaResult:
 
 
 def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
-    """Extract Xiaohongshu note data using browser (SPA requires JS rendering).
+    """Extract Xiaohongshu note data.
 
-    Strategy: skip HTTP relay (static HTML from SPA has empty state),
-    go straight to Playwright browser, extract note data directly from
-    window.__INITIAL_STATE__ via page.evaluate() — much faster than
-    transferring full page.content() HTML.
+    Strategy: try HTTP relay first (static HTML has SSR data for real notes),
+    fall back to Playwright browser only if relay HTML lacks note data.
     """
+    # Method 1: HTTP relay — static HTML has SSR __INITIAL_STATE__ with note data
+    try:
+        final_url, page_title, html = _fetch_xiaohongshu_html(url)
+        note_payload = _extract_xiaohongshu_note_payload(html)
+        if note_payload:
+            title = (note_payload["title"] or page_title or "").strip()
+            return BrowserMediaResult(
+                final_url=final_url,
+                title=title or "Xiaohongshu content",
+                media_url=_prefer_https((note_payload["video_url"] or "").strip()) if note_payload["video_url"] else "",
+                body_text=_normalize_text(note_payload["desc"] or ""),
+                image_urls=[_prefer_https(item) for item in note_payload["image_urls"]],
+                live_photo_video_urls=[_prefer_https(item) if item else "" for item in note_payload.get("live_photo_video_urls") or []],
+            )
+    except BrowserProviderError:
+        pass
+
+    # Method 2: Playwright browser — fallback for SPA-only pages
     try:
         with _launch_context() as context:
             page = context.pages[0] if context.pages else context.new_page()
