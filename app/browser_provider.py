@@ -459,7 +459,7 @@ def _launch_context():
                 "--no-first-run",
             ],
         }
-        for channel in (None, "chrome", "msedge"):
+        for channel in ("msedge", "chrome", None):
             launch_options = dict(base_options)
             if channel:
                 launch_options["channel"] = channel

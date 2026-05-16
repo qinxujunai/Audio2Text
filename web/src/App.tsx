@@ -397,7 +397,8 @@ export default function App() {
       return;
     }
 
-    const submittedInput = input.trim();
+    const urlMatch = input.trim().match(/https?:\/\/[^\s]+/i);
+    const submittedInput = urlMatch ? urlMatch[0] : input.trim();
     setSubmitting(true);
     setWorkspaceError(null);
     setInput("");
@@ -406,12 +407,12 @@ export default function App() {
       await openCapture(created.capture_id);
       await refreshHistory();
       if (created.reused) {
-        setToast("\u8FD9\u6761\u5185\u5BB9\u4E4B\u524D\u5904\u7406\u8FC7\uFF0C\u5DF2\u76F4\u63A5\u590D\u7528\u7ED3\u679C\u3002");
+        setToast("这条内容之前处理过，已直接复用结果。");
       } else if (created.input_warning) {
         setToast(created.input_warning);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "\u521B\u5EFA\u4EFB\u52A1\u5931\u8D25\u3002";
+      const message = error instanceof Error ? error.message : "创建任务失败。";
       setWorkspaceError(message);
       setInput(submittedInput);
       setToast(message);
