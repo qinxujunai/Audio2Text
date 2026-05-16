@@ -1365,7 +1365,7 @@ def extract_youtube_transcript(
     if not video_id:
         raise ExtractionError("resolve", "YouTube 链接可访问，但没有解析出视频 ID。")
 
-    final_url, html = _fetch_text(resolved.normalized_url)
+    final_url, html = _fetch_text(resolved.normalized_url, platform="youtube")
     meta = _extract_meta_tags(html)
     title = meta.get("og:title") or meta.get("title") or f"YouTube {video_id}"
     description = meta.get("og:description") or meta.get("description") or ""
@@ -1391,14 +1391,21 @@ def extract_youtube_transcript(
                 if progress_callback is not None and subtitle_text:
                     progress_callback(46, "已拿到可用字幕，正在整理结果。")
         except Exception:
-            # Fall through to relay-based extraction
             pass
         finally:
             session.close()
 
-    # Relay path: extract captions from ytInitialPlayerResponse in page HTML
+    # Relay path: extract captions from page HTML or bot-detection fallback
     if not subtitle_text:
-        subtitle_text = _extract_youtube_captions_from_page(html)
+        if "unusual traffic" in html.lower() or "captcha" in html.lower():
+            raise ExtractionError(
+                "extract",
+                "YouTube 当前限制了云端服务器的访问，请稍后重试或在本地环境处理。",
+                reason_code="youtube_extract_timeout",
+                retryable=True,
+            )
+        else:
+            subtitle_text = _extract_youtube_captions_from_page(html)
 
     if not subtitle_text:
         raise ExtractionError(
