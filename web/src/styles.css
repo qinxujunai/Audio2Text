@@ -1932,7 +1932,7 @@ img {
   appearance: none;
 }
 
-@media (min-width: 961px) {
+@media (min-width: 1025px) {
   body.has-result-stage,
   body.has-result-stage #root,
   body.has-result-stage .app-shell {
