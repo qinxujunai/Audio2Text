@@ -325,26 +325,45 @@ export default function App() {
   }
 
   async function pasteFromClipboard() {
-    const isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+    // Method 1: Modern Clipboard API
     if (navigator.clipboard?.readText) {
       try {
         const text = await navigator.clipboard.readText();
-        if (!text.trim()) {
-          setToast("\u526A\u8D34\u677F\u91CC\u8FD8\u6CA1\u6709\u53EF\u7528\u5185\u5BB9\u3002");
+        if (text.trim()) {
+          setInput(text);
+          setToast("已从剪贴板粘贴。");
           return;
         }
-        setInput(text);
-        setToast("\u5DF2\u4ECE\u526A\u8D34\u677F\u7C98\u8D34\u3002");
+        setToast("剪贴板里还没有可用内容。");
         return;
       } catch {
-        // clipboard API often fails on mobile \u2014 fall through to textarea focus
+        // Fall through to execCommand
       }
     }
-    if (isMobile) {
-      setToast('\u8BF7\u957F\u6309\u8F93\u5165\u6846\u9009\u62E9\u201C\u7C98\u8D34\u201D\u3002');
-    } else {
-      setToast("\u8BF7\u76F4\u63A5\u5728\u8F93\u5165\u6846\u4E2D\u6309 Ctrl+V \u7C98\u8D34\u94FE\u63A5\u3002");
+
+    // Method 2: execCommand('paste') — bypasses permission dialogs
+    const temp = document.createElement("textarea");
+    temp.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;";
+    document.body.appendChild(temp);
+    temp.focus();
+
+    let pasted = false;
+    try {
+      pasted = document.execCommand("paste");
+    } catch {
+      // execCommand not supported
     }
+
+    if (pasted && temp.value.trim()) {
+      setInput(temp.value);
+      setToast("已从剪贴板粘贴。");
+      document.body.removeChild(temp);
+      return;
+    }
+    document.body.removeChild(temp);
+
+    // Method 3: Nothing worked
+    setToast("请在输入框中粘贴链接，或检查浏览器剪贴板权限。");
   }
 
   async function submitText() {
