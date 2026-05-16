@@ -452,12 +452,14 @@ def _launch_context():
             "user_agent": DEFAULT_USER_AGENT,
             "viewport": {"width": 1360, "height": 920},
             "args": [
+                "--no-sandbox",
+                "--disable-gpu",
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-first-run",
             ],
         }
-        for channel in ("msedge", "chrome", None):
+        for channel in (None, "chrome", "msedge"):
             launch_options = dict(base_options)
             if channel:
                 launch_options["channel"] = channel
