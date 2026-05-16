@@ -931,6 +931,30 @@ def _normalize_subtitle_text(value: str) -> str:
     return "\n".join(lines)
 
 
+def _parse_srt(raw_text: str) -> tuple[str, str]:
+    body_lines: list[str] = []
+    timeline_lines: list[str] = []
+    last_ts: str | None = None
+    for line in raw_text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = line.strip()
+        if not line or line.isdigit():
+            continue
+        if "-->" in line:
+            last_ts = line.strip()
+            continue
+        cleaned = re.sub(r"<[^>]+>", "", unescape(line)).strip()
+        if cleaned:
+            body_lines.append(cleaned)
+            if last_ts:
+                try:
+                    tl_part = last_ts.split("-->")[0].strip().replace(",", ".")
+                    start = int(float(tl_part) * 1000)
+                    timeline_lines.append(f"{_format_subtitle_timestamp(start)} {cleaned}")
+                except Exception:
+                    pass
+    return "\n".join(body_lines), "\n".join(timeline_lines)
+
+
 def _parse_json3_subtitle(raw_text: str) -> tuple[str, str]:
     try:
         payload = json.loads(raw_text)
@@ -953,6 +977,29 @@ def _parse_json3_subtitle(raw_text: str) -> tuple[str, str]:
         if isinstance(start_ms, int):
             timeline_lines.append(f"{_format_subtitle_timestamp(start_ms)} {cleaned}")
 
+    return "\n".join(body_lines), "\n".join(timeline_lines)
+
+
+def _parse_bilibili_subtitle(raw_text: str) -> tuple[str, str]:
+    try:
+        payload = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return "", ""
+    body_items = payload.get("body") if isinstance(payload, dict) else []
+    if not isinstance(body_items, list):
+        return "", ""
+    body_lines: list[str] = []
+    timeline_lines: list[str] = []
+    for item in body_items:
+        text = str(item.get("content") or "").strip()
+        if not text:
+            continue
+        body_lines.append(text)
+        start = item.get("from")
+        end = item.get("to")
+        if isinstance(start, (int, float)):
+            tl = f"{_format_subtitle_timestamp(int(start * 1000))} --> {_format_subtitle_timestamp(int(end * 1000))} {text}" if isinstance(end, (int, float)) else f"{_format_subtitle_timestamp(int(start * 1000))} {text}"
+            timeline_lines.append(tl)
     return "\n".join(body_lines), "\n".join(timeline_lines)
 
 
@@ -1374,36 +1421,45 @@ def extract_youtube_transcript(
     subtitle_text = ""
     subtitle_timeline = ""
     transcript = None
-    needs_relay = _platform_needs_relay("youtube")
 
-    # Try direct transcript API first (fast path for local/non-blocked networks)
-    if not needs_relay:
-        session = _requests_session_without_env()
-        try:
-            if progress_callback is not None:
-                progress_callback(24, "正在检查可用字幕轨。")
-            api = YouTubeTranscriptApi(http_client=session)
-            transcript_list = api.list(video_id)
-            transcript = _select_youtube_transcript(transcript_list, preferred_language=preferred_language)
-            if transcript is not None:
-                fetched = transcript.fetch()
-                subtitle_text, subtitle_timeline = _render_fetched_transcript(fetched.to_raw_data())
-                if progress_callback is not None and subtitle_text:
-                    progress_callback(46, "已拿到可用字幕，正在整理结果。")
-        except Exception:
-            pass
-        finally:
-            session.close()
+    # Always try direct transcript API first (works if HF Space IP not blocked by Google)
+    session = _requests_session_without_env()
+    try:
+        if progress_callback is not None:
+            progress_callback(24, "正在检查可用字幕轨。")
+        api = YouTubeTranscriptApi(http_client=session)
+        transcript_list = api.list(video_id)
+        transcript = _select_youtube_transcript(transcript_list, preferred_language=preferred_language)
+        if transcript is not None:
+            fetched = transcript.fetch()
+            subtitle_text, subtitle_timeline = _render_fetched_transcript(fetched.to_raw_data())
+            if progress_callback is not None and subtitle_text:
+                progress_callback(46, "已拿到可用字幕，正在整理结果。")
+    except Exception:
+        pass
+    finally:
+        session.close()
 
     # Relay path: extract captions from page HTML or bot-detection fallback
     if not subtitle_text:
         if "unusual traffic" in html.lower() or "captcha" in html.lower():
-            raise ExtractionError(
-                "extract",
-                "YouTube 当前限制了云端服务器的访问，请稍后重试或在本地环境处理。",
-                reason_code="youtube_extract_timeout",
-                retryable=True,
-            )
+            if progress_callback is not None:
+                progress_callback(30, "YouTube 限制了云端访问，正在通过 Invidious 获取。")
+            inv_title, inv_desc, inv_sub, inv_timeline, inv_instance = _youtube_via_invidious(video_id)
+            if inv_title and inv_sub:
+                title = inv_title
+                description = inv_desc or description
+                subtitle_text = inv_sub
+                subtitle_timeline = inv_timeline
+                if progress_callback is not None:
+                    progress_callback(46, f"已通过 Invidious 拿到可用字幕。")
+            else:
+                raise ExtractionError(
+                    "extract",
+                    "YouTube 当前限制了云端服务器的访问，请稍后重试或在本地环境处理。",
+                    reason_code="youtube_extract_timeout",
+                    retryable=True,
+                )
         else:
             subtitle_text = _extract_youtube_captions_from_page(html)
 
@@ -1433,6 +1489,69 @@ def extract_youtube_transcript(
         notes_text="",
         needs_transcription=False,
     )
+
+
+INVIDIOUS_INSTANCES = [
+    "https://invidious.snopyta.org",
+    "https://yewtu.be",
+    "https://vid.puffyan.us",
+    "https://invidious.tiekoetter.com",
+    "https://yt.artemislena.eu",
+    "https://invidious.flokinet.to",
+    "https://inv.riverside.rocks",
+    "https://invidious.slipfox.xyz",
+]
+
+
+def _youtube_via_invidious(video_id: str) -> tuple[str, str, str, str, str]:
+    """Try to get YouTube video info + captions via public Invidious instances."""
+    import random
+    instances = list(INVIDIOUS_INSTANCES)
+    random.shuffle(instances)
+    for instance in instances:
+        try:
+            with _httpx_client(timeout=12.0) as client:
+                resp = client.get(f"{instance}/api/v1/videos/{video_id}")
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception:
+            continue
+
+        title = str(data.get("title") or "")
+        desc = str(data.get("description") or "")
+        captions = data.get("captions") or []
+        subtitle_text = ""
+        subtitle_timeline = ""
+
+        for caption in captions:
+            if not isinstance(caption, dict):
+                continue
+            lang = str(caption.get("language_code") or caption.get("language") or "").lower()
+            if lang and lang not in ("zh", "zh-hans", "zh-hant", "en", "en-us", "auto"):
+                continue
+            url = caption.get("url") or ""
+            if not url:
+                continue
+            try:
+                resp2 = client.get(url)
+                resp2.raise_for_status()
+                raw = resp2.text
+                if "WEBVTT" in raw or "-->" in raw:
+                    sub_text, sub_timeline = _parse_web_subtitle(raw)
+                elif raw.strip().startswith("{"):
+                    sub_text, sub_timeline = _parse_json3_subtitle(raw)
+                else:
+                    sub_text, sub_timeline = _parse_srt(raw)
+                if sub_text:
+                    subtitle_text = sub_text
+                    subtitle_timeline = sub_timeline
+                    break
+            except Exception:
+                continue
+
+        if title:
+            return title, desc, subtitle_text, subtitle_timeline, instance
+    return "", "", "", "", ""
 
 
 def _extract_youtube_captions_from_page(html: str) -> str:
@@ -1841,6 +1960,145 @@ def _supplemental_page_text(resolved: ResolvedSource, warnings: list[str]) -> tu
     except ExtractionError as exc:
         warnings.append(exc.message)
         return "", ""
+
+
+def _extract_bilibili_video_id(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").strip("/")
+    if host.endswith("b23.tv"):
+        return ""
+    for segment in path.split("/"):
+        if segment.lower().startswith("bv") and len(segment) >= 10:
+            return segment.upper()
+    for segment in path.split("/"):
+        if segment.lower().startswith("av") and segment[2:].isdigit():
+            return segment.lower()
+    match = re.search(r"(BV[a-zA-Z0-9]{8,12})", url, re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def extract_bilibili_direct(
+    resolved: ResolvedSource,
+    capture_dir: Path,
+    *,
+    progress_callback: ProgressCallback | None = None,
+) -> ExtractionOutcome:
+    bvid = _extract_bilibili_video_id(resolved.normalized_url)
+    if not bvid:
+        raise ExtractionError("extract", "B站链接可访问，但没有解析出视频 ID。", retryable=False)
+
+    if progress_callback is not None:
+        progress_callback(22, "正在请求 B站视频信息。")
+
+    headers = _request_headers()
+    headers["Referer"] = "https://www.bilibili.com/"
+    info_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+
+    with _httpx_client(headers=headers) as client:
+        try:
+            response = client.get(info_url)
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ExtractionError("extract", f"B站 API 请求失败：{exc}", retryable=True) from exc
+
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, dict):
+        raise ExtractionError("extract", "B站 API 没有返回视频数据。", retryable=True)
+
+    title = str(data.get("title") or resolved.normalized_url)
+    description = str(data.get("desc") or "")
+    duration_seconds = float(data["duration"]) if data.get("duration") else None
+    author = str(data.get("owner", {}).get("name") or "")
+    thumbnail_url = str(data.get("pic") or "")
+    cid_list = data.get("pages") if isinstance(data.get("pages"), list) else []
+    cid = cid_list[0].get("cid") if cid_list else data.get("cid")
+    aid = data.get("aid")
+
+    if progress_callback is not None:
+        progress_callback(28, "已拿到视频信息，正在获取播放地址。")
+
+    subtitle_text = ""
+    subtitle_timeline = ""
+    media_url = ""
+    warnings: list[str] = []
+
+    if cid and aid:
+        try:
+            player_url = (
+                f"https://api.bilibili.com/x/player/wbi/v2"
+                f"?aid={aid}&cid={cid}&bvid={bvid}&fnval=4048&fnver=0&fourk=1"
+            )
+            player_resp = client.get(player_url)
+            player_resp.raise_for_status()
+            player_data = player_resp.json()
+
+            if isinstance(player_data.get("data"), dict):
+                pd = player_data["data"]
+
+                subtitle_info = pd.get("subtitle", {}).get("subtitles") if isinstance(pd.get("subtitle"), dict) else []
+                if subtitle_info:
+                    best_sub = subtitle_info[0]
+                    sub_url = best_sub.get("subtitle_url", "")
+                    if sub_url and not sub_url.startswith("http"):
+                        sub_url = f"https:{sub_url}"
+                    if sub_url:
+                        try:
+                            sub_path = capture_dir / "bilibili_subtitle.json"
+                            _download_file(sub_url, sub_path)
+                            raw = sub_path.read_text(encoding="utf-8", errors="ignore")
+                            subtitle_text, subtitle_timeline = _parse_bilibili_subtitle(raw)
+                        except Exception as exc:
+                            warnings.append(f"字幕下载失败：{exc}")
+
+                durls = pd.get("durl") if isinstance(pd.get("durl"), list) else []
+                if durls:
+                    media_url = str(durls[0].get("url") or "")
+        except (httpx.HTTPError, ValueError) as exc:
+            warnings.append(f"播放地址获取失败：{exc}")
+
+    if media_url:
+        media_path = capture_dir / "bilibili_source.mp4"
+        if progress_callback is not None:
+            progress_callback(36, "正在下载原视频文件。")
+        try:
+            _download_file(media_url, media_path, platform="bilibili", headers={"Referer": "https://www.bilibili.com/"})
+            if not media_path.exists():
+                media_url = ""
+                warnings.append("视频文件未能成功下载。")
+        except ExtractionError as exc:
+            media_url = ""
+            warnings.append(exc.message)
+
+    if progress_callback is not None:
+        progress_callback(50, "B站内容提取完成。")
+
+    return ExtractionOutcome(
+        platform="bilibili",
+        content_type="video",
+        title=title,
+        canonical_url=f"https://www.bilibili.com/video/{bvid}",
+        source_item_id=bvid,
+        description=description,
+        author=author,
+        published_at=None,
+        language="zh",
+        thumbnail_url=thumbnail_url,
+        duration_seconds=duration_seconds,
+        image_urls=[],
+        strategy=["direct_api"] + (["subtitle"] if subtitle_text else []) + (["media_direct"] if media_url else []),
+        warnings=warnings,
+        notes_text=description[:280] if description else "",
+        subtitle_text=subtitle_text,
+        subtitle_timeline_text=subtitle_timeline,
+        subtitle_source="api" if subtitle_text else "none",
+        selected_language="zh" if subtitle_text else "",
+        article_text="",
+        primary_text=subtitle_text,
+        media_file_path=str(media_path) if media_path and Path(media_path).exists() else "",
+        needs_transcription=bool(media_url) and not bool(subtitle_text),
+    )
 
 
 def extract_with_ytdlp(

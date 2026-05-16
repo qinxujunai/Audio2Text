@@ -21,6 +21,7 @@ from app.extractors import (
     ExtractionOutcome,
     ProviderTraceEntry,
     ProgressCallback,
+    extract_bilibili_direct,
     extract_douyin_direct,
     extract_generic_web,
     extract_local_file,
@@ -788,6 +789,14 @@ class BilibiliAdapter(BaseSourceAdapter):
     ) -> list[ProviderSpec]:
         return [
             ProviderSpec(
+                "direct_provider",
+                lambda: extract_bilibili_direct(
+                    resolved,
+                    capture_dir,
+                    progress_callback=progress_callback,
+                ),
+            ),
+            ProviderSpec(
                 "open_source_provider",
                 lambda: extract_with_ytdlp(
                     resolved,
@@ -795,7 +804,7 @@ class BilibiliAdapter(BaseSourceAdapter):
                     cookie_text=cookie_text,
                     progress_callback=progress_callback,
                 ),
-            )
+            ),
         ]
 
     def validate_outcome(self, resolved: ResolvedSource, outcome: ExtractionOutcome) -> ExtractionOutcome:
