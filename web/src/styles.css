@@ -1,10 +1,14 @@
 :root {
   color-scheme: light;
   font-family:
+    system-ui,
+    -apple-system,
     "SF Pro Display",
     "PingFang SC",
+    "Noto Sans SC",
+    "Microsoft YaHei",
     "Helvetica Neue",
-    "Segoe UI",
+    "Roboto",
     sans-serif;
   line-height: 1.5;
   font-weight: 400;
