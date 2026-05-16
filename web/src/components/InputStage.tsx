@@ -194,7 +194,16 @@ export function InputStage({
 
             <div className="hero-form-footer">
               <div className="hero-form-tools">
-                <button className="text-tool" onClick={onPaste} type="button">
+                <button
+                  className="text-tool"
+                  onClick={() => {
+                    onPaste();
+                    window.requestAnimationFrame(() => {
+                      textareaRef.current?.focus();
+                    });
+                  }}
+                  type="button"
+                >
                   <Clipboard size={16} />
                   从剪贴板粘贴
                 </button>

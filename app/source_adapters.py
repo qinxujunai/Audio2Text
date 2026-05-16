@@ -1151,8 +1151,27 @@ class XiaohongshuAdapter(BaseSourceAdapter):
                 retryable=False,
             )
         if outcome.content_type == "video":
-            return _require_media_or_subtitle(outcome, "小红书视频没有拿到可转写媒体或字幕。")
-        return _require_images(outcome, "小红书图文没有拿到可用图片。")
+            if outcome.subtitle_text.strip():
+                return outcome
+            media_path = outcome.media_file_path or ""
+            if media_path and Path(media_path).exists():
+                return outcome
+            raise ExtractionError(
+                "extract",
+                "小红书视频没有拿到可转写媒体或字幕。当前预览环境可能无法直接访问中国平台，请稍后重试。",
+                reason_code="media_or_subtitle_missing",
+                retryable=True,
+            )
+        if outcome.image_urls:
+            return outcome
+        if outcome.primary_text.strip() or (outcome.article_text or "").strip():
+            return outcome
+        raise ExtractionError(
+            "extract",
+            "小红书图文没有拿到正文或图片。请确认链接来自小红书 App 的"复制链接"功能，而非浏览器地址栏。",
+            reason_code="text_or_images_missing",
+            retryable=False,
+        )
 
 
 def get_url_adapter(resolved: ResolvedSource) -> BaseSourceAdapter:
