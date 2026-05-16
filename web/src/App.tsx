@@ -325,29 +325,7 @@ export default function App() {
   }
 
   async function pasteFromClipboard() {
-    // Method 1: execCommand('paste') — synchronous, preserves user gesture
-    const temp = document.createElement("textarea");
-    temp.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;";
-    document.body.appendChild(temp);
-    temp.focus();
-
-    let pasted = false;
-    try {
-      pasted = document.execCommand("paste");
-    } catch {
-      // execCommand not supported
-    }
-
-    const pastedText = temp.value.trim();
-    document.body.removeChild(temp);
-
-    if (pasted && pastedText) {
-      setInput(pastedText);
-      setToast("已从剪贴板粘贴。");
-      return;
-    }
-
-    // Method 2: Modern Clipboard API
+    // Method 1: Modern Clipboard API (works on Chrome/Safari/Firefox desktop + mobile)
     if (navigator.clipboard?.readText) {
       try {
         const text = await navigator.clipboard.readText();
@@ -356,15 +334,63 @@ export default function App() {
           setToast("已从剪贴板粘贴。");
           return;
         }
-        setToast("剪贴板里还没有可用内容。");
-        return;
       } catch {
         // Fall through
       }
     }
 
-    // Method 3: Nothing worked
-    setToast("请在输入框中粘贴链接，或检查浏览器剪贴板权限。");
+    // Method 2: Clipboard read() API (newer, broader mobile support)
+    if (navigator.clipboard?.read) {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          if (item.types.includes("text/plain")) {
+            const blob = await item.getType("text/plain");
+            const text = await blob.text();
+            if (text.trim()) {
+              setInput(text);
+              setToast("已从剪贴板粘贴。");
+              return;
+            }
+          }
+        }
+      } catch {
+        // Fall through
+      }
+    }
+
+    // Method 3: execCommand('paste') on temp textarea (works even with restrictive permissions)
+    const temp = document.createElement("textarea");
+    temp.setAttribute("readonly", "");
+    temp.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px;";
+    document.body.appendChild(temp);
+    temp.focus();
+    temp.select();
+
+    // Small delay for focus to register in DOM
+    await new Promise((r) => setTimeout(r, 50));
+
+    let pasted = false;
+    try {
+      pasted = document.execCommand("paste");
+    } catch {
+      // execCommand not supported
+    }
+
+    await new Promise((r) => setTimeout(r, 50));
+    const pastedText = temp.value.trim();
+    document.body.removeChild(temp);
+
+    if (pastedText) {
+      setInput(pastedText);
+      setToast("已从剪贴板粘贴。");
+      return;
+    }
+
+    // Method 4: Nothing worked
+    const ta = document.querySelector("textarea");
+    if (ta) (ta as HTMLTextAreaElement).focus();
+    setToast("请在输入框中粘贴链接。");
   }
 
   async function submitText() {
