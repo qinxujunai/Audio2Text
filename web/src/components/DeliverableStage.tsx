@@ -114,6 +114,19 @@ function contentTypeLabel(contentType: string) {
   );
 }
 
+function factLabel(key: string, fallback: string) {
+  return (
+    {
+      title: "标题",
+      platform: "平台",
+      content_type: "内容类型",
+      author: "作者",
+      published_at: "发布时间",
+      duration: "时长",
+    }[key] || fallback
+  );
+}
+
 function heroDescription(capture: CaptureEnvelope, hasVideoArtifact: boolean) {
   if (capture.source.media_kind === "image_article" || capture.source.platform === "wechat_article") {
     return capture.capture.asset_preparation_pending
@@ -1040,8 +1053,8 @@ function VideoUnavailablePanel({ notice }: { notice: string }) {
       <div className="media-panel-body">
         <div className="media-panel-empty-card">
           <Film size={22} />
-          <strong>视频预览暂不可用</strong>
-          <p>{notice || "文字已整理完成，原视频暂未下载，可稍后重试。"}</p>
+          <strong>暂未拿到可预览视频</strong>
+          <p>{notice || "文本已整理完成，但原视频暂未成功下载。"}</p>
         </div>
       </div>
     </section>
@@ -1052,10 +1065,10 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null);
   const [previewMode, setPreviewMode] = useState<ImagePreviewMode>("image");
-  const displayText = capture.result.views.primary || capture.result.primary_text || "";
+  const primaryText = capture.result.views.primary || capture.result.primary_text || "";
   const markdownText = capture.result.views.markdown || "";
-  const copyPayload = markdownText.trim() || displayText;
-  const isLongTextResult = displayText.trim().length >= 900 || displayText.split("\n").filter((item) => item.trim()).length >= 8;
+  const copyPayload = markdownText.trim() || primaryText;
+  const isLongTextResult = primaryText.trim().length >= 900 || primaryText.split("\n").filter((item) => item.trim()).length >= 8;
   const showImages = shouldShowImages(capture);
   const imageItems = useMemo(() => buildGalleryItems(capture), [capture]);
   const imagesZip = useMemo(
@@ -1080,11 +1093,18 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
     [capture.artifacts, capture.source.media_kind],
   );
   const videoArtifact = previewVideoArtifact || sourceVideoArtifact || fallbackVideoArtifact;
+  const visibleFacts = useMemo(
+    () =>
+      capture.result.content_facts.filter((fact) =>
+        ["title", "platform", "content_type", "author", "published_at", "duration"].includes(fact.key),
+      ),
+    [capture.result.content_facts],
+  );
   const hasVideoPanel = capture.source.media_kind === "video";
   const hasPlayableVideo = Boolean(videoArtifact);
   const sourceUrl = resultSourceUrl(capture);
-  const isImageOnlyResult = showImages && !displayText.trim();
-  const isVideoOnlyResult = hasPlayableVideo && !displayText.trim();
+  const isImageOnlyResult = showImages && !primaryText.trim();
+  const isVideoOnlyResult = hasPlayableVideo && !primaryText.trim();
   const heroHeading = heroTitle(capture);
   const showCopyAction = Boolean(copyPayload.trim()) && !isImageOnlyResult;
   const imagesPending = showImages && capture.capture.asset_preparation_pending;
@@ -1100,6 +1120,39 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
     setCopyState(ok ? "copied" : "failed");
     window.setTimeout(() => setCopyState("idle"), 2200);
   }
+
+  const titleFact = visibleFacts.find((fact) => fact.key === "title");
+  const secondaryFacts = visibleFacts.filter((fact) => fact.key !== "title");
+  const factsSection = titleFact || secondaryFacts.length || sourceUrl ? (
+    <section className="facts-strip">
+      {titleFact ? (
+        <div className="facts-strip-main">
+          <div className="fact-chip fact-chip-title">
+            <span>{factLabel(titleFact.key, titleFact.label)}</span>
+            <strong title={titleFact.value}>{titleFact.value}</strong>
+          </div>
+        </div>
+      ) : null}
+
+      {secondaryFacts.length || sourceUrl ? (
+        <div className="facts-strip-side">
+          {secondaryFacts.map((fact) => (
+            <div className={`fact-chip fact-chip-${fact.key}`} key={fact.key}>
+              <span>{factLabel(fact.key, fact.label)}</span>
+              <strong title={fact.value}>{fact.value}</strong>
+            </div>
+          ))}
+          {sourceUrl ? (
+            <a className="fact-chip fact-chip-action" href={sourceUrl} rel="noreferrer" target="_blank">
+              <span>来源</span>
+              <strong>查看来源</strong>
+              <ExternalLink size={13} />
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  ) : null;
 
   useEffect(() => {
     if (activeImageIndex == null) return;
@@ -1158,6 +1211,12 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
 
           <h1 title={heroHeading}>{heroHeading}</h1>
           <p>{heroDescription(capture, hasPlayableVideo)}</p>
+
+          <div className="deliverable-meta">
+            <span>{platformLabel(capture.source.platform)}</span>
+            <span>{contentTypeLabel(capture.source.media_kind)}</span>
+            {capture.source.duration_seconds ? <span>{durationLabel(capture.source.duration_seconds)}</span> : null}
+          </div>
         </header>
 
         <div className="deliverable-workspace-shell">
@@ -1168,7 +1227,6 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                   <div className="result-surface-copy">
                     <span className="result-section-kicker">文字</span>
                     <strong>正文</strong>
-                    <p>可直接查看、复制或下载。</p>
                   </div>
 
                   <div className="result-actions">
@@ -1196,9 +1254,9 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                 </div>
 
                 <div className={isLongTextResult ? "result-content-shell is-scrollable" : "result-content-shell"}>
-                  {displayText.trim() ? (
+                  {primaryText.trim() ? (
                     <div className={isLongTextResult ? "result-prose result-prose-long" : "result-prose"}>
-                      {displayText.split("\n").map((paragraph, index) =>
+                      {primaryText.split("\n").map((paragraph, index) =>
                         paragraph.trim() ? <p key={`paragraph-${index}`}>{paragraph}</p> : <div className="result-gap" key={`gap-${index}`} />,
                       )}
                     </div>
@@ -1273,20 +1331,9 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
               </section>
             ) : null}
           </div>
-        </div>
 
-        <footer className="deliverable-meta">
-          <span>标题 {heroHeading}</span>
-          <span>{platformLabel(capture.source.platform)}</span>
-          <span>{contentTypeLabel(capture.source.media_kind)}</span>
-          {capture.source.duration_seconds ? <span>{durationLabel(capture.source.duration_seconds)}</span> : null}
-          {sourceUrl ? (
-            <a className="deliverable-meta-link" href={sourceUrl} rel="noreferrer" target="_blank">
-              查看来源
-              <ExternalLink size={12} />
-            </a>
-          ) : null}
-        </footer>
+          {factsSection}
+        </div>
 
         {activeImageIndex != null && imageItems.length ? (
           <ImageViewerOverlay
