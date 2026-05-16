@@ -330,26 +330,22 @@ export default function App() {
   }
 
   async function pasteFromClipboard() {
-    // Method 1: designMode + contentEditable + execCommand
-    // designMode='on' signals the browser to enable paste from system clipboard
     let text = "";
+
+    // Method 1: temp textarea + execCommand
+    const temp = document.createElement("textarea");
+    temp.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;";
+    document.body.appendChild(temp);
+    temp.focus();
+    temp.select();
+
     try {
-      const prevMode = document.designMode;
-      document.designMode = "on";
-      const div = document.createElement("div");
-      div.contentEditable = "true";
-      div.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;width:1px;height:1px;";
-      document.body.appendChild(div);
-      div.focus();
-      document.execCommand("selectAll", false);
-      document.execCommand("delete", false);
-      const ok = document.execCommand("paste");
-      if (ok) text = (div.innerText || "").replace(/ /g, " ").trim();
-      document.body.removeChild(div);
-      document.designMode = prevMode;
+      document.execCommand("paste");
+      text = temp.value.trim();
     } catch {
-      document.designMode = "off";
+      // execCommand not supported
     }
+    document.body.removeChild(temp);
 
     if (text) {
       setInput(text);
@@ -357,7 +353,7 @@ export default function App() {
       return;
     }
 
-    // Method 2: navigator.clipboard.readText() — standard API
+    // Method 2: navigator.clipboard.readText()
     if (navigator.clipboard?.readText) {
       try {
         text = (await navigator.clipboard.readText()).trim();
@@ -371,7 +367,7 @@ export default function App() {
       }
     }
 
-    // Method 3: navigator.clipboard.read() — newer API
+    // Method 3: navigator.clipboard.read()
     if (navigator.clipboard?.read) {
       try {
         const items = await navigator.clipboard.read();
@@ -391,10 +387,8 @@ export default function App() {
       }
     }
 
-    // Method 4: Nothing worked — guide user
-    const ta = document.querySelector("textarea");
-    if (ta) (ta as HTMLTextAreaElement).focus();
-    setToast("请在输入框中粘贴链接。");
+    // Method 4: Nothing worked
+    setToast("请在输入框中长按粘贴链接。");
   }
 
   async function submitText() {
