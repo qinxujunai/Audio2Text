@@ -325,11 +325,38 @@ export default function App() {
   }
 
   async function pasteFromClipboard() {
-    // Method 1: Modern Clipboard API (works on Chrome/Safari/Firefox desktop + mobile)
+    // Method 1: designMode + contentEditable + execCommand
+    // designMode='on' signals the browser to enable paste from system clipboard
+    let text = "";
+    try {
+      const prevMode = document.designMode;
+      document.designMode = "on";
+      const div = document.createElement("div");
+      div.contentEditable = "true";
+      div.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;width:1px;height:1px;";
+      document.body.appendChild(div);
+      div.focus();
+      document.execCommand("selectAll", false);
+      document.execCommand("delete", false);
+      const ok = document.execCommand("paste");
+      if (ok) text = (div.innerText || "").replace(/ /g, " ").trim();
+      document.body.removeChild(div);
+      document.designMode = prevMode;
+    } catch {
+      document.designMode = "off";
+    }
+
+    if (text) {
+      setInput(text);
+      setToast("已从剪贴板粘贴。");
+      return;
+    }
+
+    // Method 2: navigator.clipboard.readText() — standard API
     if (navigator.clipboard?.readText) {
       try {
-        const text = await navigator.clipboard.readText();
-        if (text.trim()) {
+        text = (await navigator.clipboard.readText()).trim();
+        if (text) {
           setInput(text);
           setToast("已从剪贴板粘贴。");
           return;
@@ -339,15 +366,15 @@ export default function App() {
       }
     }
 
-    // Method 2: Clipboard read() API (newer, broader mobile support)
+    // Method 3: navigator.clipboard.read() — newer API
     if (navigator.clipboard?.read) {
       try {
         const items = await navigator.clipboard.read();
         for (const item of items) {
           if (item.types.includes("text/plain")) {
             const blob = await item.getType("text/plain");
-            const text = await blob.text();
-            if (text.trim()) {
+            text = (await blob.text()).trim();
+            if (text) {
               setInput(text);
               setToast("已从剪贴板粘贴。");
               return;
@@ -359,35 +386,7 @@ export default function App() {
       }
     }
 
-    // Method 3: execCommand('paste') on temp textarea (works even with restrictive permissions)
-    const temp = document.createElement("textarea");
-    temp.setAttribute("readonly", "");
-    temp.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;width:1px;height:1px;";
-    document.body.appendChild(temp);
-    temp.focus();
-    temp.select();
-
-    // Small delay for focus to register in DOM
-    await new Promise((r) => setTimeout(r, 50));
-
-    let pasted = false;
-    try {
-      pasted = document.execCommand("paste");
-    } catch {
-      // execCommand not supported
-    }
-
-    await new Promise((r) => setTimeout(r, 50));
-    const pastedText = temp.value.trim();
-    document.body.removeChild(temp);
-
-    if (pastedText) {
-      setInput(pastedText);
-      setToast("已从剪贴板粘贴。");
-      return;
-    }
-
-    // Method 4: Nothing worked
+    // Method 4: Nothing worked — guide user
     const ta = document.querySelector("textarea");
     if (ta) (ta as HTMLTextAreaElement).focus();
     setToast("请在输入框中粘贴链接。");
