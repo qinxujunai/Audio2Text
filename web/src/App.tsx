@@ -325,23 +325,7 @@ export default function App() {
   }
 
   async function pasteFromClipboard() {
-    // Method 1: Modern Clipboard API
-    if (navigator.clipboard?.readText) {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text.trim()) {
-          setInput(text);
-          setToast("已从剪贴板粘贴。");
-          return;
-        }
-        setToast("剪贴板里还没有可用内容。");
-        return;
-      } catch {
-        // Fall through to execCommand
-      }
-    }
-
-    // Method 2: execCommand('paste') — bypasses permission dialogs
+    // Method 1: execCommand('paste') — synchronous, preserves user gesture
     const temp = document.createElement("textarea");
     temp.style.cssText = "position:fixed;top:0;left:-9999px;opacity:0;pointer-events:none;";
     document.body.appendChild(temp);
@@ -354,13 +338,30 @@ export default function App() {
       // execCommand not supported
     }
 
-    if (pasted && temp.value.trim()) {
-      setInput(temp.value);
+    const pastedText = temp.value.trim();
+    document.body.removeChild(temp);
+
+    if (pasted && pastedText) {
+      setInput(pastedText);
       setToast("已从剪贴板粘贴。");
-      document.body.removeChild(temp);
       return;
     }
-    document.body.removeChild(temp);
+
+    // Method 2: Modern Clipboard API
+    if (navigator.clipboard?.readText) {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text.trim()) {
+          setInput(text);
+          setToast("已从剪贴板粘贴。");
+          return;
+        }
+        setToast("剪贴板里还没有可用内容。");
+        return;
+      } catch {
+        // Fall through
+      }
+    }
 
     // Method 3: Nothing worked
     setToast("请在输入框中粘贴链接，或检查浏览器剪贴板权限。");
