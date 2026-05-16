@@ -397,11 +397,11 @@ export default function App() {
       return;
     }
 
-    const urlMatch = input.trim().match(/https?:\/\/[^\s]+/i);
-    const submittedInput = urlMatch ? urlMatch[0] : input.trim();
+    const fullText = input.trim();
+    const urlMatch = fullText.match(/https?:\/\/[^\s]+/i);
+    const submittedInput = urlMatch ? urlMatch[0] : fullText;
     setSubmitting(true);
     setWorkspaceError(null);
-    setInput("");
     try {
       const created = await createCaptureFromInput(submittedInput);
       await openCapture(created.capture_id);
@@ -414,7 +414,6 @@ export default function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : "创建任务失败。";
       setWorkspaceError(message);
-      setInput(submittedInput);
       setToast(message);
     } finally {
       setSubmitting(false);
