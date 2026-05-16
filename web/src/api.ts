@@ -23,25 +23,50 @@ function _sanitizeErrorMessage(raw: string): string {
   return trimmed;
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, options);
-  const contentType = response.headers.get("content-type") || "";
-  const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+async function request<T>(path: string, options?: RequestInit, retries = 3): Promise<T> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(`${API_BASE}${path}`, options);
+      const contentType = response.headers.get("content-type") || "";
+      const payload = contentType.includes("application/json") ? await response.json() : await response.text();
 
-  if (!response.ok) {
-    const rawDetail =
-      typeof payload === "string"
-        ? payload
-        : typeof payload?.detail === "string"
-          ? payload.detail
-          : JSON.stringify(payload);
-    const safeMessage = _sanitizeErrorMessage(rawDetail || "");
-    const error = new Error(safeMessage || `HTTP ${response.status}`) as RequestError;
-    error.status = response.status;
-    throw error;
+      if (!response.ok) {
+        // Retry on server errors (502/503/504) and rate limits (429)
+        if (attempt < retries && (response.status >= 502 || response.status === 429)) {
+          await wait(500 * (attempt + 1));
+          continue;
+        }
+        const rawDetail =
+          typeof payload === "string"
+            ? payload
+            : typeof payload?.detail === "string"
+              ? payload.detail
+              : JSON.stringify(payload);
+        const safeMessage = _sanitizeErrorMessage(rawDetail || "");
+        const error = new Error(safeMessage || `HTTP ${response.status}`) as RequestError;
+        error.status = response.status;
+        throw error;
+      }
+
+      return payload as T;
+    } catch (error: any) {
+      lastError = error;
+      // Retry on network errors
+      if (attempt < retries && (error.name === 'TypeError' || error.message?.includes('fetch') || error.message?.includes('NetworkError'))) {
+        await wait(500 * (attempt + 1));
+        continue;
+      }
+      // Don't retry client errors or already-structured errors
+      if (error.status && error.status < 500) throw error;
+      if (attempt < retries) {
+        await wait(500 * (attempt + 1));
+        continue;
+      }
+      throw error;
+    }
   }
-
-  return payload as T;
+  throw lastError || new Error(TEMPORARY_BUSY_MESSAGE);
 }
 
 function wait(ms: number) {
