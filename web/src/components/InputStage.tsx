@@ -196,12 +196,7 @@ export function InputStage({
               <div className="hero-form-tools">
                 <button
                   className="text-tool"
-                  onClick={() => {
-                    onPaste();
-                    window.requestAnimationFrame(() => {
-                      textareaRef.current?.focus();
-                    });
-                  }}
+                  onClick={() => onPaste()}
                   type="button"
                 >
                   <Clipboard size={16} />
