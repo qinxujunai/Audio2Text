@@ -367,6 +367,7 @@ def _request_headers() -> dict[str, str]:
 
 
 CN_PLATFORMS = {"xiaohongshu", "douyin", "wechat_article", "bilibili"}
+RELAY_PLATFORMS = CN_PLATFORMS | {"youtube"}
 
 
 def _proxy_for_platform(platform: str | None = None) -> str | None:
@@ -380,7 +381,7 @@ def _proxy_for_platform(platform: str | None = None) -> str | None:
 
 def _platform_needs_relay(platform: str | None = None) -> bool:
     """Whether the platform needs routing through the Cloudflare Worker relay."""
-    if not platform or platform not in CN_PLATFORMS:
+    if not platform or platform not in RELAY_PLATFORMS:
         return False
     if CN_PLATFORM_PROXY:
         return False
@@ -1370,41 +1371,39 @@ def extract_youtube_transcript(
     description = meta.get("og:description") or meta.get("description") or ""
     preferred_language = ""
 
-    session = _requests_session_without_env()
-    try:
-        if progress_callback is not None:
-            progress_callback(24, "正在检查可用字幕轨。")
-        api = YouTubeTranscriptApi(http_client=session)
-        transcript_list = api.list(video_id)
-        transcript = _select_youtube_transcript(transcript_list, preferred_language=preferred_language)
-        if transcript is None:
-            raise ExtractionError(
-                "extract",
-                "YouTube 当前没有列出可用字幕轨。",
-                reason_code="youtube_transcript_unavailable",
-                retryable=False,
-            )
-        fetched = transcript.fetch()
-        subtitle_text, subtitle_timeline = _render_fetched_transcript(fetched.to_raw_data())
-        if progress_callback is not None and subtitle_text:
-            progress_callback(46, "已拿到可用字幕，正在整理结果。")
-    except Exception as exc:  # noqa: BLE001
-        if isinstance(exc, ExtractionError):
-            raise
-        reason_code, retryable = _classify_external_error(str(exc), platform="youtube", stage="extract")
-        raise ExtractionError(
-            "extract",
-            f"YouTube 字幕提取失败：{_strip_ansi(str(exc))}",
-            reason_code=reason_code,
-            retryable=retryable,
-        ) from exc
-    finally:
-        session.close()
+    subtitle_text = ""
+    subtitle_timeline = ""
+    transcript = None
+    needs_relay = _platform_needs_relay("youtube")
+
+    # Try direct transcript API first (fast path for local/non-blocked networks)
+    if not needs_relay:
+        session = _requests_session_without_env()
+        try:
+            if progress_callback is not None:
+                progress_callback(24, "正在检查可用字幕轨。")
+            api = YouTubeTranscriptApi(http_client=session)
+            transcript_list = api.list(video_id)
+            transcript = _select_youtube_transcript(transcript_list, preferred_language=preferred_language)
+            if transcript is not None:
+                fetched = transcript.fetch()
+                subtitle_text, subtitle_timeline = _render_fetched_transcript(fetched.to_raw_data())
+                if progress_callback is not None and subtitle_text:
+                    progress_callback(46, "已拿到可用字幕，正在整理结果。")
+        except Exception:
+            # Fall through to relay-based extraction
+            pass
+        finally:
+            session.close()
+
+    # Relay path: extract captions from ytInitialPlayerResponse in page HTML
+    if not subtitle_text:
+        subtitle_text = _extract_youtube_captions_from_page(html)
 
     if not subtitle_text:
         raise ExtractionError(
             "extract",
-            "YouTube 存在字幕接口，但没有返回可用字幕内容。",
+            "YouTube 当前没有可用字幕轨。",
             reason_code="youtube_transcript_unavailable",
             retryable=False,
         )
@@ -1416,17 +1415,70 @@ def extract_youtube_transcript(
         canonical_url=final_url,
         source_item_id=video_id,
         description=description,
-        language=_detect_text_language(subtitle_text[:280]) or _normalize_language_code(transcript.language_code),
+        language=_detect_text_language(subtitle_text[:280]) or "zh",
         thumbnail_url=meta.get("og:image"),
         strategy=["youtube_transcript_api", "subtitle"],
         subtitle_text=subtitle_text,
         subtitle_timeline_text=subtitle_timeline,
-        subtitle_source="auto" if transcript.is_generated else "manual",
-        selected_language=str(transcript.language_code),
+        subtitle_source="auto",
+        selected_language="",
         primary_text=subtitle_text,
         notes_text="",
         needs_transcription=False,
     )
+
+
+def _extract_youtube_captions_from_page(html: str) -> str:
+    """Extract YouTube captions from embedded ytInitialPlayerResponse JSON."""
+    import xml.etree.ElementTree as ET
+
+    match = re.search(r"var\s+ytInitialPlayerResponse\s*=\s*(\{.*?\});\s*</script>", html, re.DOTALL)
+    if not match:
+        match = re.search(r"ytInitialPlayerResponse\s*=\s*(\{.*?\});", html, re.DOTALL)
+    if not match:
+        return ""
+
+    try:
+        player = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return ""
+
+    tracks = (player.get("captions") or {}).get("playerCaptionsTracklistRenderer") or {}
+    caption_tracks = tracks.get("captionTracks") or []
+
+    if not caption_tracks:
+        return ""
+
+    # Pick first available track (prefer auto-generated or first non-auto)
+    selected = None
+    for track in caption_tracks:
+        if isinstance(track, dict) and track.get("languageCode"):
+            selected = track
+            if track.get("vssId", "").startswith("a."):
+                break  # prefer auto-captions
+
+    if not selected or not selected.get("baseUrl"):
+        return ""
+
+    caption_url = selected["baseUrl"]
+    if caption_url.startswith("//"):
+        caption_url = "https:" + caption_url
+
+    # Fetch caption XML via relay or direct
+    _, caption_xml = _fetch_text(caption_url, platform="youtube")
+
+    try:
+        root = ET.fromstring(caption_xml)
+    except ET.ParseError:
+        return ""
+
+    lines: list[str] = []
+    for text_el in root.iter("text"):
+        line = "".join(text_el.itertext()).replace("&#39;", "'").replace("&amp;", "&").replace("&quot;", "\"")
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def _extract_xiaoyuzhou_episode_id(url: str) -> str:
