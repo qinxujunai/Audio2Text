@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
 
 
 REQUIRED_SUCCESS_PLATFORMS = {
@@ -13,6 +14,13 @@ REQUIRED_SUCCESS_PLATFORMS = {
     "wechat_article",
 }
 REQUIRED_XIAOHONGSHU_VARIANTS = {"image", "video", "live"}
+FORBIDDEN_COMMITTED_QUERY_KEYS = {
+    "share_source",
+    "vd_source",
+    "xsec_token",
+    "xsec_source",
+    "xhsshare",
+}
 
 
 def load_live_smoke_samples(path: Path) -> dict:
@@ -85,3 +93,20 @@ def validate_live_smoke_samples(payload: object) -> list[str]:
         errors.append("xiaohongshu success samples are missing variants: " + ", ".join(missing_variants))
 
     return errors
+
+
+def find_committed_sample_url_hygiene_issues(payload: dict) -> list[str]:
+    issues: list[str] = []
+    for bucket in ("success", "failure"):
+        samples = payload.get(bucket, [])
+        if not isinstance(samples, list):
+            continue
+        for index, sample in enumerate(samples):
+            if not isinstance(sample, dict):
+                continue
+            url = str(sample.get("url", "")).strip()
+            query_keys = {key.lower() for key, _ in parse_qsl(urlsplit(url).query, keep_blank_values=True)}
+            forbidden_keys = sorted(query_keys & FORBIDDEN_COMMITTED_QUERY_KEYS)
+            if forbidden_keys:
+                issues.append(f"{bucket}[{index}] has committed share/tracking query keys: {', '.join(forbidden_keys)}")
+    return issues

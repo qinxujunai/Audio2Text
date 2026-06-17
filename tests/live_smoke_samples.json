@@ -11,7 +11,7 @@
     {
       "platform": "bilibili",
       "variant": "subtitle_video",
-      "url": "https://www.bilibili.com/video/BV1tuwezwEi7/?share_source=copy_web&vd_source=42927ff15dcd4894af521f3933dcc9c0",
+      "url": "https://www.bilibili.com/video/BV1tuwezwEi7/",
       "expected_media_kind": "video",
       "require_text": true,
       "require_source_media": true
@@ -26,7 +26,7 @@
     {
       "platform": "douyin",
       "variant": "public_video",
-      "url": "https://www.douyin.com/video/7618917735157806321?previous_page=web_code_link",
+      "url": "https://www.douyin.com/video/7618917735157806321",
       "expected_media_kind": "video",
       "require_text": true,
       "require_source_media": true
@@ -34,18 +34,18 @@
     {
       "platform": "xiaohongshu",
       "variant": "image",
-      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643?source=webshare&xhsshare=pc_web&xsec_token=ABIAUEIHIby3TGRVmZn_Oce6p4IAYr-b3Auu8v_nwk07Q=&xsec_source=pc_share",
+      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643",
       "require_image_urls": true
     },
     {
       "platform": "xiaohongshu",
       "variant": "video",
-      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643?source=webshare&xhsshare=pc_web&xsec_token=ABIAUEIHIby3TGRVmZn_Oce6p4IAYr-b3Auu8v_nwk07Q=&xsec_source=pc_share"
+      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643"
     },
     {
       "platform": "xiaohongshu",
       "variant": "live",
-      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643?source=webshare&xhsshare=pc_web&xsec_token=ABIAUEIHIby3TGRVmZn_Oce6p4IAYr-b3Auu8v_nwk07Q=&xsec_source=pc_share"
+      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643"
     },
     {
       "platform": "wechat_article",
