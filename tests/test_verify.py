@@ -9,14 +9,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class VerifyTestCase(unittest.TestCase):
-    def test_verify_uses_explicit_py_compile_file_list(self) -> None:
+    def test_verify_compiles_all_project_python_files(self) -> None:
         from scripts import verify
 
         self.assertTrue(verify.PYTHON_FILES)
         self.assertTrue(all("*" not in item for item in verify.PYTHON_FILES))
-        self.assertIn("app/main.py", verify.PYTHON_FILES)
-        self.assertIn("scripts/doctor.py", verify.PYTHON_FILES)
-        self.assertIn("scripts/benchmark_transcription.py", verify.PYTHON_FILES)
+        expected = {
+            path.relative_to(ROOT).as_posix()
+            for root in ("app", "scripts", "tests")
+            for path in (ROOT / root).rglob("*.py")
+        }
+        self.assertEqual(set(verify.PYTHON_FILES), expected)
 
     def test_verify_runs_daily_quality_gate(self) -> None:
         verify_script = (ROOT / "scripts" / "verify.py").read_text(encoding="utf-8")

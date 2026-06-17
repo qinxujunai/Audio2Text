@@ -12,18 +12,18 @@ from app.runtime_preflight import apply_cuda_runtime_to_env
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = PROJECT_ROOT / "web"
-PYTHON_FILES = (
-    "app/main.py",
-    "app/pipeline.py",
-    "app/runtime_preflight.py",
-    "app/providers/transcription.py",
-    "app/settings.py",
-    "scripts/config.py",
-    "scripts/doctor.py",
-    "scripts/run_transcribe.py",
-    "scripts/model_loader.py",
-    "scripts/benchmark_transcription.py",
-)
+
+
+def _python_files() -> tuple[str, ...]:
+    roots = ("app", "scripts", "tests")
+    files: list[str] = []
+    for root in roots:
+        for path in sorted((PROJECT_ROOT / root).rglob("*.py")):
+            files.append(path.relative_to(PROJECT_ROOT).as_posix())
+    return tuple(files)
+
+
+PYTHON_FILES = _python_files()
 TRANSCRIBE_SMOKE_SNIPPET = r"""
 import json
 import sys
