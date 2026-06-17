@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import shutil
+import os
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app.settings import (
     ALLOW_DEGRADED_START,
     BROWSER_PROFILE_DIR,
+    DEVICE,
     FFMPEG_PATH,
     FFMPEG_PATH_SOURCE,
     MODEL_PATH,
@@ -19,6 +23,8 @@ from app.settings import (
 from scripts.logger import get_logger
 
 logger = get_logger("runtime_preflight", "runtime_preflight.log")
+
+CUDA_RUNTIME_DLLS = ("cublas64_12.dll", "cudnn64_9.dll")
 
 
 @dataclass(slots=True)
@@ -93,6 +99,82 @@ def _check_transcription_provider(result: PreflightResult) -> None:
         result.warnings.append(
             f"当前仍在使用仓库内 legacy 模型目录: {MODEL_PATH}。正式部署建议改为 workspace/runtime/models 下的项目级模型目录。"
         )
+
+    _check_cuda_runtime(result)
+
+
+def _candidate_runtime_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    for env_name in ("CUDA_RUNTIME_PATH", "CUDNN_PATH"):
+        raw_value = _env_value(env_name).strip()
+        if not raw_value:
+            continue
+        root = Path(raw_value)
+        candidates.append(root)
+        candidates.append(root / "bin")
+    for raw_path in _env_value("PATH").split(os.pathsep):
+        if raw_path.strip():
+            candidates.append(Path(raw_path.strip()))
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate).lower()
+        if key not in seen:
+            unique.append(candidate)
+            seen.add(key)
+    return unique
+
+
+def _windows_user_env_value(name: str) -> str:
+    if not sys.platform.startswith("win"):
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, _ = winreg.QueryValueEx(key, name)
+    except OSError:
+        return ""
+    return str(value or "")
+
+
+def _env_value(name: str) -> str:
+    values = [os.environ.get(name, ""), _windows_user_env_value(name)]
+    return os.pathsep.join(value for value in values if value)
+
+
+def _find_runtime_file(filename: str) -> Path | None:
+    for folder in _candidate_runtime_dirs():
+        path = folder / filename
+        if path.exists():
+            return path
+    system_match = shutil.which(filename)
+    return Path(system_match) if system_match else None
+
+
+def _check_cuda_runtime(result: PreflightResult) -> None:
+    if DEVICE not in {"cuda", "auto"}:
+        return
+    if DEVICE == "auto":
+        return
+    if not sys.platform.startswith("win"):
+        if shutil.which("nvidia-smi") is None:
+            result.warnings.append("当前配置为 CUDA 转写，但未在 PATH 中检测到 nvidia-smi；请确认容器或主机 GPU runtime 已就绪。")
+        return
+
+    missing = [filename for filename in CUDA_RUNTIME_DLLS if _find_runtime_file(filename) is None]
+    if not missing:
+        return
+
+    message = (
+        "当前配置为 CUDA 转写，但未在 CUDA_RUNTIME_PATH / CUDNN_PATH / PATH 中检测到必要运行时: "
+        + ", ".join(missing)
+        + "。请先配置项目启动脚本或用户环境变量，否则 faster-whisper 会无法使用 GPU。"
+    )
+    if ALLOW_DEGRADED_START:
+        result.warnings.append(message)
+    else:
+        result.fatal_errors.append(message)
 
 
 def _check_playwright_runtime(result: PreflightResult) -> None:
