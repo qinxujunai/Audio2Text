@@ -206,6 +206,16 @@ tests_runtime/public_preview/current_url.txt
 - `openai_compatible_model`
 - `allowed_origins`
 
+## 转写模型评测
+
+本地 Faster-Whisper 模型应通过同一批音频样本评测后再切换。评测脚本见：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.benchmark_transcription --help
+```
+
+评测方法与当前基线记录见 [docs/transcription-benchmark.md](docs/transcription-benchmark.md)。
+
 默认值说明：
 - `language` 当前默认是 `auto`
 - `capture_history_limit` 当前默认是 `12`
