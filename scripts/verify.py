@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.runtime_preflight import apply_cuda_runtime_to_env
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_DIR = PROJECT_ROOT / "web"
@@ -100,6 +102,7 @@ def _quality_gate_env() -> dict[str, str]:
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    apply_cuda_runtime_to_env(env)
     return env
 
 

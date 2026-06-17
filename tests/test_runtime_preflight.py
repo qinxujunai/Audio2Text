@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -201,6 +202,20 @@ class RuntimePreflightTestCase(unittest.TestCase):
             runtime_preflight._check_cuda_runtime(result)
 
         self.assertEqual(result.fatal_errors, [])
+
+    def test_cuda_runtime_env_is_prepended_for_child_processes(self) -> None:
+        runtime_dir = self.root / "cuda" / "bin"
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        for filename in runtime_preflight.CUDA_RUNTIME_DLLS:
+            (runtime_dir / filename).write_text("binary", encoding="utf-8")
+
+        env = {"PATH": str(self.root / "existing")}
+
+        with patch.object(runtime_preflight, "_candidate_runtime_dirs", return_value=[runtime_dir]):
+            runtime_dirs = runtime_preflight.apply_cuda_runtime_to_env(env)
+
+        self.assertEqual(runtime_dirs, [runtime_dir.resolve()])
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(runtime_dir.resolve()))
 
     def test_ytdlp_download_uses_configured_ffmpeg_location(self) -> None:
         capture_dir = self.root / "capture"
