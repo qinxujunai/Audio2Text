@@ -317,6 +317,12 @@ AUDIO2TEXT_OPENAI_COMPATIBLE_MODEL=<model>
 
 ## 最小检查
 
+项目运行时体检：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.doctor
+```
+
 后端测试：
 
 ```powershell
