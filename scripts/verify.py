@@ -39,12 +39,21 @@ result = transcribe_file(media_path, output_folder=output_dir, output_stem=media
 payload = result["result"]
 if DEVICE == "cuda" and payload.get("device") != "cuda":
     raise RuntimeError(f"Expected CUDA runtime, got {payload.get('device')!r}")
+if int(payload.get("segment_count") or 0) <= 0:
+    raise RuntimeError("Transcription smoke produced no segments")
+txt_file = Path(payload.get("txt_file") or "")
+if not txt_file.exists():
+    raise FileNotFoundError(f"Transcription smoke output text file not found: {txt_file}")
+transcript_text = txt_file.read_text(encoding="utf-8", errors="ignore").strip()
+if not transcript_text:
+    raise RuntimeError(f"Transcription smoke output text is empty: {txt_file}")
 print(json.dumps({
     "success": result["success"],
     "device": payload.get("device"),
     "compute_type": payload.get("compute_type"),
     "language": payload.get("language"),
     "segment_count": payload.get("segment_count"),
+    "text_preview": transcript_text[:80],
     "output_dir": payload.get("output_dir"),
 }, ensure_ascii=False))
 """

@@ -48,6 +48,10 @@ class VerifyTestCase(unittest.TestCase):
 
         self.assertIn('DEVICE == "cuda"', verify.TRANSCRIBE_SMOKE_SNIPPET)
         self.assertIn('payload.get("device") != "cuda"', verify.TRANSCRIBE_SMOKE_SNIPPET)
+        self.assertIn('"Transcription smoke produced no segments"', verify.TRANSCRIBE_SMOKE_SNIPPET)
+        self.assertIn("txt_file.exists()", verify.TRANSCRIBE_SMOKE_SNIPPET)
+        self.assertIn("transcript_text", verify.TRANSCRIBE_SMOKE_SNIPPET)
+        self.assertIn('"text_preview"', verify.TRANSCRIBE_SMOKE_SNIPPET)
 
 
 if __name__ == "__main__":
