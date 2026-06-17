@@ -550,7 +550,7 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.route("**/v1/captures/*", flaky_capture_read)
         self.page.goto(self.base_url, wait_until="networkidle")
         self.page.locator("textarea").fill(
-            "https://www.xiaohongshu.com/discovery/item/66f61f96000000001d03f12d?source=webshare&xhsshare=pc_web"
+            "https://www.xiaohongshu.com/discovery/item/66f61f96000000001d03f12d"
         )
         self.page.locator(".hero-submit").click()
 
