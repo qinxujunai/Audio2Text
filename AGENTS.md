@@ -63,6 +63,7 @@
 - Faster-Whisper 模型默认不内置在镜像里；Docker 运行时必须挂载模型目录，或改用 `openai_compatible` 转写配置。
 - `workspace` 挂载会覆盖容器内同路径内容；如果依赖 Playwright 浏览器运行时，需要确认挂载后的 `workspace/runtime/playwright-browsers` 可用。
 - 最小验证优先级：
+  - `.\.venv\Scripts\python.exe -m scripts.verify`
   - `.\.venv\Scripts\python.exe -m scripts.doctor`
   - `.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"`
   - `cd web && npm exec tsc -- --noEmit`

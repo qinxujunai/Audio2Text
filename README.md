@@ -317,6 +317,18 @@ AUDIO2TEXT_OPENAI_COMPATIBLE_MODEL=<model>
 
 ## 最小检查
 
+日常质量门：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.verify
+```
+
+只跑后端侧质量门：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.verify --backend-only
+```
+
 项目运行时体检：
 
 ```powershell
