@@ -194,7 +194,7 @@ tests_runtime/public_preview/current_url.txt
 
 ## 配置
 
-示例配置见 [audio2text.settings.example.json](/e:/Files/Projects/Audio2Text/audio2text.settings.example.json)。
+示例配置见 [audio2text.settings.example.json](audio2text.settings.example.json)。
 
 关键项：
 - `workspace_dir`
@@ -396,10 +396,10 @@ netstat -ano | findstr ":8000"
 
 ## 文档
 
-- [AGENTS.md](/e:/Files/Projects/Audio2Text/AGENTS.md)
-- [docs/deployment.md](/e:/Files/Projects/Audio2Text/docs/deployment.md)
-- [docs/verification.md](/e:/Files/Projects/Audio2Text/docs/verification.md)
-- [docs/release-ready.md](/e:/Files/Projects/Audio2Text/docs/release-ready.md)
+- [AGENTS.md](AGENTS.md)
+- [docs/deployment.md](docs/deployment.md)
+- [docs/verification.md](docs/verification.md)
+- [docs/release-ready.md](docs/release-ready.md)
 
 ## Capture Diagnostics
 

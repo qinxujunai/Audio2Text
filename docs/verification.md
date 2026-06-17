@@ -98,9 +98,9 @@ workspace/runtime/browser-profile
 - `progress_percent`
 
 重点文件：
-- [tests/test_platform_contracts.py](/e:/Files/Projects/Audio2Text/tests/test_platform_contracts.py)
-- [tests/test_capture_api.py](/e:/Files/Projects/Audio2Text/tests/test_capture_api.py)
-- [tests/test_pipeline_and_store.py](/e:/Files/Projects/Audio2Text/tests/test_pipeline_and_store.py)
+- [tests/test_platform_contracts.py](../tests/test_platform_contracts.py)
+- [tests/test_capture_api.py](../tests/test_capture_api.py)
+- [tests/test_pipeline_and_store.py](../tests/test_pipeline_and_store.py)
 
 ## 交付行为验收
 
@@ -269,7 +269,7 @@ $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 ## Live Smoke
 
 默认样例文件：
-- [tests/live_smoke_samples.json](/e:/Files/Projects/Audio2Text/tests/live_smoke_samples.json)
+- [tests/live_smoke_samples.json](../tests/live_smoke_samples.json)
 
 运行：
 
