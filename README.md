@@ -329,6 +329,12 @@ AUDIO2TEXT_OPENAI_COMPATIBLE_MODEL=<model>
 .\.venv\Scripts\python.exe -m scripts.verify --backend-only
 ```
 
+加真实本地转写烟测：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.verify --transcribe-smoke-file E:\path\to\sample.wav
+```
+
 项目运行时体检：
 
 ```powershell

@@ -22,6 +22,32 @@ PYTHON_FILES = (
     "scripts/model_loader.py",
     "scripts/benchmark_transcription.py",
 )
+TRANSCRIBE_SMOKE_SNIPPET = r"""
+import json
+import sys
+from pathlib import Path
+
+from scripts.config import DEVICE, PROJECT_ROOT
+from scripts.run_transcribe import transcribe_file
+
+media_path = Path(sys.argv[1])
+if not media_path.exists():
+    raise FileNotFoundError(media_path)
+
+output_dir = PROJECT_ROOT / "workspace" / "temp" / "verify-transcribe-smoke"
+result = transcribe_file(media_path, output_folder=output_dir, output_stem=media_path.stem)
+payload = result["result"]
+if DEVICE == "cuda" and payload.get("device") != "cuda":
+    raise RuntimeError(f"Expected CUDA runtime, got {payload.get('device')!r}")
+print(json.dumps({
+    "success": result["success"],
+    "device": payload.get("device"),
+    "compute_type": payload.get("compute_type"),
+    "language": payload.get("language"),
+    "segment_count": payload.get("segment_count"),
+    "output_dir": payload.get("output_dir"),
+}, ensure_ascii=False))
+"""
 
 
 def _python_executable() -> str:
@@ -81,6 +107,11 @@ def main() -> int:
         action="store_true",
         help="Skip frontend typecheck/build while keeping doctor, compile, and backend tests.",
     )
+    parser.add_argument(
+        "--transcribe-smoke-file",
+        default="",
+        help="Optional local audio/video file for a real Faster-Whisper transcription smoke test.",
+    )
     args = parser.parse_args()
 
     python = _python_executable()
@@ -89,6 +120,14 @@ def main() -> int:
         ("py_compile", [python, "-m", "py_compile", *PYTHON_FILES], PROJECT_ROOT),
         ("backend tests", [python, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"], PROJECT_ROOT),
     ]
+    if args.transcribe_smoke_file.strip():
+        commands.append(
+            (
+                "transcription smoke",
+                [python, "-c", TRANSCRIBE_SMOKE_SNIPPET, args.transcribe_smoke_file.strip()],
+                PROJECT_ROOT,
+            )
+        )
     if not args.backend_only:
         npm = _resolve_command("npm")
         commands.extend(

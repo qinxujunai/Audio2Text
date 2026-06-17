@@ -26,6 +26,7 @@ class VerifyTestCase(unittest.TestCase):
         self.assertIn('"frontend type check"', verify_script)
         self.assertIn('"frontend build"', verify_script)
         self.assertIn('"--backend-only"', verify_script)
+        self.assertIn('"--transcribe-smoke-file"', verify_script)
 
     def test_verify_forces_utf8_subprocess_output(self) -> None:
         from scripts import verify
@@ -41,6 +42,12 @@ class VerifyTestCase(unittest.TestCase):
 
         self.assertIn("sys.stdout.reconfigure", verify_script)
         self.assertIn("_force_utf8_stdout()", verify_script)
+
+    def test_transcribe_smoke_checks_cuda_when_configured(self) -> None:
+        from scripts import verify
+
+        self.assertIn('DEVICE == "cuda"', verify.TRANSCRIBE_SMOKE_SNIPPET)
+        self.assertIn('payload.get("device") != "cuda"', verify.TRANSCRIBE_SMOKE_SNIPPET)
 
 
 if __name__ == "__main__":
