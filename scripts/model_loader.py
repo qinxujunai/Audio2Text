@@ -1,5 +1,6 @@
 ﻿from faster_whisper import WhisperModel
 
+from app.runtime_preflight import configure_cuda_runtime_search_path
 from scripts.config import COMPUTE_TYPE, DEVICE, MODEL_PATH
 from scripts.logger import get_logger
 
@@ -17,6 +18,11 @@ def get_model():
         raise FileNotFoundError(
             f"模型目录不存在: {MODEL_PATH}。请检查 audio2text.settings.json 或环境变量 AUDIO2TEXT_MODEL_PATH。"
         )
+
+    if DEVICE in {"cuda", "auto"}:
+        runtime_dirs = configure_cuda_runtime_search_path()
+        if runtime_dirs:
+            logger.info("CUDA 运行时搜索路径已就绪: " + "; ".join(str(path) for path in runtime_dirs))
 
     runtime_options = [(DEVICE, COMPUTE_TYPE)]
     if (DEVICE, COMPUTE_TYPE) != ("cpu", "int8"):

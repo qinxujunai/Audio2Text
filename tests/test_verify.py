@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,14 @@ class VerifyTestCase(unittest.TestCase):
         self.assertEqual(env["PYTHONUTF8"], "1")
         self.assertEqual(env["PYTHONIOENCODING"], "utf-8")
         self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+
+    def test_verify_injects_cuda_runtime_into_subprocess_env(self) -> None:
+        from scripts import verify
+
+        with patch.object(verify, "apply_cuda_runtime_to_env") as apply_cuda:
+            verify._quality_gate_env()
+
+        apply_cuda.assert_called_once()
 
     def test_verify_reconfigures_parent_stdout(self) -> None:
         verify_script = (ROOT / "scripts" / "verify.py").read_text(encoding="utf-8")

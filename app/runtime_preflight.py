@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import shutil
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +25,7 @@ from scripts.logger import get_logger
 logger = get_logger("runtime_preflight", "runtime_preflight.log")
 
 CUDA_RUNTIME_DLLS = ("cublas64_12.dll", "cudnn64_9.dll")
+_DLL_DIRECTORY_HANDLES: list[object] = []
 
 
 @dataclass(slots=True)
@@ -150,6 +151,53 @@ def _find_runtime_file(filename: str) -> Path | None:
             return path
     system_match = shutil.which(filename)
     return Path(system_match) if system_match else None
+
+
+def _cuda_runtime_dirs() -> list[Path]:
+    runtime_dirs: list[Path] = []
+    seen: set[str] = set()
+    for folder in _candidate_runtime_dirs():
+        try:
+            folder = folder.resolve()
+        except OSError:
+            continue
+        if not folder.is_dir():
+            continue
+        if not any((folder / filename).exists() for filename in CUDA_RUNTIME_DLLS):
+            continue
+        key = str(folder).lower()
+        if key in seen:
+            continue
+        runtime_dirs.append(folder)
+        seen.add(key)
+    return runtime_dirs
+
+
+def apply_cuda_runtime_to_env(env: dict[str, str]) -> list[Path]:
+    runtime_dirs = _cuda_runtime_dirs()
+    if not runtime_dirs:
+        return []
+
+    existing_path = env.get("PATH", "")
+    existing_parts = [item for item in existing_path.split(os.pathsep) if item]
+    existing_keys = {item.lower() for item in existing_parts}
+    prepend_parts = [str(path) for path in runtime_dirs if str(path).lower() not in existing_keys]
+    if prepend_parts:
+        env["PATH"] = os.pathsep.join([*prepend_parts, *existing_parts])
+    return runtime_dirs
+
+
+def configure_cuda_runtime_search_path() -> list[Path]:
+    runtime_dirs = apply_cuda_runtime_to_env(os.environ)
+    if not runtime_dirs or not sys.platform.startswith("win") or not hasattr(os, "add_dll_directory"):
+        return runtime_dirs
+
+    for folder in runtime_dirs:
+        try:
+            _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(str(folder)))
+        except OSError:
+            logger.warning(f"CUDA 运行时目录无法加入 DLL 搜索路径: {folder}")
+    return runtime_dirs
 
 
 def _check_cuda_runtime(result: PreflightResult) -> None:
