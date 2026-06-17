@@ -64,6 +64,7 @@
 - `workspace` 挂载会覆盖容器内同路径内容；如果依赖 Playwright 浏览器运行时，需要确认挂载后的 `workspace/runtime/playwright-browsers` 可用。
 - 最小验证优先级：
   - `.\.venv\Scripts\python.exe -m scripts.verify`
+  - 本机 CUDA 改动后加跑 `.\.venv\Scripts\python.exe -m scripts.verify --backend-only --transcribe-smoke-file <sample.wav>`
   - `.\.venv\Scripts\python.exe -m scripts.doctor`
   - `.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"`
   - `cd web && npm exec tsc -- --noEmit`
