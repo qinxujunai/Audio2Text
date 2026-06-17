@@ -165,6 +165,43 @@ class RuntimePreflightTestCase(unittest.TestCase):
         self.assertEqual(result.fatal_errors, [])
         self.assertTrue(any("高波动平台将优先只走公开链路" in item for item in result.warnings))
 
+    def test_explicit_cuda_requires_runtime_dlls_on_windows(self) -> None:
+        model_dir = self.root / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        ffmpeg_path = self.root / "ffmpeg" / "ffmpeg.exe"
+        ffmpeg_path.parent.mkdir(parents=True, exist_ok=True)
+        ffmpeg_path.write_text("binary", encoding="utf-8")
+        browsers_dir = self.root / "playwright"
+        (browsers_dir / "chromium-1234").mkdir(parents=True, exist_ok=True)
+        browser_profile_dir = self.root / "browser-profile"
+        (browser_profile_dir / "Default").mkdir(parents=True, exist_ok=True)
+        (browser_profile_dir / "Default" / "Preferences").write_text("{}", encoding="utf-8")
+
+        with patch.object(runtime_preflight, "TRANSCRIPTION_PROVIDER", "local_faster_whisper"), patch.object(
+            runtime_preflight, "DEVICE", "cuda"
+        ), patch.object(runtime_preflight, "MODEL_PATH", model_dir), patch.object(
+            runtime_preflight, "MODEL_PATH_IS_LEGACY_FALLBACK", False
+        ), patch.object(runtime_preflight, "FFMPEG_PATH", ffmpeg_path), patch.object(
+            runtime_preflight, "FFMPEG_PATH_SOURCE", "workspace_default"
+        ), patch.object(runtime_preflight, "PLAYWRIGHT_BROWSERS_DIR", browsers_dir), patch.object(
+            runtime_preflight, "BROWSER_PROFILE_DIR", browser_profile_dir
+        ), patch.object(runtime_preflight, "_find_runtime_file", return_value=None), patch.object(
+            runtime_preflight.sys, "platform", "win32"
+        ):
+            result = runtime_preflight.run_runtime_preflight()
+
+        self.assertTrue(any("CUDA 转写" in item and "cublas64_12.dll" in item for item in result.fatal_errors))
+
+    def test_auto_device_does_not_require_cuda_runtime_dlls(self) -> None:
+        result = runtime_preflight.PreflightResult()
+
+        with patch.object(runtime_preflight, "DEVICE", "auto"), patch.object(
+            runtime_preflight, "_find_runtime_file", return_value=None
+        ), patch.object(runtime_preflight.sys, "platform", "win32"):
+            runtime_preflight._check_cuda_runtime(result)
+
+        self.assertEqual(result.fatal_errors, [])
+
     def test_ytdlp_download_uses_configured_ffmpeg_location(self) -> None:
         capture_dir = self.root / "capture"
         capture_dir.mkdir(parents=True, exist_ok=True)
