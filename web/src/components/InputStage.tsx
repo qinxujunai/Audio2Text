@@ -55,7 +55,10 @@ function contentTypeLabel(type?: string | null) {
 function isLikelyUrl(value?: string | null) {
   if (!value) return false;
   const text = value.trim();
-  return /^https?:\/\//i.test(text) || /^(xhslink\.com|b23\.tv|v\.douyin\.com|youtu\.be)\//i.test(text);
+  return (
+    /^https?:\/\//i.test(text) ||
+    /^(xhslink\.com|b23\.tv|v\.douyin\.com|youtu\.be)\//i.test(text)
+  );
 }
 
 function sanitizePreview(value?: string | null) {
@@ -76,8 +79,17 @@ function friendlyFallbackTitle(item: CaptureListItem) {
 }
 
 function displayTitle(item: CaptureListItem) {
-  const preferred = [item.title, item.preview_text].map((value) => sanitizePreview(value)).find(Boolean);
+  const preferred = [item.title, item.preview_text]
+    .map((value) => sanitizePreview(value))
+    .find(Boolean);
   return preferred || friendlyFallbackTitle(item);
+}
+
+function displayPreview(item: CaptureListItem) {
+  const title = sanitizePreview(item.title);
+  const preview = sanitizePreview(item.preview_text);
+  if (!preview || preview === title) return "";
+  return preview;
 }
 
 function clampText(value: string, limit = 34) {
@@ -117,14 +129,18 @@ export function InputStage({
 }: InputStageProps) {
   const [showAllHistory, setShowAllHistory] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const extensionLabel = useMemo(() => extensionSummary(supportedExtensions), [supportedExtensions]);
+  const extensionLabel = useMemo(
+    () => extensionSummary(supportedExtensions),
+    [supportedExtensions],
+  );
 
   useEffect(() => {
     setShowAllHistory(false);
   }, [captures.length]);
 
   const visibleCaptures = useMemo(
-    () => (showAllHistory ? captures : captures.slice(0, COLLAPSED_HISTORY_COUNT)),
+    () =>
+      showAllHistory ? captures : captures.slice(0, COLLAPSED_HISTORY_COUNT),
     [captures, showAllHistory],
   );
 
@@ -178,7 +194,12 @@ export function InputStage({
                 }
               }}
               onKeyDown={(event) => {
-                if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && input.trim() && !submitting) {
+                if (
+                  (event.metaKey || event.ctrlKey) &&
+                  event.key === "Enter" &&
+                  input.trim() &&
+                  !submitting
+                ) {
                   event.preventDefault();
                   void onSubmitText();
                   return;
@@ -210,12 +231,19 @@ export function InputStage({
                     type="file"
                     hidden
                     accept=".mp3,.m4a,.wav,.flac,.mp4,.mov,.mkv"
-                    onChange={(event) => onSelectFile(event.target.files?.[0] || null)}
+                    onChange={(event) =>
+                      onSelectFile(event.target.files?.[0] || null)
+                    }
                   />
                 </label>
               </div>
 
-              <button className="hero-submit" disabled={submitting || !input.trim()} type="submit" aria-label="开始处理">
+              <button
+                className="hero-submit"
+                disabled={submitting || !input.trim()}
+                type="submit"
+                aria-label="开始处理"
+              >
                 <ArrowRight size={18} />
               </button>
             </div>
@@ -232,14 +260,28 @@ export function InputStage({
           <div className="selected-file-card">
             <div>
               <strong title={selectedFile.name}>{selectedFile.name}</strong>
-              <span>{extensionLabel ? `${fileSizeLabel(selectedFile.size)} · ${extensionLabel}` : fileSizeLabel(selectedFile.size)}</span>
+              <span>
+                {extensionLabel
+                  ? `${fileSizeLabel(selectedFile.size)} · ${extensionLabel}`
+                  : fileSizeLabel(selectedFile.size)}
+              </span>
               <small>{`${maxUploadSizeMb} MB 以内可直接处理，音视频建议控制在 ${freeDurationMinutes} 分钟内。`}</small>
             </div>
             <div className="selected-file-actions">
-              <button className="inline-action ghost" onClick={() => onSelectFile(null)} disabled={submitting} type="button">
+              <button
+                className="inline-action ghost"
+                onClick={() => onSelectFile(null)}
+                disabled={submitting}
+                type="button"
+              >
                 移除文件
               </button>
-              <button className="inline-action" onClick={onSubmitFile} disabled={submitting} type="button">
+              <button
+                className="inline-action"
+                onClick={onSubmitFile}
+                disabled={submitting}
+                type="button"
+              >
                 处理这个文件
               </button>
             </div>
@@ -255,53 +297,86 @@ export function InputStage({
 
             <div className="recent-inline-actions">
               {captures.length > COLLAPSED_HISTORY_COUNT ? (
-                <button className="inline-action ghost" onClick={() => setShowAllHistory((value) => !value)} type="button">
+                <button
+                  className="inline-action ghost"
+                  onClick={() => setShowAllHistory((value) => !value)}
+                  type="button"
+                >
                   {showAllHistory ? "收起" : "查看更多"}
                 </button>
               ) : null}
 
-              <button className="inline-action ghost" onClick={onClearHistory} disabled={!captures.length || submitting} type="button">
+              <button
+                className="inline-action ghost"
+                onClick={onClearHistory}
+                disabled={!captures.length || submitting}
+                type="button"
+              >
                 清空记录
               </button>
             </div>
           </div>
 
           {visibleCaptures.length ? (
-            <div className={`recent-inline-list ${showAllHistory ? "is-expanded" : "is-collapsed"}`}>
-              {visibleCaptures.map((item) => (
-                <div
-                  key={item.id}
-                  className={item.id === currentCaptureId ? "recent-inline-card-shell is-active" : "recent-inline-card-shell"}
-                >
-                  <button
-                    className={item.id === currentCaptureId ? "recent-inline-card is-active" : "recent-inline-card"}
-                    onClick={() => onOpenCapture(item.id)}
-                    type="button"
+            <div
+              className={`recent-inline-list ${showAllHistory ? "is-expanded" : "is-collapsed"}`}
+            >
+              {visibleCaptures.map((item) => {
+                const title = displayTitle(item);
+                const preview = displayPreview(item);
+                return (
+                  <div
+                    key={item.id}
+                    className={
+                      item.id === currentCaptureId
+                        ? "recent-inline-card-shell is-active"
+                        : "recent-inline-card-shell"
+                    }
                   >
-                    <div className="recent-inline-meta">
-                      <History size={13} />
-                      <span>{platformLabel(item.source_platform)}</span>
-                    </div>
-                    <strong>{clampText(displayTitle(item), showAllHistory ? 44 : 34)}</strong>
-                  </button>
+                    <button
+                      className={
+                        item.id === currentCaptureId
+                          ? "recent-inline-card is-active"
+                          : "recent-inline-card"
+                      }
+                      onClick={() => onOpenCapture(item.id)}
+                      type="button"
+                    >
+                      <div className="recent-inline-meta">
+                        <History size={13} />
+                        <span>{platformLabel(item.source_platform)}</span>
+                      </div>
+                      <strong>{clampText(title, showAllHistory ? 44 : 34)}</strong>
+                      {preview ? (
+                        <p className="recent-inline-preview">
+                          {clampText(preview, showAllHistory ? 88 : 72)}
+                        </p>
+                      ) : null}
+                      <span className="recent-inline-foot">
+                        {contentTypeLabel(item.content_type)}
+                      </span>
+                    </button>
 
-                  <button
-                    className="recent-inline-delete"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onDeleteCapture(item);
-                    }}
-                    type="button"
-                    aria-label={`删除${displayTitle(item)}`}
-                    title="删除这条记录"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
+                    <button
+                      className="recent-inline-delete"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteCapture(item);
+                      }}
+                      type="button"
+                      aria-label={`删除${title}`}
+                      title="删除这条记录"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           ) : (
-            <div className="recent-inline-empty">还没有历史记录。先贴一个链接或上传文件试试。</div>
+            <div className="recent-inline-empty">
+              还没有历史记录。先贴一个链接或上传文件试试。
+            </div>
           )}
         </div>
       </div>

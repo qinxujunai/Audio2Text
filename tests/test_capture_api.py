@@ -53,6 +53,83 @@ class CaptureApiTestCase(unittest.TestCase):
                     child.rmdir()
             self.root.rmdir()
 
+    def test_desktop_runtime_requires_loopback_token_and_known_origin(self) -> None:
+        with (
+            patch.object(capture_main, "RUNTIME_TARGET", "windows_desktop"),
+            patch.object(capture_main, "DESKTOP_TOKEN", "desktop-test-token"),
+            patch.object(
+                capture_main,
+                "DESKTOP_ALLOWED_ORIGINS",
+                capture_main.DESKTOP_ALLOWED_ORIGINS | {"http://localhost:5173"},
+            ),
+        ):
+            unauthorized = self.client.get("/health")
+            wrong_origin = self.client.get(
+                "/health",
+                headers={
+                    "Origin": "https://example.com",
+                    "X-Wanxiang-Desktop-Token": "desktop-test-token",
+                },
+            )
+            authorized = self.client.get(
+                "/health",
+                headers={
+                    "Origin": "http://tauri.localhost",
+                    "X-Wanxiang-Desktop-Token": "desktop-test-token",
+                },
+            )
+            event_source_style = self.client.get(
+                "/health?desktop_token=desktop-test-token",
+                headers={"Origin": "http://tauri.localhost"},
+            )
+            preflight = self.client.options(
+                "/config",
+                headers={
+                    "Origin": "http://localhost:5173",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "x-wanxiang-desktop-token",
+                },
+            )
+            hostile_preflight = self.client.options(
+                "/config",
+                headers={
+                    "Origin": "https://example.com",
+                    "Access-Control-Request-Method": "GET",
+                    "Access-Control-Request-Headers": "x-wanxiang-desktop-token",
+                },
+            )
+
+        self.assertEqual(unauthorized.status_code, 401)
+        self.assertEqual(wrong_origin.status_code, 403)
+        self.assertEqual(authorized.status_code, 200)
+        self.assertEqual(event_source_style.status_code, 200)
+        self.assertEqual(preflight.status_code, 200)
+        self.assertEqual(
+            preflight.headers.get("access-control-allow-origin"),
+            "http://localhost:5173",
+        )
+        self.assertEqual(hostile_preflight.status_code, 403)
+
+    def test_runtime_pack_api_is_desktop_only_and_sanitized(self) -> None:
+        web_response = self.client.get("/v1/runtime/packs")
+        with (
+            patch.object(capture_main, "RUNTIME_TARGET", "windows_desktop"),
+            patch.object(capture_main, "DESKTOP_TOKEN", "desktop-test-token"),
+            patch.object(
+                capture_main.runtime_pack_manager,
+                "status",
+                return_value=[{"id": "asr", "version": "1", "installed": False}],
+            ),
+        ):
+            desktop_response = self.client.get(
+                "/v1/runtime/packs",
+                headers={"X-Wanxiang-Desktop-Token": "desktop-test-token"},
+            )
+
+        self.assertEqual(web_response.status_code, 404)
+        self.assertEqual(desktop_response.status_code, 200)
+        self.assertEqual(desktop_response.json()["packs"][0]["id"], "asr")
+
     def test_config_omits_runtime_details(self) -> None:
         response = self.client.get("/config")
 
@@ -65,6 +142,26 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertIn("public_preview_mode", payload)
         self.assertIn("transcription_available", payload)
         self.assertIn("transcription_provider", payload)
+        self.assertIn("runtime_target", payload)
+        self.assertIn("capabilities", payload)
+        self.assertNotIn("commit", payload)
+
+    def test_health_exposes_consistent_sanitized_runtime_identity(self) -> None:
+        with patch.object(capture_main, "APP_VERSION", "2.0.0-test"), patch.object(
+            capture_main, "APP_COMMIT", "abc1234"
+        ), patch.object(capture_main, "DEPLOYMENT_MODE", "cloud_preview"), patch.object(
+            capture_main, "RUNTIME_TARGET", "cloud_demo"
+        ):
+            response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["deployment_mode"], "cloud_preview")
+        self.assertEqual(payload["runtime_target"], "cloud_demo")
+        self.assertEqual(payload["version"], "2.0.0-test")
+        self.assertEqual(payload["commit"], "abc1234")
+        self.assertNotIn("run_mode", payload)
+        self.assertIsInstance(payload["components"], dict)
 
     def test_windows_connection_reset_filter_is_narrow(self) -> None:
         with patch.object(capture_main.sys, "platform", "win32"):
@@ -132,6 +229,9 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertIn("progress_percent", payload["capture"])
         self.assertIn("text_source", payload["quality"])
         self.assertEqual(payload["artifacts"][0]["download_url"], f"/v1/captures/{capture.id}/artifacts/txt")
+        self.assertEqual(payload["capture"]["result_state"], "complete")
+        self.assertEqual(payload["artifacts"][0]["status"], "ready")
+        self.assertFalse(payload["artifacts"][0]["optional"])
 
     def test_capture_envelope_exposes_source_images_and_asset_pending_flag(self) -> None:
         capture = capture_main.repository.create(
@@ -159,11 +259,62 @@ class CaptureApiTestCase(unittest.TestCase):
         payload = self.client.get(f"/v1/captures/{capture.id}").json()
 
         self.assertTrue(payload["capture"]["asset_preparation_pending"])
+        self.assertEqual(payload["capture"]["result_state"], "text_ready")
         self.assertEqual(len(payload["source"]["images"]), 2)
         self.assertEqual(payload["source"]["images"][0]["index"], 1)
         self.assertEqual(payload["source"]["images"][0]["image_url"], "https://example.com/image-1.jpg")
         self.assertEqual(payload["source"]["images"][0]["live_photo_video_url"], "https://example.com/live-1.mp4")
         self.assertIsNone(payload["source"]["images"][1]["live_photo_video_url"])
+
+    def test_event_names_expose_text_artifact_and_runtime_transitions(self) -> None:
+        capture = capture_main.repository.create(
+            input_type="url",
+            source_platform="bilibili",
+            content_type="video",
+            url="https://www.bilibili.com/video/BV1xx",
+        )
+        result = ResultDocumentModel(
+            primary_text="正文已经可以阅读",
+            primary_result_type="transcript",
+            artifacts=[
+                ArtifactModel(
+                    type="source_audio",
+                    label="原音频",
+                    path=str(self.root / "audio.m4a"),
+                    download_url=f"/v1/captures/{capture.id}/artifacts/source_audio",
+                    status="ready",
+                )
+            ],
+        )
+        capture = capture_main.repository.update(
+            capture.id,
+            status="done",
+            result_state="text_ready",
+            asset_preparation_pending=True,
+            result=result,
+        )
+        envelope = capture_main._to_capture_envelope(capture)
+
+        events, artifact_types = capture_main._transition_event_names(
+            capture,
+            envelope,
+            previous_result_state="processing",
+            ready_artifact_types=set(),
+        )
+
+        self.assertEqual(events, ["text_ready", "artifact_ready"])
+        self.assertEqual(artifact_types, {"source_audio"})
+
+        capture.processing.failure_reason_code = "runtime_model_required"
+        capture.status = "failed"
+        failed_envelope = capture_main._to_capture_envelope(capture)
+        events, _ = capture_main._transition_event_names(
+            capture,
+            failed_envelope,
+            previous_result_state="text_ready",
+            ready_artifact_types=artifact_types,
+        )
+        self.assertEqual(events, ["runtime_required"])
 
     def test_file_upload_uses_capture_workspace_storage(self) -> None:
         response = self.client.post(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import shutil
 import sys
@@ -16,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from app.store_fs import CaptureStoreUnavailableError
 from app.pipeline import enqueue_capture, ensure_worker_started, recover_pending_captures
 from app.resolver import infer_source_item_id, resolve_url
+from app.runtime_packs import RuntimePackError, RuntimePackManager
 from app.schemas import (
     ArtifactPayloadModel,
     CaptureCreateUrlRequest,
@@ -35,9 +37,12 @@ from app.schemas import (
 from app.settings import (
     ADMIN_IPS,
     ALLOWED_ORIGINS,
+    APP_COMMIT,
     APP_DISPLAY_NAME,
+    APP_VERSION,
     CAPTURE_HISTORY_LIMIT,
     DAILY_CAPTURE_LIMIT,
+    DESKTOP_TOKEN,
     FREE_DURATION_MINUTES,
     FRONTEND_DIR,
     MAX_UPLOAD_SIZE_MB,
@@ -47,8 +52,13 @@ from app.settings import (
     PRODUCT_SLOGAN,
     PRODUCT_SUMMARY,
     DEPLOYMENT_MODE,
+    FFMPEG_PATH,
+    MODEL_PATH,
+    PLAYWRIGHT_BROWSERS_DIR,
     PUBLIC_PREVIEW_MODE,
-    RELAY_RUN_MODE,
+    RUNTIME_DIR,
+    RUNTIME_PACK_MANIFEST,
+    RUNTIME_TARGET,
     SUPPORTED_EXTENSIONS,
     TEMP_DIR,
     TRANSCRIPTION_AVAILABLE,
@@ -61,6 +71,7 @@ from scripts.logger import get_logger
 
 logger = get_logger("capture_api", "capture_api.log")
 repository = get_capture_repository()
+runtime_pack_manager = RuntimePackManager(RUNTIME_PACK_MANIFEST, RUNTIME_DIR)
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 app = FastAPI(title=APP_DISPLAY_NAME)
@@ -72,6 +83,39 @@ app.add_middleware(
 )
 
 PUBLIC_INTERNAL_ERROR_MESSAGE = "服务暂时繁忙，请稍后重试。"
+DESKTOP_ALLOWED_ORIGINS = {
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "tauri://localhost",
+}
+
+
+@app.middleware("http")
+async def enforce_desktop_loopback_boundary(request: Request, call_next):
+    if RUNTIME_TARGET != "windows_desktop" or not DESKTOP_TOKEN:
+        return await call_next(request)
+
+    client_host = request.client.host if request.client else ""
+    if client_host not in {"127.0.0.1", "::1", "testclient"}:
+        return JSONResponse(status_code=403, content={"detail": "本地服务仅允许本机访问。"})
+
+    origin = request.headers.get("origin", "")
+    if origin and origin not in DESKTOP_ALLOWED_ORIGINS:
+        return JSONResponse(status_code=403, content={"detail": "请求来源未获授权。"})
+
+    # Browsers send the CORS preflight before they are allowed to attach the
+    # desktop token header. The origin and loopback checks still apply here;
+    # every actual API request remains token-protected below.
+    if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
+        return await call_next(request)
+
+    supplied_token = request.headers.get("x-wanxiang-desktop-token", "")
+    if not supplied_token:
+        supplied_token = request.query_params.get("desktop_token", "")
+    if not hmac.compare_digest(supplied_token, DESKTOP_TOKEN):
+        return JSONResponse(status_code=401, content={"detail": "本地服务授权已失效，请重新打开应用。"})
+
+    return await call_next(request)
 
 
 def _is_windows_connection_reset_noise(context: dict[str, Any]) -> bool:
@@ -196,7 +240,23 @@ def _public_artifact(artifact) -> ArtifactPayloadModel:
         download_url=artifact.download_url,
         mime_type=artifact.mime_type,
         size_bytes=artifact.size_bytes,
+        status=getattr(artifact, "status", "ready"),
+        optional=bool(getattr(artifact, "optional", False)),
     )
+
+
+def _result_state(capture, result) -> str:
+    if capture.status == "failed":
+        return "failed"
+    has_text = bool(result and (result.views.primary or result.primary_text).strip())
+    declared_state = str(getattr(capture, "result_state", "processing") or "processing")
+    if declared_state == "text_ready" and has_text:
+        return "text_ready"
+    if capture.status == "done" and bool(getattr(capture, "asset_preparation_pending", False)) and has_text:
+        return "text_ready"
+    if capture.status == "done":
+        return "complete"
+    return "processing"
 
 
 def _public_source_images(source) -> list[CaptureSourceImagePayloadModel]:
@@ -241,6 +301,7 @@ def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
         capture=CaptureStatePayloadModel(
             id=capture.id,
             status=capture.status,
+            result_state=_result_state(capture, result),
             input_kind=capture.input_type,
             current_stage=capture.processing.current_stage,
             progress_percent=capture.processing.progress_percent,
@@ -294,6 +355,36 @@ def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
     )
 
 
+def _transition_event_names(
+    capture,
+    envelope: CaptureEnvelopeModel,
+    *,
+    previous_result_state: str | None,
+    ready_artifact_types: set[str],
+) -> tuple[list[str], set[str]]:
+    events: list[str] = []
+    current_state = envelope.capture.result_state
+    if (
+        current_state in {"text_ready", "complete"}
+        and previous_result_state not in {"text_ready", "complete"}
+        and bool(envelope.result.primary_text.strip())
+    ):
+        events.append("text_ready")
+
+    current_ready = {
+        artifact.type
+        for artifact in envelope.artifacts
+        if artifact.status == "ready"
+    }
+    if current_ready - ready_artifact_types:
+        events.append("artifact_ready")
+
+    reason_code = str(getattr(capture.processing, "failure_reason_code", "") or "")
+    if reason_code.startswith("runtime_"):
+        events.append("runtime_required")
+    return events, current_ready
+
+
 def _public_capture(capture) -> CaptureListItemModel:
     result = _display_result(capture, _normalized_result(capture.result))
     platform = getattr(capture, "source_platform", "") or getattr(getattr(capture, "source", None), "platform", "")
@@ -345,6 +436,27 @@ def _config_payload() -> dict[str, Any]:
         "public_preview_mode": PUBLIC_PREVIEW_MODE,
         "transcription_available": TRANSCRIPTION_AVAILABLE,
         "transcription_provider": TRANSCRIPTION_PROVIDER,
+        "runtime_target": RUNTIME_TARGET,
+        "capabilities": {
+            "url_capture": True,
+            "file_upload": True,
+            "source_audio": True,
+            "desktop_runtime_management": RUNTIME_TARGET == "windows_desktop",
+            "cloud_demo": DEPLOYMENT_MODE == "cloud_preview",
+        },
+    }
+
+
+def _component_status() -> dict[str, str]:
+    local_runtime = RUNTIME_TARGET in {"local_web", "windows_desktop"}
+    return {
+        "api": "ready",
+        "frontend": "ready" if _dist_available() else "missing",
+        "storage": "ready" if repository is not None else "unavailable",
+        "transcription": "ready" if TRANSCRIPTION_AVAILABLE else "unavailable",
+        "ffmpeg": "ready" if FFMPEG_PATH.exists() else ("missing" if local_runtime else "not_required"),
+        "browser": "ready" if PLAYWRIGHT_BROWSERS_DIR.exists() else ("missing" if local_runtime else "not_required"),
+        "model": "ready" if MODEL_PATH.exists() else ("missing" if local_runtime else "not_required"),
     }
 
 
@@ -563,13 +675,37 @@ async def health() -> dict[str, Any]:
         "status": "ok",
         "product_name": PRODUCT_NAME,
         "feature_name": PRODUCT_FEATURE_NAME,
-        "run_mode": RELAY_RUN_MODE,
+        "deployment_mode": DEPLOYMENT_MODE,
+        "runtime_target": RUNTIME_TARGET,
+        "version": APP_VERSION,
+        "commit": APP_COMMIT,
+        "components": _component_status(),
     }
 
 
 @app.get("/config")
 async def config() -> dict[str, Any]:
     return _config_payload()
+
+
+@app.get("/v1/runtime/packs")
+async def list_runtime_packs() -> dict[str, Any]:
+    if RUNTIME_TARGET != "windows_desktop":
+        raise HTTPException(status_code=404, detail="该功能仅在 Windows 应用中可用。")
+    try:
+        return {"packs": runtime_pack_manager.status()}
+    except RuntimePackError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/v1/runtime/packs/{pack_id}/install")
+async def install_runtime_pack(pack_id: str) -> dict[str, Any]:
+    if RUNTIME_TARGET != "windows_desktop":
+        raise HTTPException(status_code=404, detail="该功能仅在 Windows 应用中可用。")
+    try:
+        return await asyncio.to_thread(runtime_pack_manager.install, pack_id)
+    except RuntimePackError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/v1/captures", response_model=CaptureListResponse)
@@ -618,6 +754,8 @@ async def stream_v1_capture_events(capture_id: str) -> StreamingResponse:
 
     async def event_stream():
         last_version = None
+        previous_result_state = None
+        ready_artifact_types: set[str] = set()
         while True:
             capture = repository.get(capture_id)
             if capture is None:
@@ -630,9 +768,22 @@ async def stream_v1_capture_events(capture_id: str) -> StreamingResponse:
             envelope = _to_capture_envelope(capture)
             version = envelope.capture.updated_at
             if version != last_version:
+                transition_events, ready_artifact_types = _transition_event_names(
+                    capture,
+                    envelope,
+                    previous_result_state=previous_result_state,
+                    ready_artifact_types=ready_artifact_types,
+                )
+                for event_name in transition_events:
+                    transition_payload = CaptureEventEnvelopeModel(
+                        event=event_name,
+                        payload=envelope,
+                    ).model_dump(mode="json")
+                    yield f"event: {event_name}\ndata: {json.dumps(transition_payload, ensure_ascii=False)}\n\n"
                 payload = CaptureEventEnvelopeModel(event="capture.updated", payload=envelope).model_dump(mode="json")
                 yield f"event: capture.updated\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 last_version = version
+                previous_result_state = envelope.capture.result_state
 
             if capture.status == "failed" or (capture.status == "done" and not capture.asset_preparation_pending):
                 break

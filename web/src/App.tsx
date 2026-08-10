@@ -10,13 +10,17 @@ import {
   getCapture,
   getCaptureWithRetry,
   getConfig,
+  installRuntimePack,
   listCaptures,
+  listRuntimePacks,
+  restartDesktopRuntime,
 } from "./api";
 import { DeliverableStage } from "./components/DeliverableStage";
 import { Header } from "./components/Header";
 import { InputStage } from "./components/InputStage";
 import { ProcessingStage } from "./components/ProcessingStage";
-import type { CaptureEnvelope, CaptureListItem, ConfigResponse } from "./types";
+import { RuntimeSetup } from "./components/RuntimeSetup";
+import type { CaptureEnvelope, CaptureListItem, ConfigResponse, RuntimePack } from "./types";
 
 type AppPhase = "idle" | "processing" | "done" | "failed";
 type PendingRemoval = {
@@ -52,14 +56,21 @@ function stageLabel(stage?: string | null) {
 
 function processingDescription(capture: CaptureEnvelope | null) {
   const stage = capture?.capture.current_stage || capture?.capture.status || "";
-  if (stage === "resolve") return "\u6B63\u5728\u8BC6\u522B\u6765\u6E90\u548C\u5185\u5BB9\u7C7B\u578B\u3002";
-  if (stage === "extract") return "\u6B63\u5728\u63D0\u53D6\u53EF\u4EA4\u4ED8\u7684\u6B63\u6587\u3001\u5B57\u5E55\u3001\u5A92\u4F53\u6216\u56FE\u7247\u3002";
-  if (stage === "transcribe") return "\u6B63\u5728\u8F6C\u5199\u97F3\u9891\u5185\u5BB9\uFF0C\u8BF7\u4FDD\u6301\u5F53\u524D\u9875\u9762\u3002";
-  if (stage === "compose") return "\u6B63\u5728\u6574\u7406\u6700\u7EC8\u7ED3\u679C\u3002";
+  if (stage === "resolve")
+    return "\u6B63\u5728\u8BC6\u522B\u6765\u6E90\u548C\u5185\u5BB9\u7C7B\u578B\u3002";
+  if (stage === "extract")
+    return "\u6B63\u5728\u63D0\u53D6\u53EF\u4EA4\u4ED8\u7684\u6B63\u6587\u3001\u5B57\u5E55\u3001\u5A92\u4F53\u6216\u56FE\u7247\u3002";
+  if (stage === "transcribe")
+    return "\u6B63\u5728\u8F6C\u5199\u97F3\u9891\u5185\u5BB9\uFF0C\u8BF7\u4FDD\u6301\u5F53\u524D\u9875\u9762\u3002";
+  if (stage === "compose")
+    return "\u6B63\u5728\u6574\u7406\u6700\u7EC8\u7ED3\u679C\u3002";
   return "\u8BF7\u4FDD\u6301\u5F53\u524D\u9875\u9762\uFF0C\u6211\u4EEC\u4F1A\u81EA\u52A8\u5B8C\u6210\u6574\u7406\u3002";
 }
 
-function errorMessageForCapture(capture: CaptureEnvelope | null, workspaceError: string | null) {
+function errorMessageForCapture(
+  capture: CaptureEnvelope | null,
+  workspaceError: string | null,
+) {
   if (workspaceError) return workspaceError;
 
   const backendMessage = capture?.capture.error_message?.trim() || "";
@@ -89,7 +100,9 @@ function errorMessageForCapture(capture: CaptureEnvelope | null, workspaceError:
 export default function App() {
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [captures, setCaptures] = useState<CaptureListItem[]>([]);
-  const [currentCapture, setCurrentCapture] = useState<CaptureEnvelope | null>(null);
+  const [currentCapture, setCurrentCapture] = useState<CaptureEnvelope | null>(
+    null,
+  );
   const [input, setInput] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -98,8 +111,12 @@ export default function App() {
   const [loadingDeepLink, setLoadingDeepLink] = useState(false);
   const [toast, setToast] = useState("");
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
+  const [runtimePacks, setRuntimePacks] = useState<RuntimePack[]>([]);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeError, setRuntimeError] = useState("");
   const [pendingRemovals, setPendingRemovals] = useState<PendingRemoval[]>([]);
-  const [pendingHistoryClear, setPendingHistoryClear] = useState<PendingHistoryClear | null>(null);
+  const [pendingHistoryClear, setPendingHistoryClear] =
+    useState<PendingHistoryClear | null>(null);
   const initialPathRef = useRef(window.location.pathname);
   const pendingRemovalTimersRef = useRef<Record<string, number>>({});
   const pendingHistoryClearTimerRef = useRef<number | null>(null);
@@ -108,7 +125,8 @@ export default function App() {
     if (workspaceError) return "failed";
     if (submitting && !currentCapture) return "processing";
     if (!currentCapture) return "idle";
-    if (["queued", "processing"].includes(currentCapture.capture.status)) return "processing";
+    if (["queued", "processing"].includes(currentCapture.capture.status))
+      return "processing";
     if (currentCapture.capture.status === "failed") return "failed";
     if (currentCapture.capture.status === "done") return "done";
     return "idle";
@@ -124,13 +142,31 @@ export default function App() {
   useEffect(() => {
     const match = initialPathRef.current.match(/^\/c\/([^/]+)$/);
     const bootstrap = async () => {
-      // Load config and history in background \u2014 don't block the UI
+      const configRequest = getConfig();
+      const historyRequest = listCaptures();
+
       try {
-        const [runtimeConfig, history] = await Promise.all([getConfig(), listCaptures()]);
+        const runtimeConfig = await configRequest;
         setConfig(runtimeConfig);
+        if (runtimeConfig.runtime_target === "windows_desktop") {
+          try {
+            const runtime = await listRuntimePacks();
+            setRuntimePacks(
+              runtime.packs.filter((item) => item.required && !item.installed),
+            );
+          } catch {
+            setRuntimeError("本地识别组件暂时无法读取，请重新打开应用后再试。");
+          }
+        }
+      } catch {
+        setWorkspaceError("本地处理服务没有准备好，请重新打开应用后再试。");
+      }
+
+      try {
+        const history = await historyRequest;
         setCaptures(history.items || []);
       } catch {
-        // Config/history load failed \u2014 UI still works with defaults
+        // History is optional during startup; capture submission remains available.
       }
 
       if (match?.[1]) {
@@ -145,6 +181,21 @@ export default function App() {
 
     void bootstrap();
   }, []);
+
+  async function prepareDesktopRuntime() {
+    if (!runtimePacks.length || runtimeBusy) return;
+    setRuntimeBusy(true);
+    setRuntimeError("");
+    try {
+      for (const pack of runtimePacks) {
+        await installRuntimePack(pack.id);
+      }
+      await restartDesktopRuntime();
+    } catch (error) {
+      setRuntimeError(error instanceof Error ? error.message : "安装没有完成，请检查网络后重试。");
+      setRuntimeBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (bootstrapping) return;
@@ -163,7 +214,9 @@ export default function App() {
 
   useEffect(
     () => () => {
-      Object.values(pendingRemovalTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+      Object.values(pendingRemovalTimersRef.current).forEach((timerId) =>
+        window.clearTimeout(timerId),
+      );
       pendingRemovalTimersRef.current = {};
       if (pendingHistoryClearTimerRef.current) {
         window.clearTimeout(pendingHistoryClearTimerRef.current);
@@ -189,10 +242,17 @@ export default function App() {
   }, [phase]);
 
   useEffect(() => {
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("set_background_task_active", { active: phase === "processing" }))
+      .catch(() => undefined);
+  }, [phase]);
+
+  useEffect(() => {
     const shouldTrackCapture =
       !!currentCapture &&
       (["queued", "processing"].includes(currentCapture.capture.status) ||
-        (currentCapture.capture.status === "done" && currentCapture.capture.asset_preparation_pending));
+        (currentCapture.capture.status === "done" &&
+          currentCapture.capture.asset_preparation_pending));
     if (!currentCapture || !shouldTrackCapture) return undefined;
 
     let active = true;
@@ -208,7 +268,8 @@ export default function App() {
         setCurrentCapture(nextCapture);
         if (
           nextCapture.capture.status === "failed" ||
-          (nextCapture.capture.status === "done" && !nextCapture.capture.asset_preparation_pending)
+          (nextCapture.capture.status === "done" &&
+            !nextCapture.capture.asset_preparation_pending)
         ) {
           source.close();
           void refreshHistory();
@@ -221,12 +282,15 @@ export default function App() {
     };
 
     source.addEventListener("capture.updated", (event) => {
-      const payload = JSON.parse((event as MessageEvent).data) as { payload: CaptureEnvelope };
+      const payload = JSON.parse((event as MessageEvent).data) as {
+        payload: CaptureEnvelope;
+      };
       const nextCapture = payload.payload;
       setCurrentCapture(nextCapture);
       if (
         nextCapture.capture.status === "failed" ||
-        (nextCapture.capture.status === "done" && !nextCapture.capture.asset_preparation_pending)
+        (nextCapture.capture.status === "done" &&
+          !nextCapture.capture.asset_preparation_pending)
       ) {
         source.close();
         void refreshHistory();
@@ -246,7 +310,11 @@ export default function App() {
       source.close();
       window.clearInterval(pollTimer);
     };
-  }, [currentCapture?.capture.id, currentCapture?.capture.status, currentCapture?.capture.asset_preparation_pending]);
+  }, [
+    currentCapture?.capture.id,
+    currentCapture?.capture.status,
+    currentCapture?.capture.asset_preparation_pending,
+  ]);
 
   function requestStatus(error: unknown) {
     if (!(error instanceof Error)) return undefined;
@@ -262,10 +330,14 @@ export default function App() {
 
   async function finalizePendingRemoval(removal: PendingRemoval) {
     delete pendingRemovalTimersRef.current[removal.token];
-    setPendingRemovals((items) => items.filter((item) => item.token !== removal.token));
+    setPendingRemovals((items) =>
+      items.filter((item) => item.token !== removal.token),
+    );
     try {
       await deleteCapture(removal.item.id);
-      setCaptures((items) => items.filter((item) => item.id !== removal.item.id));
+      setCaptures((items) =>
+        items.filter((item) => item.id !== removal.item.id),
+      );
       await refreshHistory();
     } catch (error) {
       setToast(error instanceof Error ? error.message : "删除记录失败。");
@@ -291,14 +363,21 @@ export default function App() {
     try {
       const result = await clearCompletedCaptures();
       await refreshHistory();
-      if (pending.currentCapture && ["done", "failed"].includes(pending.currentCapture.capture.status)) {
+      if (
+        pending.currentCapture &&
+        ["done", "failed"].includes(pending.currentCapture.capture.status)
+      ) {
         resetWorkspace();
       }
       setToast(`\u5DF2\u6E05\u7A7A ${result.cleared} \u6761\u8BB0\u5F55\u3002`);
     } catch (error) {
       setCaptures(pending.captures);
       setCurrentCapture(pending.currentCapture);
-      setToast(error instanceof Error ? error.message : "\u6E05\u7A7A\u8BB0\u5F55\u5931\u8D25\u3002");
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "\u6E05\u7A7A\u8BB0\u5F55\u5931\u8D25\u3002",
+      );
     } finally {
       setClearBusy(false);
     }
@@ -368,8 +447,6 @@ export default function App() {
     setToast("请长按输入框粘贴链接。");
   }
 
-
-
   async function submitText() {
     if (!input.trim()) {
       setToast("\u5148\u8D34\u5165\u4E00\u4E2A\u516C\u5F00\u94FE\u63A5\u3002");
@@ -401,7 +478,9 @@ export default function App() {
 
   async function submitFile() {
     if (!selectedFile) {
-      setToast("\u8BF7\u5148\u9009\u62E9\u4E00\u4E2A\u672C\u5730\u6587\u4EF6\u3002");
+      setToast(
+        "\u8BF7\u5148\u9009\u62E9\u4E00\u4E2A\u672C\u5730\u6587\u4EF6\u3002",
+      );
       return;
     }
 
@@ -413,7 +492,11 @@ export default function App() {
       await refreshHistory();
       setSelectedFile(null);
     } catch (error) {
-      setToast(error instanceof Error ? error.message : "\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\u3002");
+      setToast(
+        error instanceof Error
+          ? error.message
+          : "\u4E0A\u4F20\u6587\u4EF6\u5931\u8D25\u3002",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -421,13 +504,19 @@ export default function App() {
 
   async function clearHistory() {
     if (pendingHistoryClear) return;
-    const removableItems = captures.filter((item) => ["done", "failed"].includes(item.status));
+    const removableItems = captures.filter((item) =>
+      ["done", "failed"].includes(item.status),
+    );
     if (!removableItems.length) {
-      setToast("\u6682\u65F6\u6CA1\u6709\u53EF\u6E05\u7A7A\u7684\u8BB0\u5F55\u3002");
+      setToast(
+        "\u6682\u65F6\u6CA1\u6709\u53EF\u6E05\u7A7A\u7684\u8BB0\u5F55\u3002",
+      );
       return;
     }
 
-    Object.values(pendingRemovalTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+    Object.values(pendingRemovalTimersRef.current).forEach((timerId) =>
+      window.clearTimeout(timerId),
+    );
     pendingRemovalTimersRef.current = {};
     setPendingRemovals([]);
 
@@ -437,7 +526,9 @@ export default function App() {
       currentCapture,
       removedCount: removableItems.length,
     };
-    setCaptures((items) => items.filter((item) => !["done", "failed"].includes(item.status)));
+    setCaptures((items) =>
+      items.filter((item) => !["done", "failed"].includes(item.status)),
+    );
     setPendingHistoryClear(pending);
     pendingHistoryClearTimerRef.current = window.setTimeout(() => {
       void finalizePendingHistoryClear(pending);
@@ -448,7 +539,10 @@ export default function App() {
     if (item.status === "failed") return false;
     const title = (item.title || "").trim().toLowerCase();
     const preview = (item.preview_text || "").trim().toLowerCase();
-    if (item.source_platform === "xiaohongshu" && (/xhslink\.com/.test(title) || /xhslink\.com/.test(preview))) {
+    if (
+      item.source_platform === "xiaohongshu" &&
+      (/xhslink\.com/.test(title) || /xhslink\.com/.test(preview))
+    ) {
       return false;
     }
     return true;
@@ -482,37 +576,78 @@ export default function App() {
   }
 
   const headerStatus = loadingDeepLink ? "processing" : phase;
-  const pendingRemovalIds = useMemo(() => new Set(pendingRemovals.map((item) => item.item.id)), [pendingRemovals]);
+  const pendingRemovalIds = useMemo(
+    () => new Set(pendingRemovals.map((item) => item.item.id)),
+    [pendingRemovals],
+  );
   const recentCaptures = useMemo(
     () =>
       captures
-        .filter((item) => shouldShowInRecent(item) && !pendingRemovalIds.has(item.id))
+        .filter(
+          (item) => shouldShowInRecent(item) && !pendingRemovalIds.has(item.id),
+        )
         .slice(0, config?.capture_history_limit || 12),
     [captures, config?.capture_history_limit, pendingRemovalIds],
   );
   const supportedExtensions = useMemo(
-    () => (config?.supported_extensions || []).map((item) => item.replace(/^\./, "").toUpperCase()),
+    () =>
+      (config?.supported_extensions || []).map((item) =>
+        item.replace(/^\./, "").toUpperCase(),
+      ),
     [config?.supported_extensions],
   );
   const processingCopy = {
-    eyebrow: phase === "failed" ? "\u5904\u7406\u5931\u8D25" : "\u6B63\u5728\u63D0\u53D6\u5185\u5BB9",
+    eyebrow:
+      phase === "failed"
+        ? "\u5904\u7406\u5931\u8D25"
+        : "\u6B63\u5728\u63D0\u53D6\u5185\u5BB9",
     title:
       phase === "failed"
         ? "\u8FD9\u6761\u5185\u5BB9\u6682\u65F6\u6CA1\u80FD\u5904\u7406\u6210\u529F"
-        : stageLabel(currentCapture?.capture.current_stage || currentCapture?.capture.status),
+        : stageLabel(
+            currentCapture?.capture.current_stage ||
+              currentCapture?.capture.status,
+          ),
     description:
       phase === "failed"
         ? errorMessageForCapture(currentCapture, workspaceError)
         : processingDescription(currentCapture),
   };
+  const runtimeSetupRequired =
+    !loadingDeepLink &&
+    phase === "idle" &&
+    config?.runtime_target === "windows_desktop" &&
+    runtimePacks.length > 0;
 
   return (
     <div className="app-shell">
-      <Header status={headerStatus} featureName={config?.product_feature_name || "\u4E07\u8C61\u6210\u6587"} onReset={resetWorkspace} />
+      <Header
+        status={headerStatus}
+        featureName={config?.product_feature_name || "\u4E07\u8C61\u6210\u6587"}
+        showWindowsDownload={
+          config !== null && config.runtime_target !== "windows_desktop"
+        }
+        onReset={resetWorkspace}
+      />
 
       <main className="main-stage">
         <AnimatePresence mode="wait">
-          {phase === "idle" ? (
+          {runtimeSetupRequired ? (
+            <motion.div
+              key="runtime-setup"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="stage-shell stage-shell-runtime"
+            >
+              <RuntimeSetup
+                packs={runtimePacks}
+                busy={runtimeBusy}
+                error={runtimeError}
+                onInstall={() => void prepareDesktopRuntime()}
+              />
+            </motion.div>
+          ) : phase === "idle" && !loadingDeepLink ? (
             <motion.div
               key="idle"
               initial={{ opacity: 0, y: 10 }}
@@ -545,7 +680,9 @@ export default function App() {
             </motion.div>
           ) : null}
 
-          {(loadingDeepLink || phase === "processing" || phase === "failed") && (
+          {(loadingDeepLink ||
+            phase === "processing" ||
+            phase === "failed") && (
             <motion.div
               key={phase}
               initial={{ opacity: 0 }}
@@ -555,23 +692,56 @@ export default function App() {
               className="stage-shell stage-shell-processing"
             >
               <ProcessingStage
-                phase={loadingDeepLink ? "bootstrapping" : phase === "failed" ? "failed" : "processing"}
-                eyebrow={loadingDeepLink ? "\u6062\u590D\u5185\u5BB9" : processingCopy.eyebrow}
-                title={loadingDeepLink ? "\u6B63\u5728\u6062\u590D\u4E0A\u4E00\u6761\u5185\u5BB9" : processingCopy.title}
+                phase={
+                  loadingDeepLink
+                    ? "bootstrapping"
+                    : phase === "failed"
+                      ? "failed"
+                      : "processing"
+                }
+                eyebrow={
+                  loadingDeepLink
+                    ? "\u6062\u590D\u5185\u5BB9"
+                    : processingCopy.eyebrow
+                }
+                title={
+                  loadingDeepLink
+                    ? "\u6B63\u5728\u6062\u590D\u4E0A\u4E00\u6761\u5185\u5BB9"
+                    : processingCopy.title
+                }
                 description={
                   loadingDeepLink
                     ? "\u5982\u679C\u4F60\u662F\u4ECE\u6DF1\u94FE\u63A5\u8FDB\u5165\uFF0C\u8FD9\u91CC\u4F1A\u76F4\u63A5\u6062\u590D\u5230\u5BF9\u5E94\u5185\u5BB9\u7684\u5F53\u524D\u72B6\u6001\u3002"
                     : processingCopy.description
                 }
-                stageLabel={phase === "processing" ? stageLabel(currentCapture?.capture.current_stage || currentCapture?.capture.status) : undefined}
-                progressPercent={phase === "processing" ? currentCapture?.capture.progress_percent : undefined}
-                progressDetail={phase === "processing" ? currentCapture?.capture.progress_detail : undefined}
-                onReset={phase === "failed" || loadingDeepLink ? resetWorkspace : undefined}
+                stageLabel={
+                  phase === "processing"
+                    ? stageLabel(
+                        currentCapture?.capture.current_stage ||
+                          currentCapture?.capture.status,
+                      )
+                    : undefined
+                }
+                progressPercent={
+                  phase === "processing"
+                    ? currentCapture?.capture.progress_percent
+                    : undefined
+                }
+                progressDetail={
+                  phase === "processing"
+                    ? currentCapture?.capture.progress_detail
+                    : undefined
+                }
+                onReset={
+                  phase === "failed" || loadingDeepLink
+                    ? resetWorkspace
+                    : undefined
+                }
               />
             </motion.div>
           )}
 
-          {phase === "done" && currentCapture ? (
+          {!loadingDeepLink && phase === "done" && currentCapture ? (
             <motion.div
               key="done"
               initial={{ opacity: 0, y: 18, scale: 0.985 }}
@@ -598,7 +768,11 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               <span>{`\u5DF2\u6E05\u7A7A ${pendingHistoryClear.removedCount} \u6761\u8BB0\u5F55`}</span>
-              <button className="toast-action" onClick={undoPendingHistoryClear} type="button">
+              <button
+                className="toast-action"
+                onClick={undoPendingHistoryClear}
+                type="button"
+              >
                 撤销
               </button>
             </motion.div>
@@ -614,7 +788,11 @@ export default function App() {
               transition={{ duration: 0.2 }}
             >
               <span>已删除这条记录</span>
-              <button className="toast-action" onClick={() => undoPendingRemoval(removal.token)} type="button">
+              <button
+                className="toast-action"
+                onClick={() => undoPendingRemoval(removal.token)}
+                type="button"
+              >
                 撤销
               </button>
             </motion.div>

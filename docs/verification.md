@@ -52,10 +52,14 @@ Docker 构建限时门槛：
 ## 本地 API 启动
 
 ```powershell
-.\.venv\Scripts\python.exe -m scripts.start_api
+.\start_api.bat
 ```
 
 检查：
+
+- 首次启动或 `.venv` 损坏时，入口应自动重建 Python 3.11 虚拟环境并安装 `requirements.txt` 的锁定依赖
+- `frontend/dist` 缺失时，入口应在 `npm` 可用时自动构建前端产物；无法构建时必须给出中文错误
+- 启动前自检应覆盖 Python、依赖、模型、ffmpeg、Playwright Chromium、CUDA runtime 和端口
 - 启动前如果 `8000` 已被旧服务占用，脚本应直接失败并提示占用 PID / 命令，不应继续进入 uvicorn
 - `http://127.0.0.1:8000/health` 返回 `status=ok`
 - `http://127.0.0.1:8000/config` 不暴露运行时绝对路径
@@ -74,7 +78,9 @@ workspace/runtime/browser-profile
 ```
 
 补充检查：
+
 - `workspace/runtime/browser-profile` 为空时，系统仍可启动，但高波动平台会给出会话 warning
+- 日常启动不应要求用户手动修 `.venv`；若 uv 托管 Python 路径变化，`start_api.bat` 应自动重建环境
 - 如需刷新项目级浏览器会话，应运行：
 
 ```powershell
@@ -84,6 +90,7 @@ workspace/runtime/browser-profile
 ## 平台契约检查
 
 自动化测试重点覆盖：
+
 - URL 路由识别
 - adapter 选择
 - provider 顺序
@@ -98,6 +105,7 @@ workspace/runtime/browser-profile
 - `progress_percent`
 
 重点文件：
+
 - [tests/test_platform_contracts.py](../tests/test_platform_contracts.py)
 - [tests/test_capture_api.py](../tests/test_capture_api.py)
 - [tests/test_pipeline_and_store.py](../tests/test_pipeline_and_store.py)
@@ -119,10 +127,10 @@ workspace/runtime/browser-profile
 ### 视频
 
 - 有 `preview_media` 时，页面优先播放 `preview_media`
-- 下载始终使用 `source_media`
+- 下载原视频使用 `source_media`；有音轨时显示 `source_audio` 音频下载
 - 桌面端视频卡片与正文卡片等高
 - 页面不额外叠自定义悬浮全屏 / 下载按钮
-- 下载视频按钮 hover / focus 时边框清晰可见
+- 下载音频 / 下载视频按钮 hover / focus 时边框清晰可见
 - 没有视频 artifact 但文本成功时，页面要明确提示“文本已完成，原视频暂未成功下载”
 
 ### 图文与 Live 图
@@ -160,6 +168,7 @@ workspace/runtime/browser-profile
 ## 人工页面审计
 
 至少完整走一轮以下界面：
+
 - 首页输入区
 - 处理中页面
 - 文本结果页
@@ -168,12 +177,14 @@ workspace/runtime/browser-profile
 - 最近记录展开、单条删除、清空与撤销
 
 重点人工检查：
+
 - 白底按钮 hover / focus 时边框是否依然清晰
 - 桌面端结果页是否保持“上方双栏 + 下方 meta footer”
 - meta footer 是否左对齐稳定，不与主卡片冲突
 - 桌面和手机宽度下操作区不会随机塌成难看的纵向布局
 
 当前最小 UI smoke 已自动覆盖：
+
 - 首页 Hero 输入框与最近记录渲染
 - 最近记录展开、删除、撤销链路
 - 提交链接后首次读取若遇到瞬时 503，页面仍会进入处理中而不是误判失败
@@ -211,6 +222,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 检查：
+
 - Docker 构建不依赖宿主机已有 `frontend/dist`
 - 镜像启动后首页可访问
 - 未挂载本地模型目录且未配置 OpenAI-compatible provider 时，预览模式仍可启动首页，但音视频转写应给出明确失败提示
@@ -227,6 +239,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 检查：
+
 - 输出中出现最终公网链接。
 - 链接已写入 `tests_runtime/public_preview/current_url.txt`。
 - 关闭启动窗口后链接失效；启动窗口保持打开时，公网首页可访问。
@@ -259,6 +272,7 @@ $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 ```
 
 检查：
+
 - Space build logs 没有 fatal error
 - Space 配置了 `AUDIO2TEXT_TRANSCRIPTION_PROVIDER=openai_compatible`
 - API key 只存在 Space Secret，不在仓库文件中
@@ -269,6 +283,7 @@ $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 ## Live Smoke
 
 默认样例文件：
+
 - [tests/live_smoke_samples.json](../tests/live_smoke_samples.json)
 
 运行：
@@ -298,6 +313,7 @@ $env:AUDIO2TEXT_LIVE_SMOKE_SAMPLES = "tests/live_smoke_samples.local.json"
 - Desktop hero titles are clamped to two lines; mobile hero titles are clamped to three lines.
 - Long titles keep the full text in the element `title` attribute for inspection.
 - Text and video result panels should remain visually equal-height on desktop, with long body text scrolling inside `.result-content-shell`.
+
 ## Result Source Link Checks
 
 - When `canonical_url` is present, the result page should render a `查看来源` action chip in the bottom meta footer.
