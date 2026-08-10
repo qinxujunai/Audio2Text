@@ -97,6 +97,24 @@ class RuntimePreflightTestCase(unittest.TestCase):
         self.assertEqual(result.fatal_errors, [])
         self.assertGreater(len(result.warnings), 0)
 
+    def test_auto_provider_accepts_sensevoice_without_faster_whisper(self) -> None:
+        model_dir = self.root / "missing-faster-whisper"
+        sensevoice_dir = self.root / "sensevoice"
+        sensevoice_dir.mkdir()
+        (sensevoice_dir / "model.int8.onnx").write_bytes(b"model")
+        (sensevoice_dir / "tokens.txt").write_text("tokens", encoding="utf-8")
+        result = runtime_preflight.PreflightResult()
+
+        with patch.object(runtime_preflight, "TRANSCRIPTION_PROVIDER", "auto"), patch.object(
+            runtime_preflight, "DEVICE", "cpu"
+        ), patch.object(runtime_preflight, "MODEL_PATH", model_dir), patch.object(
+            runtime_preflight, "SENSEVOICE_MODEL_DIR", sensevoice_dir
+        ), patch.object(runtime_preflight, "ALLOW_DEGRADED_START", False):
+            runtime_preflight._check_transcription_provider(result)
+
+        self.assertEqual(result.fatal_errors, [])
+        self.assertEqual(result.warnings, [])
+
     def test_openai_provider_requires_complete_configuration(self) -> None:
         ffmpeg_path = self.root / "ffmpeg" / "ffmpeg.exe"
         browsers_dir = self.root / "playwright"

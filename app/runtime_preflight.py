@@ -18,6 +18,7 @@ from app.settings import (
     OPENAI_COMPATIBLE_BASE_URL,
     OPENAI_COMPATIBLE_MODEL,
     PLAYWRIGHT_BROWSERS_DIR,
+    SENSEVOICE_MODEL_DIR,
     TRANSCRIPTION_PROVIDER,
 )
 from scripts.logger import get_logger
@@ -85,13 +86,38 @@ def _check_transcription_provider(result: PreflightResult) -> None:
                 result.fatal_errors.append(message)
         return
 
-    if not MODEL_PATH.exists() or not MODEL_PATH.is_dir():
+    faster_whisper_ready = MODEL_PATH.is_dir()
+    sensevoice_ready = (SENSEVOICE_MODEL_DIR / "model.int8.onnx").is_file() and (
+        SENSEVOICE_MODEL_DIR / "tokens.txt"
+    ).is_file()
+
+    if TRANSCRIPTION_PROVIDER == "local_sensevoice":
+        if sensevoice_ready:
+            return
+        message = f"SenseVoice 模型目录不完整: {SENSEVOICE_MODEL_DIR}。"
+        if ALLOW_DEGRADED_START:
+            result.warnings.append(message + "当前将以受限模式启动，请在应用内重新安装运行组件。")
+        else:
+            result.fatal_errors.append(message)
+        return
+
+    if TRANSCRIPTION_PROVIDER == "auto" and sensevoice_ready and not (
+        DEVICE == "cuda" and faster_whisper_ready
+    ):
+        return
+
+    if not faster_whisper_ready:
         message = (
             f"本地转写模型目录不存在: {MODEL_PATH}。请把模型放到该目录，或通过 "
             "audio2text.settings.json / AUDIO2TEXT_MODEL_PATH 显式指定。"
         )
+        if TRANSCRIPTION_PROVIDER == "auto":
+            message = (
+                f"本地转写模型尚未就绪: SenseVoice={SENSEVOICE_MODEL_DIR}，"
+                f"Faster-Whisper={MODEL_PATH}。"
+            )
         if ALLOW_DEGRADED_START:
-            result.warnings.append(message + "当前按云端预览模式启动，转写任务会给出明确失败提示。")
+            result.warnings.append(message + "当前将以受限模式启动，请在应用内安装运行组件。")
         else:
             result.fatal_errors.append(message)
         return

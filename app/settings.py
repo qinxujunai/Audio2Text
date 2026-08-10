@@ -52,7 +52,7 @@ PRODUCT_SLOGAN = "\u4E07\u8C61\u5165\u9875\uFF0C\u843D\u5B57\u6210\u6587\u3002"
 
 APP_DISPLAY_NAME = f"{PRODUCT_NAME} API"
 CODE_NAME = os.environ.get("RELAY_ENGINE_NAME", "capture_text")
-APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.0.0-dev").strip() or "2.0.0-dev"
+APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.0.1-dev").strip() or "2.0.1-dev"
 APP_COMMIT = os.environ.get("AUDIO2TEXT_COMMIT", "unknown").strip()[:40] or "unknown"
 DESKTOP_TOKEN = os.environ.get("AUDIO2TEXT_DESKTOP_TOKEN", "").strip()
 RUNTIME_TARGET = os.environ.get(

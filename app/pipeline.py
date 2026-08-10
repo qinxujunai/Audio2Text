@@ -220,11 +220,12 @@ def _result_title_info(
     source: SourceMetaModel | None = None,
     extraction: ExtractionOutcome | None = None,
 ) -> _ResolvedTitle:
-    candidates = [
-        getattr(extraction, "title", None),
-        getattr(capture, "title", None),
-    ]
     platform = getattr(extraction, "platform", None) or getattr(source, "platform", "") or ""
+    extraction_title = getattr(extraction, "title", None)
+    capture_title = getattr(capture, "title", None)
+    # Local files use a randomized storage filename on disk. Keep that safety
+    # boundary invisible and prefer the original upload name stored on Capture.
+    candidates = [capture_title, extraction_title] if platform == "local_file" else [extraction_title, capture_title]
     for candidate in candidates:
         cleaned = _resolve_display_title(candidate, platform=platform)
         if cleaned.text:
