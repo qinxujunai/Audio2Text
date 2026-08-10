@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -156,6 +157,26 @@ class RuntimePackManager:
         return {"id": pack.pack_id, "version": pack.version, "installed": True}
 
     def _download(self, pack: RuntimePack, destination: Path) -> None:
+        attempts = 4
+        for attempt in range(attempts):
+            try:
+                self._download_once(pack, destination)
+                return
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                retryable = status in {408, 429} or status >= 500
+                if not retryable or attempt == attempts - 1:
+                    raise RuntimePackError(
+                        f"运行组件下载服务暂时不可用（HTTP {status}），请稍后重试。"
+                    ) from exc
+            except (httpx.RequestError, OSError) as exc:
+                if attempt == attempts - 1:
+                    raise RuntimePackError(
+                        "运行组件下载失败，请检查网络后重试；已下载的进度会继续保留。"
+                    ) from exc
+            time.sleep(min(2**attempt, 8))
+
+    def _download_once(self, pack: RuntimePack, destination: Path) -> None:
         existing = destination.stat().st_size if destination.exists() else 0
         if existing == pack.size_bytes:
             return
@@ -163,7 +184,7 @@ class RuntimePackManager:
             destination.unlink()
             existing = 0
         headers = {"Range": f"bytes={existing}-"} if existing else {}
-        with httpx.Client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False, trust_env=False) as client:
+        with httpx.Client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False) as client:
             current_url = pack.url
             response = None
             for _ in range(4):
@@ -181,7 +202,7 @@ class RuntimePackManager:
                 raise RuntimePackError("运行组件下载重定向次数过多。")
             if response is None:
                 raise RuntimePackError("运行组件下载未返回有效响应。")
-            with response:
+            try:
                 if existing and response.status_code == 200:
                     destination.unlink(missing_ok=True)
                     existing = 0
@@ -194,6 +215,8 @@ class RuntimePackManager:
                         handle.write(chunk)
                         if handle.tell() > pack.size_bytes:
                             raise RuntimePackError("运行组件大小与清单不一致。")
+            finally:
+                response.close()
 
     def _verify(self, pack: RuntimePack, path: Path) -> None:
         if not path.is_file() or path.stat().st_size != pack.size_bytes:

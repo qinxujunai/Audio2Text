@@ -88,6 +88,19 @@ class PipelineAndStoreTestCase(unittest.TestCase):
 
         self.assertEqual(resolved, "")
 
+    def test_local_file_title_hides_randomized_storage_name(self) -> None:
+        resolved = pipeline._result_title(
+            capture=SimpleNamespace(title="访谈录音.wav"),
+            source=SourceMetaModel(platform="local_file", content_type="audio"),
+            extraction=ExtractionOutcome(
+                platform="local_file",
+                content_type="audio",
+                title="5f4dcc3b5aa765d61d8327deb882cf99_访谈录音.wav",
+            ),
+        )
+
+        self.assertEqual(resolved, "访谈录音.wav")
+
     def test_drop_title_from_body_removes_repeated_prefix_line(self) -> None:
         body = "第一句已经足够作为标题。这里才是正文开头\n第二段正文"
 

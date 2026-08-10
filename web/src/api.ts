@@ -128,6 +128,13 @@ async function request<T>(
         await wait(500 * (attempt + 1));
         continue;
       }
+      if (
+        error.name === "TypeError" ||
+        error.message?.includes("fetch") ||
+        error.message?.includes("NetworkError")
+      ) {
+        throw new Error(TEMPORARY_BUSY_MESSAGE);
+      }
       throw error;
     }
   }
