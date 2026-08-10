@@ -50,4 +50,9 @@ jobs:
 
       - name: Verify desktop shell
         working-directory: web/src-tauri
-        run: cargo check --locked
+        shell: pwsh
+        run: |
+          # Tauri validates configured resource paths during cargo check. The
+          # release workflow replaces this empty directory with the built sidecar.
+          New-Item -ItemType Directory -Force sidecar | Out-Null
+          cargo check --locked
