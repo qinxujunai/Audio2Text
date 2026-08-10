@@ -90,6 +90,7 @@
 ### 第七步：最终构建确认
 
 所有修改完成后，重新跑一遍完整验证：
+
 1. `python -m unittest discover -s tests -p "test_*.py"`
 2. `cd web && npm exec tsc -- --noEmit`
 3. `cd web && npm run build`

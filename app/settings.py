@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from scripts.config import (
     ALLOWED_ORIGINS,
@@ -30,12 +31,14 @@ from scripts.config import (
     PROJECT_ROOT,
     PUBLIC_PREVIEW_MODE,
     RUNTIME_DIR,
+    SENSEVOICE_MODEL_DIR,
     SUPPORTED_EXTENSIONS,
     TEMP_DIR,
     TRANSCRIPTION_PROVIDER,
     VAD_FILTER,
     WORKSPACE_DIR,
     WORKER_RELAY_BASE,
+    WORKER_TRANSCRIBE_SHARED_SECRET,
     WORKER_TRANSCRIBE_URL,
 )
 
@@ -49,6 +52,16 @@ PRODUCT_SLOGAN = "\u4E07\u8C61\u5165\u9875\uFF0C\u843D\u5B57\u6210\u6587\u3002"
 
 APP_DISPLAY_NAME = f"{PRODUCT_NAME} API"
 CODE_NAME = os.environ.get("RELAY_ENGINE_NAME", "capture_text")
+APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.0.0-dev").strip() or "2.0.0-dev"
+APP_COMMIT = os.environ.get("AUDIO2TEXT_COMMIT", "unknown").strip()[:40] or "unknown"
+DESKTOP_TOKEN = os.environ.get("AUDIO2TEXT_DESKTOP_TOKEN", "").strip()
+RUNTIME_TARGET = os.environ.get(
+    "AUDIO2TEXT_RUNTIME_TARGET",
+    "cloud_demo" if DEPLOYMENT_MODE == "cloud_preview" else "local_web",
+).strip() or "local_web"
+RUNTIME_PACK_MANIFEST = Path(
+    os.environ.get("AUDIO2TEXT_RUNTIME_PACK_MANIFEST", str(PROJECT_ROOT / "runtime-packs.json"))
+).expanduser().resolve()
 
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 WEB_APP_DIR = PROJECT_ROOT / "web"
@@ -94,7 +107,7 @@ MAX_UPLOAD_SIZE_MB = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "200"))
 ADMIN_IPS = {ip.strip() for ip in os.environ.get("ADMIN_IPS", "").split(",") if ip.strip()}
 FREE_DURATION_SECONDS = FREE_DURATION_MINUTES * 60
 TRANSCRIPTION_AVAILABLE = (
-    DEPLOYMENT_MODE == "cloud_preview"
+    (DEPLOYMENT_MODE == "cloud_preview" and bool(WORKER_TRANSCRIBE_SHARED_SECRET))
     or (
         TRANSCRIPTION_PROVIDER == "openai_compatible"
         and bool(OPENAI_COMPATIBLE_BASE_URL)
@@ -102,9 +115,13 @@ TRANSCRIPTION_AVAILABLE = (
         and bool(OPENAI_COMPATIBLE_MODEL)
     )
     or (
-        TRANSCRIPTION_PROVIDER != "openai_compatible"
-        and MODEL_PATH.exists()
+        TRANSCRIPTION_PROVIDER in {"local_faster_whisper", "auto"}
         and MODEL_PATH.is_dir()
+    )
+    or (
+        TRANSCRIPTION_PROVIDER in {"local_sensevoice", "auto"}
+        and (SENSEVOICE_MODEL_DIR / "model.int8.onnx").is_file()
+        and (SENSEVOICE_MODEL_DIR / "tokens.txt").is_file()
     )
 )
 

@@ -4,3 +4,11 @@ compatibility_date = "2026-05-14"
 
 [ai]
 binding = "AI"
+
+[[ratelimits]]
+name = "TRANSCRIBE_RATE_LIMITER"
+namespace_id = "2001"
+
+[ratelimits.simple]
+limit = 12
+period = 60

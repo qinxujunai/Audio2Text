@@ -4,16 +4,24 @@ sdk: docker
 app_port: 8000
 ---
 
- # Praxis AI｜无界笃行 / 万象成文
+# Praxis AI｜无界笃行 / 万象成文
 
-`万象成文` 是一个单页交付型产品，用来把公开链接或本地音视频整理成可直接交付的正文、图片和视频素材。
+把公开视频、播客、图文链接或本地音视频，整理成可阅读、可复制、可下载的文字与媒体。
+
+[在线体验](https://wanxiang.praxisai.online) · [下载 Windows 版](https://github.com/qinxujunai/Audio2Text/releases/latest/download/Wanxiang-Windows-x64-Setup.exe) · [观看 12 秒演示](docs/assets/wanxiang-demo.mp4)
+
+![万象成文桌面端首页](docs/assets/home-desktop.png)
+
+Windows 桌面端是完整主产品：安装包自带处理服务，不要求目标电脑安装 Python。首次使用下载约 222 MB 的 SenseVoice int8 与 FFmpeg 运行组件，不额外下载多套模型；浏览器提取复用 Windows 自带 Edge，文件在本机处理。云端版本用于限额体验。
 
 当前只做三件事：
+
 - 音频 / 视频转文字
 - 图文链接提取正文与正文图片
-- 视频结果页预览并下载原视频
+- 预览并下载原视频、原音频、图片与文本交付件
 
 当前不做这些：
+
 - 账号体系
 - 支付 / 套餐 / 积分
 - 多工作台 / Agent 后台
@@ -45,7 +53,7 @@ app_port: 8000
 ### 视频
 
 - 页面预览优先 `preview_media`。
-- 下载始终使用 `source_media`。
+- 下载原视频使用 `source_media`；有音轨时同时提供 `source_audio`。
 - 页面不额外叠自定义悬浮全屏 / 下载按钮，沿用浏览器原生控件。
 - 预览件与下载原件不是同一个交付目标，不应混为一谈。
 
@@ -72,14 +80,24 @@ app_port: 8000
 
 ## 当前支持平台
 
-| 平台 | 当前状态 | 主链路 | 说明 |
-| --- | --- | --- | --- |
-| YouTube | 条件可用 | 字幕优先，必要时回退媒体下载与转写 | 默认优先原语种字幕，不默认优先翻译轨 |
-| 哔哩哔哩 | 基本可用 | `yt-dlp` + 字幕轨优先 | 命中字幕时跳过转写 |
-| 小宇宙 | 条件可用 | 音频下载 + transcript | 页面 `shownotes / description` 不再当成交付正文 |
-| 抖音 | 基本可用但高波动 | 公开链路优先，失败后回退浏览器会话与 `yt-dlp` | 视频主正文只认字幕或转写 |
-| 小红书 | 条件可用 | 浏览器会话优先 | 图文优先正文与图片，视频主正文只认字幕或转写 |
-| 微信公众号图文 | 基本可用 | 直连优先；命中验证页时回退浏览器会话；支持正文图片区与图片文章模板 | 过滤二维码、头像、装饰图、分享图等噪音 |
+最近一次 live smoke：2026-08-11。平台页面会变化，表格记录的是可复核状态，不是永久承诺。
+
+| 平台           | 当前状态       | 主链路                                                        | 最近验证 |
+| -------------- | -------------- | ------------------------------------------------------------- | -------- |
+| 哔哩哔哩       | 通过           | 官方 view/player API → progressive/DASH → `yt-dlp`           | 视频、文字、视频与音频交付件通过 |
+| 小宇宙         | 通过           | 页面音频 → 本地转写                                           | `.m4a`、文字与音频交付件通过 |
+| 抖音           | 通过但高波动   | 公开链路 → 浏览器会话 → `yt-dlp`                              | 公开视频、文字与媒体交付件通过 |
+| 小红书         | 图文 / Live 通过 | 分享链接 → 结构化数据 → 浏览器会话                          | 15 图、14 个 Live 片段通过；视频样本当前触发平台会话验证 |
+| 微信公众号图文 | 通过           | 直连 → 浏览器会话                                             | 正文与图片样本通过 |
+| YouTube        | 网络条件可用   | 字幕 → EJS/`yt-dlp` → 媒体转写                                | 当前中国网络连接 API 超时，错误归因通过 |
+
+## Windows 版
+
+1. 下载 `Wanxiang-Windows-x64-Setup.exe`。
+2. 安装并打开万象成文。
+3. 首次使用按界面提示安装本地识别与媒体组件。
+
+安装包、运行包与发布产物都提供 SHA-256；GitHub Actions 同时生成 SBOM 与 provenance attestation。桌面端只监听随机 loopback 端口，并用每次启动生成的短期令牌保护本地 API。
 
 ## 项目级环境隔离
 
@@ -98,6 +116,7 @@ workspace/logs
 ```
 
 补充说明：
+
 - 高波动平台建议保留 `workspace/runtime/browser-profile` 作为项目级持久会话目录。
 - 若本地仍落到 `Assets/Models/FasterWhisper/...`，当前版本会把它视为 legacy fallback，并在 preflight 给出 warning。
 
@@ -115,6 +134,7 @@ tests_runtime/      测试临时产物，可清理
 ```
 
 目录说明：
+
 - `web/` 是前端源码目录，应编辑这里。
 - `frontend/dist/` 是构建输出目录，不应手动修改。
 - `tests_runtime/` 是测试与截图临时产物目录，可清理。
@@ -124,47 +144,25 @@ tests_runtime/      测试临时产物，可清理
 
 ## 本地启动
 
-### 1. 安装 Python 依赖
-
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-### 2. 安装项目级 Playwright Chromium
-
-```powershell
-$env:PLAYWRIGHT_BROWSERS_PATH = "$PWD\workspace\runtime\playwright-browsers"
-.\.venv\Scripts\python.exe -m playwright install chromium
-```
-
-### 3. 准备 ffmpeg
-
-默认路径：
-
-```text
-workspace/runtime/ffmpeg/ffmpeg.exe
-workspace/runtime/ffmpeg/ffprobe.exe
-```
-
-### 4. 启动产品并生成公网链接
+### 1. 一键启动产品并生成公网链接
 
 ```powershell
 .\start_api.bat
 ```
 
-这个入口会同时启动本地服务和临时公网链接。窗口里出现 `[PUBLIC URL]` 后，把那个链接发给别人即可。电脑和窗口都要保持开启。
+这个入口会先做启动自检，再启动本地服务和临时公网链接。自检会自动处理：
+
+- `.venv` 缺失、损坏或指向失效 Python 时，优先用 `uv` 重建 Python 3.11 环境并安装锁定依赖。
+- `frontend/dist` 缺失时，检测 `npm` 并自动构建前端产物。
+- 启动前检查模型、ffmpeg、Playwright Chromium、CUDA runtime、端口和运行时配置。
+
+窗口里出现 `[PUBLIC URL]` 后，把那个链接发给别人即可。电脑和窗口都要保持开启。
 
 只做本地开发或排障时，用本地模式：
 
 ```powershell
 $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 .\start_api.bat
-```
-
-底层 API 仍可直接运行：
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.start_api
 ```
 
 默认端口是 `8000`；端口被占用时可临时换端口：
@@ -174,7 +172,39 @@ $env:AUDIO2TEXT_API_PORT = "8001"
 .\start_api.bat
 ```
 
-### 5. 本地访问
+### 2. 运行时资源
+
+启动入口会检查这些项目级资源；缺失时会给出明确中文提示：
+
+```text
+workspace/runtime/models/faster-whisper/medium
+workspace/runtime/playwright-browsers
+workspace/runtime/ffmpeg/ffmpeg.exe
+workspace/runtime/ffmpeg/ffprobe.exe
+```
+
+高波动平台建议保留 `workspace/runtime/browser-profile` 作为项目级浏览器会话。若该目录为空，产品仍可启动，但抖音 / 小红书成功率会下降；可用下面命令刷新：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.refresh_browser_session
+```
+
+### 3. 排障用手工命令
+
+日常不需要手工安装依赖；只有自检失败需要定位时再用这些命令：
+
+```powershell
+uv venv --clear --seed --python 3.11 .venv
+uv pip install --python .\.venv\Scripts\python.exe -r requirements.txt --link-mode copy --compile-bytecode
+```
+
+底层 API 仍可直接运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.start_api
+```
+
+### 4. 本地访问
 
 ```text
 http://127.0.0.1:8000
@@ -187,16 +217,18 @@ tests_runtime/public_preview/current_url.txt
 ```
 
 注意：
+
 - 这是临时演示链接，不是正式云部署。
 - 电脑不能关，启动窗口不能关。
 - 如果出现 localtunnel 的 IP 确认页，按窗口提示输入页面上显示的 IP 后继续。
-- 用户可见启动入口只保留 `start_api.bat`；`scripts/start_cloudflare_tunnel.py` 和 `scripts/start_localtunnel.py` 只是内部兜底 helper。
+- 用户可见启动入口只保留 `start_api.bat`；`scripts/start_api_bootstrap.ps1` 负责自检和自愈，`scripts/start_cloudflare_tunnel.py` 和 `scripts/start_localtunnel.py` 只是内部兜底 helper。
 
 ## 配置
 
 示例配置见 [audio2text.settings.example.json](audio2text.settings.example.json)。
 
 关键项：
+
 - `workspace_dir`
 - `model_path`
 - `ffmpeg_path`
@@ -217,6 +249,7 @@ tests_runtime/public_preview/current_url.txt
 评测方法与当前基线记录见 [docs/transcription-benchmark.md](docs/transcription-benchmark.md)。
 
 默认值说明：
+
 - `language` 当前默认是 `auto`
 - `capture_history_limit` 当前默认是 `12`
 - `daily_capture_limit` 当前默认是 `12`（每 IP 每天最多提交次数）
@@ -241,6 +274,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 前提：
+
 - `workspace/runtime/models/faster-whisper/medium` 已有可用模型文件。
 - 如需抖音 / 小红书浏览器链路，挂载后的 `workspace/runtime/playwright-browsers` 里也要有 Chromium runtime。
 
@@ -259,6 +293,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 当前约定：
+
 - Docker 构建会在镜像内自行完成前端构建。
 - 宿主机不需要预先提供 `frontend/dist`。
 - 容器内默认使用镜像自带 `ffmpeg`。
@@ -311,6 +346,7 @@ AUDIO2TEXT_OPENAI_COMPATIBLE_MODEL=<model>
 脚本会自动写入前 6 个公开变量。`AUDIO2TEXT_OPENAI_COMPATIBLE_*` 三项涉及实际转写服务，其中 API key 必须放 Space Secret；没有配置时首页仍可访问，图文和字幕类链接可先体验，本地音视频文件会提示需要配置转写服务。
 
 注意：
+
 - API key 只能放在 Space Secret，不要写入仓库文件。
 - 免费 Space 的 `workspace` 不应当成正式持久存储。
 - 这条路径用于预览和演示，不等同正式生产上线。

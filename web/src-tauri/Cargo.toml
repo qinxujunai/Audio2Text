@@ -1,0 +1,24 @@
+[package]
+name = "wanxiang-chengwen"
+version = "2.0.0"
+description = "Wanxiang Chengwen Windows desktop application"
+authors = ["Praxis AI"]
+license = "Apache-2.0"
+repository = "https://github.com/qinxujunai/Audio2Text"
+edition = "2021"
+rust-version = "1.84"
+
+[lib]
+name = "wanxiang_chengwen_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.3", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }

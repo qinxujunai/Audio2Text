@@ -60,6 +60,24 @@ def _wait_for_http(url: str, *, timeout: float = 45.0) -> None:
     raise RuntimeError(f"Timed out waiting for {url}: {last_error}")
 
 
+def _terminate_process_tree(process: subprocess.Popen[str] | None, *, timeout: float = 10.0) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        process.terminate()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
 def _seed_capture(workspace_dir: Path, capture: CaptureModel) -> None:
     capture_path = workspace_dir / "captures" / capture.id / "capture.json"
     capture_path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,6 +156,14 @@ def _video_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
             mime_type="video/mp4",
             content=b"fake-source-video",
         ),
+        _artifact(
+            workspace_dir,
+            capture_id,
+            "source_audio",
+            "source_audio.m4a",
+            mime_type="audio/mp4",
+            content=b"fake-source-audio",
+        ),
     ]
     return CaptureModel(
         id=capture_id,
@@ -182,6 +208,72 @@ def _video_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
                 {"key": "content_type", "label": "内容类型", "value": "视频"},
                 {"key": "author", "label": "作者", "value": "Praxis AI"},
                 {"key": "duration", "label": "时长", "value": "1 分钟"},
+            ],
+            artifacts=artifacts,
+        ),
+    )
+
+
+def _audio_capture(workspace_dir: Path, capture_id: str, *, created_at: str, title: str) -> CaptureModel:
+    primary_text = "小宇宙音频样例已经转写完成。\n\n这里保留两段正文，用于验证音频下载入口不会和视频下载混在一起。"
+    artifacts = [
+        _artifact(
+            workspace_dir,
+            capture_id,
+            "txt",
+            "capture.txt",
+            mime_type="text/plain",
+            content=primary_text.encode("utf-8"),
+        ),
+        _artifact(
+            workspace_dir,
+            capture_id,
+            "source_audio",
+            "episode.m4a",
+            mime_type="audio/mp4",
+            content=b"fake-podcast-audio",
+        ),
+    ]
+    return CaptureModel(
+        id=capture_id,
+        input_type="url",
+        status="done",
+        title=title,
+        source_platform="xiaoyuzhou",
+        content_type="audio",
+        url=f"https://example.com/{capture_id}",
+        created_at=created_at,
+        updated_at=created_at,
+        started_at=created_at,
+        finished_at=created_at,
+        source=SourceMetaModel(
+            platform="xiaoyuzhou",
+            content_type="audio",
+            canonical_url=f"https://example.com/{capture_id}",
+            author="Praxis AI",
+            duration_seconds=128,
+            description="音频交付样例。",
+            extractor_used="fixture",
+        ),
+        processing=ProcessingStateModel(
+            current_stage="completed",
+            progress_percent=100,
+            progress_detail="整理完成",
+            completed_stages=["resolve", "extract", "transcribe", "compose"],
+        ),
+        result=ResultDocumentModel(
+            primary_text=primary_text,
+            primary_result_type="transcript",
+            confidence="high",
+            completeness="full",
+            transcript_status="transcribed",
+            text_source="transcript",
+            views=ResultViewsModel(primary=primary_text),
+            content_facts=[
+                {"key": "title", "label": "标题", "value": title},
+                {"key": "platform", "label": "平台", "value": "小宇宙"},
+                {"key": "content_type", "label": "内容类型", "value": "音频"},
+                {"key": "duration", "label": "时长", "value": "2 分钟"},
             ],
             artifacts=artifacts,
         ),
@@ -357,6 +449,7 @@ def _seed_workspace(workspace_dir: Path) -> None:
 
     captures = [
         _video_capture(workspace_dir, "demovideo001", created_at="2026-04-11 10:00:00", title="你只能靠自己得到自己想要的情感共鸣 语录"),
+        _audio_capture(workspace_dir, "demoaudio001", created_at="2026-04-11 09:59:30", title="蚂蚁测试 AI 版支付宝，市场监管总局约谈山姆"),
         _image_capture(workspace_dir, "demoimage001", created_at="2026-04-11 09:59:00", title="图文整理结果样例"),
         _simple_capture(
             workspace_dir,
@@ -411,6 +504,8 @@ class UISmokeTestCase(unittest.TestCase):
         cls.tempdir = tempfile.TemporaryDirectory()
         cls.workspace_dir = Path(cls.tempdir.name) / "workspace"
         _seed_workspace(cls.workspace_dir)
+        cls.server_log_path = Path(cls.tempdir.name) / "ui-smoke-server.log"
+        cls.server_log = cls.server_log_path.open("w", encoding="utf-8")
 
         cls.port = _free_port()
         cls.base_url = f"http://127.0.0.1:{cls.port}"
@@ -433,7 +528,7 @@ class UISmokeTestCase(unittest.TestCase):
             [str(_python_executable()), "-m", "scripts.start_api"],
             cwd=str(cls.project_root),
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=cls.server_log,
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -443,17 +538,14 @@ class UISmokeTestCase(unittest.TestCase):
             cls.playwright = sync_playwright().start()
             cls.browser = cls.playwright.chromium.launch(headless=True)
         except Exception as exc:
+            cls.server_log.flush()
             logs = ""
-            if cls.server_process.stdout is not None:
-                try:
-                    logs = cls.server_process.stdout.read()
-                except Exception:  # pragma: no cover - best effort on startup failure
-                    logs = ""
-            cls.server_process.terminate()
             try:
-                cls.server_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:  # pragma: no cover - shutdown fallback
-                cls.server_process.kill()
+                logs = cls.server_log_path.read_text(encoding="utf-8")
+            except Exception:  # pragma: no cover - best effort on startup failure
+                logs = ""
+            _terminate_process_tree(cls.server_process)
+            cls.server_log.close()
             cls.tempdir.cleanup()
             raise RuntimeError(f"UI smoke server failed to start: {exc}\n{logs}") from exc
 
@@ -464,16 +556,18 @@ class UISmokeTestCase(unittest.TestCase):
         if hasattr(cls, "playwright"):
             cls.playwright.stop()
         if hasattr(cls, "server_process"):
-            cls.server_process.terminate()
-            try:
-                cls.server_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:  # pragma: no cover - shutdown fallback
-                cls.server_process.kill()
+            _terminate_process_tree(cls.server_process)
+        if hasattr(cls, "server_log"):
+            cls.server_log.close()
         if hasattr(cls, "tempdir"):
             cls.tempdir.cleanup()
 
     def setUp(self) -> None:
-        self.page = self.browser.new_page(viewport={"width": 1512, "height": 940})
+        _seed_workspace(self.workspace_dir)
+        self.context = self.browser.new_context(viewport={"width": 1512, "height": 940})
+        self.page = self.context.new_page()
+        self.page.set_default_timeout(15000)
+        self.page.set_default_navigation_timeout(30000)
 
     def tearDown(self) -> None:
         try:
@@ -490,11 +584,16 @@ class UISmokeTestCase(unittest.TestCase):
         except Exception:
             pass
         self.page.close()
+        self.context.close()
 
     def test_homepage_recent_history_is_stable(self) -> None:
-        self.page.goto(self.base_url, wait_until="networkidle")
+        self.page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+        self.page.locator("textarea").wait_for()
         self.assertTrue(self.page.locator("textarea").is_visible())
+        self.page.locator(".recent-inline-card").first.wait_for()
         self.assertEqual(self.page.locator(".recent-inline-card").count(), 4)
+        self.assertGreaterEqual(self.page.locator(".recent-inline-preview").count(), 1)
+        self.assertGreaterEqual(self.page.locator(".recent-inline-foot").count(), 4)
 
         heights = []
         for index in range(self.page.locator(".recent-inline-card").count()):
@@ -518,6 +617,21 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.get_by_role("button", name="撤销").click()
         self.page.wait_for_timeout(200)
         self.assertTrue(self.page.locator(".recent-inline-card").filter(has_text=first_title).first.is_visible())
+
+    def test_mobile_deep_link_uses_full_result_width(self) -> None:
+        self.context.close()
+        self.context = self.browser.new_context(viewport={"width": 390, "height": 844})
+        self.page = self.context.new_page()
+        self.page.set_default_timeout(15000)
+        self.page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
+        self.page.locator(".deliverable-workspace").wait_for()
+        self.page.wait_for_timeout(700)
+
+        self.assertEqual(self.page.locator(".main-stage > .stage-shell").count(), 1)
+        stage_box = self.page.locator(".stage-shell-ready").bounding_box()
+        self.assertIsNotNone(stage_box)
+        self.assertGreaterEqual(stage_box["width"], 360)
+        self.assertLessEqual(self.page.evaluate("document.documentElement.scrollWidth"), 390)
 
     def test_submit_flow_recovers_from_transient_capture_read(self) -> None:
         intercepted = {"count": 0}
@@ -548,7 +662,8 @@ class UISmokeTestCase(unittest.TestCase):
 
         self.page.route("**/v1/captures", stable_capture_create)
         self.page.route("**/v1/captures/*", flaky_capture_read)
-        self.page.goto(self.base_url, wait_until="networkidle")
+        self.page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+        self.page.locator("textarea").wait_for()
         self.page.locator("textarea").fill(
             "https://www.xiaohongshu.com/discovery/item/66f61f96000000001d03f12d"
         )
@@ -563,7 +678,7 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.unroute("**/v1/captures", stable_capture_create)
 
     def test_video_result_layout_stays_stable(self) -> None:
-        self.page.goto(f"{self.base_url}/c/demovideo001", wait_until="commit", timeout=60000)
+        self.page.goto(f"{self.base_url}/c/demovideo001", wait_until="domcontentloaded", timeout=60000)
         self.page.locator(".result-content-shell").wait_for()
 
         hero_metrics = self.page.locator(".deliverable-hero h1").evaluate(
@@ -613,6 +728,8 @@ class UISmokeTestCase(unittest.TestCase):
         source_link = self.page.get_by_role("link", name="查看来源")
         self.assertTrue(source_link.is_visible())
         self.assertEqual(source_link.get_attribute("target"), "_blank")
+        self.assertTrue(self.page.get_by_role("link", name="下载音频").is_visible())
+        self.assertTrue(self.page.get_by_role("link", name="下载视频").is_visible())
 
         button = self.page.locator(".result-actions .copy-action").first
         before_hover = button.evaluate(
@@ -621,6 +738,15 @@ class UISmokeTestCase(unittest.TestCase):
         # Verify copy-action buttons are present and styled
         self.assertNotIn("0, 0, 0, 0", before_hover["borderColor"])
         self.assertNotEqual(before_hover["color"], "rgba(0, 0, 0, 0)")
+
+    def test_audio_result_download_action_renders(self) -> None:
+        self.page.goto(f"{self.base_url}/c/demoaudio001", wait_until="domcontentloaded", timeout=30000)
+        self.page.locator(".result-content-shell").wait_for()
+
+        audio_action = self.page.get_by_role("link", name="下载音频")
+        self.assertTrue(audio_action.is_visible())
+        self.assertIn("/artifacts/source_audio", audio_action.get_attribute("href") or "")
+        self.assertEqual(self.page.get_by_role("link", name="下载视频").count(), 0)
 
     def test_image_result_actions_render(self) -> None:
         self.page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
@@ -687,6 +813,8 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.wait_for_timeout(420)
         self.assertIn("2/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
         self.page.locator(".image-viewer-nav.is-prev").click(force=True)
+        self.page.locator(".image-viewer-transition-underlay").wait_for(state="attached")
+        self.assertGreaterEqual(self.page.locator(".image-viewer-transition-underlay").count(), 1)
         self.page.wait_for_timeout(180)
         self.assertIn("1/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
         self.page.get_by_role("button", name="图片", exact=True).click()
@@ -719,7 +847,7 @@ class UISmokeTestCase(unittest.TestCase):
 
         self.page.locator(".image-card .image-card-media-button").first.click()
         self.page.locator(".image-viewer-overlay").wait_for()
-        self.page.get_by_role("button", name="Live").click()
+        self.page.get_by_role("button", name="Live", exact=True).click()
         self.page.wait_for_timeout(150)
         self.assertTrue(self.page.locator(".image-viewer-stage video").is_visible())
 
@@ -729,12 +857,15 @@ class UISmokeTestCase(unittest.TestCase):
         self.assertGreater(self.page.locator(".image-card a[href]").count(), 0)
 
     def test_mobile_result_actions_and_viewer_are_tappable(self) -> None:
-        page = self.browser.new_page(
+        context = self.browser.new_context(
             viewport={"width": 390, "height": 844},
             is_mobile=True,
             has_touch=True,
             device_scale_factor=3,
         )
+        page = context.new_page()
+        page.set_default_timeout(15000)
+        page.set_default_navigation_timeout(30000)
         try:
             page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
             page.locator(".image-card").first.wait_for()
@@ -808,13 +939,14 @@ class UISmokeTestCase(unittest.TestCase):
                 """() => ({
                     width: window.innerWidth,
                     docWidth: document.documentElement.scrollWidth,
-                    resultActionMaxRight: Math.max(...[...document.querySelectorAll(".result-actions > *")].map((el) => el.getBoundingClientRect().right)),
-                    resultActionMinHeight: Math.min(...[...document.querySelectorAll(".result-actions > *")].map((el) => el.getBoundingClientRect().height)),
+                    actionMaxRight: Math.max(...[...document.querySelectorAll(".result-actions > *, .media-panel-actions > *")].map((el) => el.getBoundingClientRect().right)),
+                    actionMinHeight: Math.min(...[...document.querySelectorAll(".result-actions > *, .media-panel-actions > *")].map((el) => el.getBoundingClientRect().height)),
                   })"""
             )
             self.assertLessEqual(video_layout["docWidth"], video_layout["width"] + 2)
-            self.assertLessEqual(video_layout["resultActionMaxRight"], video_layout["width"] + 2)
-            self.assertGreaterEqual(video_layout["resultActionMinHeight"], 43.5)
+            self.assertLessEqual(video_layout["actionMaxRight"], video_layout["width"] + 2)
+            self.assertGreaterEqual(video_layout["actionMinHeight"], 43.5)
+            self.assertTrue(page.get_by_role("link", name="下载音频").is_visible())
         finally:
             try:
                 page.evaluate(
@@ -830,6 +962,7 @@ class UISmokeTestCase(unittest.TestCase):
             except Exception:
                 pass
             page.close()
+            context.close()
 
 
 if __name__ == "__main__":

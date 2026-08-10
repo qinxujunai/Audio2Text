@@ -408,6 +408,84 @@ class PipelineAndStoreTestCase(unittest.TestCase):
                 child.rmdir()
         root.rmdir()
 
+    def test_persist_result_artifacts_exports_source_audio_for_video(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        artifacts_dir = root / "artifacts"
+        media_dir = root / "media"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        media_dir.mkdir(parents=True, exist_ok=True)
+        media_path = media_dir / "sample.mp4"
+        media_path.write_bytes(b"video-with-audio")
+
+        capture = SimpleNamespace(
+            id="cap-video-audio",
+            title="sample",
+            url="https://example.com/video",
+            source=SourceMetaModel(platform="bilibili", content_type="video", canonical_url="https://example.com/video"),
+        )
+        result = ResultDocumentModel(primary_text="hello world")
+        captured_command: list[str] = []
+
+        def fake_run(command, capture_output, text, check):
+            captured_command.extend(command)
+            (artifacts_dir / capture.id / "source_audio.m4a").write_bytes(b"audio-bytes")
+            return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+        with patch.object(pipeline, "ARTIFACTS_DIR", artifacts_dir), patch.object(
+            pipeline, "_audio_codec_for_path", return_value="opus"
+        ), patch.object(pipeline.subprocess, "run", side_effect=fake_run), patch.object(
+            pipeline, "_source_media_needs_preview", return_value=False
+        ):
+            persisted = pipeline._persist_result_artifacts(capture, result, media_file_path=str(media_path))
+
+        source_audio = next(artifact for artifact in persisted.artifacts if artifact.type == "source_audio")
+        self.assertEqual(source_audio.mime_type, "audio/mp4")
+        self.assertEqual(Path(source_audio.path), artifacts_dir / capture.id / "source_audio.m4a")
+        self.assertIn("-vn", captured_command)
+        self.assertIn("192k", captured_command)
+
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        root.rmdir()
+
+    def test_persist_result_artifacts_preserves_source_audio_for_audio_capture(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        artifacts_dir = root / "artifacts"
+        media_dir = root / "media"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        media_dir.mkdir(parents=True, exist_ok=True)
+        media_path = media_dir / "episode.m4a"
+        media_path.write_bytes(b"audio")
+
+        capture = SimpleNamespace(
+            id="cap-audio",
+            title="episode",
+            url="https://example.com/episode",
+            source=SourceMetaModel(platform="xiaoyuzhou", content_type="audio", canonical_url="https://example.com/episode"),
+        )
+        result = ResultDocumentModel(primary_text="hello world")
+
+        with patch.object(pipeline, "ARTIFACTS_DIR", artifacts_dir), patch.object(
+            pipeline, "_audio_codec_for_path", return_value="aac"
+        ):
+            persisted = pipeline._persist_result_artifacts(capture, result, media_file_path=str(media_path))
+
+        artifact_types = [artifact.type for artifact in persisted.artifacts]
+        self.assertIn("source_audio", artifact_types)
+        self.assertNotIn("source_media", artifact_types)
+        source_audio = next(artifact for artifact in persisted.artifacts if artifact.type == "source_audio")
+        self.assertEqual(Path(source_audio.path), media_path)
+
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        root.rmdir()
+
     def test_persist_result_artifacts_skips_preview_media_for_browser_friendly_video(self) -> None:
         root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
         artifacts_dir = root / "artifacts"
