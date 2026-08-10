@@ -5,6 +5,7 @@ import {
   Download,
   Expand,
   ExternalLink,
+  Headphones,
   FileText,
   Film,
   Images,
@@ -25,6 +26,7 @@ import {
   useState,
 } from "react";
 
+import { resolveApiUrl } from "../api";
 import type { Artifact, CaptureEnvelope, CaptureSourceImage } from "../types";
 
 type DeliverableStageProps = {
@@ -42,6 +44,10 @@ type ImageGalleryItem = {
   liveArtifact: Artifact | null;
 };
 type ViewerPan = { x: number; y: number };
+type ViewerVisual = {
+  key: string;
+  imageSrc: string;
+};
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -65,7 +71,7 @@ function bytesLabel(size?: number | null) {
 }
 
 function artifactUrl(artifact: Artifact) {
-  return `${window.location.origin}${artifact.download_url}`;
+  return resolveApiUrl(artifact.download_url, true);
 }
 
 function isStaticImageArtifact(artifact: Artifact) {
@@ -128,7 +134,10 @@ function factLabel(key: string, fallback: string) {
 }
 
 function heroDescription(capture: CaptureEnvelope, hasVideoArtifact: boolean) {
-  if (capture.source.media_kind === "image_article" || capture.source.platform === "wechat_article") {
+  if (
+    capture.source.media_kind === "image_article" ||
+    capture.source.platform === "wechat_article"
+  ) {
     return capture.capture.asset_preparation_pending
       ? "正文和图片已可查看，下载文件仍在后台准备。"
       : "正文和图片已整理完成，可直接查看、复制或下载。";
@@ -158,7 +167,10 @@ function heroTitle(capture: CaptureEnvelope) {
   if (sourceTitle && !looksLikeUrl(sourceTitle)) {
     return sourceTitle;
   }
-  if (capture.source.media_kind === "image_article" || capture.source.platform === "wechat_article") {
+  if (
+    capture.source.media_kind === "image_article" ||
+    capture.source.platform === "wechat_article"
+  ) {
     return "图文整理结果";
   }
   if (capture.source.media_kind === "video") {
@@ -171,7 +183,10 @@ function heroTitle(capture: CaptureEnvelope) {
 }
 
 function shouldShowImages(capture: CaptureEnvelope) {
-  return capture.source.media_kind === "image_article" || capture.source.platform === "wechat_article";
+  return (
+    capture.source.media_kind === "image_article" ||
+    capture.source.platform === "wechat_article"
+  );
 }
 
 function buildGalleryItems(capture: CaptureEnvelope): ImageGalleryItem[] {
@@ -197,7 +212,9 @@ function buildGalleryItems(capture: CaptureEnvelope): ImageGalleryItem[] {
           image_url: imageUrl,
           live_photo_video_url: null,
         }));
-  const sourceImagesByIndex = new Map(sourceImages.map((item) => [item.index, item]));
+  const sourceImagesByIndex = new Map(
+    sourceImages.map((item) => [item.index, item]),
+  );
 
   const allIndices = Array.from(
     new Set<number>([
@@ -232,11 +249,13 @@ function buildGalleryItems(capture: CaptureEnvelope): ImageGalleryItem[] {
 }
 
 function downloadHref(artifact: Artifact | null, fallbackUrl: string | null) {
-  return artifact ? artifactUrl(artifact) : (fallbackUrl || "");
+  return artifact ? artifactUrl(artifact) : fallbackUrl || "";
 }
 
 function preferredImageUrl(item: ImageGalleryItem) {
-  return item.imageArtifact ? artifactUrl(item.imageArtifact) : item.imageSourceUrl;
+  return item.imageArtifact
+    ? artifactUrl(item.imageArtifact)
+    : item.imageSourceUrl;
 }
 
 function imageFallbackUrl(item: ImageGalleryItem) {
@@ -244,7 +263,9 @@ function imageFallbackUrl(item: ImageGalleryItem) {
 }
 
 function preferredLiveUrl(item: ImageGalleryItem) {
-  return item.liveArtifact ? artifactUrl(item.liveArtifact) : item.liveSourceUrl || "";
+  return item.liveArtifact
+    ? artifactUrl(item.liveArtifact)
+    : item.liveSourceUrl || "";
 }
 
 function liveFallbackUrl(item: ImageGalleryItem) {
@@ -276,7 +297,11 @@ function MediaImage({
 
   if (!resolvedPrimary) {
     return (
-      <div aria-label={alt} className={className ? `${className} is-empty` : "is-empty"} role="img">
+      <div
+        aria-label={alt}
+        className={className ? `${className} is-empty` : "is-empty"}
+        role="img"
+      >
         <span>图片准备中</span>
       </div>
     );
@@ -412,38 +437,91 @@ function ImageViewerOverlay({
   onNavigate: (nextIndex: number) => void;
 }) {
   const activeItem = items[activeIndex];
-  const liveAvailable = Boolean(activeItem?.liveSourceUrl || activeItem?.liveArtifact);
+  const liveAvailable = Boolean(
+    activeItem?.liveSourceUrl || activeItem?.liveArtifact,
+  );
   const effectiveMode = liveAvailable ? previewMode : "image";
-  const imageDownload = activeItem ? downloadHref(activeItem.imageArtifact, activeItem.imageSourceUrl) : "";
-  const liveDownload = activeItem ? downloadHref(activeItem.liveArtifact, activeItem.liveSourceUrl) : "";
+  const imageDownload = activeItem
+    ? downloadHref(activeItem.imageArtifact, activeItem.imageSourceUrl)
+    : "";
+  const liveDownload = activeItem
+    ? downloadHref(activeItem.liveArtifact, activeItem.liveSourceUrl)
+    : "";
   const livePrimary = activeItem ? preferredLiveUrl(activeItem) : "";
   const imagePrimary = activeItem ? preferredImageUrl(activeItem) : "";
+  const activeVisual = useMemo<ViewerVisual | null>(
+    () =>
+      activeItem
+        ? {
+            key: `${activeItem.index}:${effectiveMode}`,
+            imageSrc: imagePrimary,
+          }
+        : null,
+    [activeItem, effectiveMode, imagePrimary],
+  );
   const [liveSrc, setLiveSrc] = useState(livePrimary);
   const [livePlaybackError, setLivePlaybackError] = useState(false);
+  const [transitionVisual, setTransitionVisual] =
+    useState<ViewerVisual | null>(null);
+  const activeVisualRef = useRef<ViewerVisual | null>(activeVisual);
   const overlayRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const imageSurfaceRef = useRef<HTMLDivElement | null>(null);
   const liveVideoRef = useRef<HTMLVideoElement | null>(null);
-  const pointerStateRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-  const touchNavigationRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const pointerStateRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+  } | null>(null);
+  const touchNavigationRef = useRef<{
+    x: number;
+    y: number;
+    at: number;
+  } | null>(null);
   const wheelNavigationRef = useRef(0);
   const chromeHideTimerRef = useRef<number | null>(null);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
-  const [imageNaturalSize, setImageNaturalSize] = useState({ width: 0, height: 0 });
-  const [liveNaturalSize, setLiveNaturalSize] = useState({ width: 0, height: 0 });
+  const [imageNaturalSize, setImageNaturalSize] = useState({
+    width: 0,
+    height: 0,
+  });
+  const [liveNaturalSize, setLiveNaturalSize] = useState({
+    width: 0,
+    height: 0,
+  });
   const [imageScale, setImageScale] = useState(1);
   const [imageRotation, setImageRotation] = useState(0);
   const [imagePan, setImagePan] = useState<ViewerPan>({ x: 0, y: 0 });
   const [isDraggingImage, setIsDraggingImage] = useState(false);
   const [isChromeVisible, setIsChromeVisible] = useState(false);
-  const [navOffsets, setNavOffsets] = useState<{ left: number; right: number } | null>(null);
-  const [mediaChrome, setMediaChrome] = useState<{ top: number; left: number; right: number } | null>(null);
+  const [navOffsets, setNavOffsets] = useState<{
+    left: number;
+    right: number;
+  } | null>(null);
+  const [mediaChrome, setMediaChrome] = useState<{
+    top: number;
+    left: number;
+    right: number;
+  } | null>(null);
 
   useEffect(() => {
     setLiveSrc(livePrimary);
     setLivePlaybackError(false);
     setLiveNaturalSize({ width: 0, height: 0 });
   }, [livePrimary, activeItem?.index]);
+
+  useEffect(() => {
+    if (!activeVisual) return;
+    const previous = activeVisualRef.current;
+    if (previous && previous.key !== activeVisual.key && previous.imageSrc) {
+      setTransitionVisual(previous);
+      const timer = window.setTimeout(() => setTransitionVisual(null), 240);
+      activeVisualRef.current = activeVisual;
+      return () => window.clearTimeout(timer);
+    }
+    activeVisualRef.current = activeVisual;
+    return undefined;
+  }, [activeVisual]);
 
   useEffect(() => {
     if (!viewportRef.current) return;
@@ -484,12 +562,23 @@ function ImageViewerOverlay({
 
   const isImageRotatedSideways = imageRotation % 180 !== 0;
   const imageDisplaySize = {
-    width: isImageRotatedSideways ? imageNaturalSize.height : imageNaturalSize.width,
-    height: isImageRotatedSideways ? imageNaturalSize.width : imageNaturalSize.height,
+    width: isImageRotatedSideways
+      ? imageNaturalSize.height
+      : imageNaturalSize.width,
+    height: isImageRotatedSideways
+      ? imageNaturalSize.width
+      : imageNaturalSize.height,
   };
   const fitScale =
-    imageDisplaySize.width > 0 && imageDisplaySize.height > 0 && viewportSize.width > 0 && viewportSize.height > 0
-      ? Math.min(viewportSize.width / imageDisplaySize.width, viewportSize.height / imageDisplaySize.height, 1)
+    imageDisplaySize.width > 0 &&
+    imageDisplaySize.height > 0 &&
+    viewportSize.width > 0 &&
+    viewportSize.height > 0
+      ? Math.min(
+          viewportSize.width / imageDisplaySize.width,
+          viewportSize.height / imageDisplaySize.height,
+          1,
+        )
       : 1;
   const isOriginalView = Math.abs(imageScale - 1) < 0.02;
   const scaledImageSize = {
@@ -500,7 +589,8 @@ function ImageViewerOverlay({
     effectiveMode === "image" &&
     viewportSize.width > 0 &&
     viewportSize.height > 0 &&
-    (scaledImageSize.width > viewportSize.width + 2 || scaledImageSize.height > viewportSize.height + 2);
+    (scaledImageSize.width > viewportSize.width + 2 ||
+      scaledImageSize.height > viewportSize.height + 2);
   const liveFrameClass =
     liveNaturalSize.width > 0 && liveNaturalSize.height > 0
       ? liveNaturalSize.width >= liveNaturalSize.height
@@ -519,14 +609,33 @@ function ImageViewerOverlay({
     if (!imageNaturalSize.width || !viewportSize.width) return;
     setImageScale(fitScale);
     setImagePan({ x: 0, y: 0 });
-  }, [activeItem?.index, effectiveMode, fitScale, imageNaturalSize.height, imageNaturalSize.width, imageRotation, viewportSize.width]);
+  }, [
+    activeItem?.index,
+    effectiveMode,
+    fitScale,
+    imageNaturalSize.height,
+    imageNaturalSize.width,
+    imageRotation,
+    viewportSize.width,
+  ]);
 
   function clampImagePanValue(nextPan: ViewerPan, scale = imageScale) {
-    if (!viewportSize.width || !viewportSize.height || !imageDisplaySize.width || !imageDisplaySize.height) {
+    if (
+      !viewportSize.width ||
+      !viewportSize.height ||
+      !imageDisplaySize.width ||
+      !imageDisplaySize.height
+    ) {
       return { x: 0, y: 0 };
     }
-    const maxX = Math.max(0, (imageDisplaySize.width * scale - viewportSize.width) / 2);
-    const maxY = Math.max(0, (imageDisplaySize.height * scale - viewportSize.height) / 2);
+    const maxX = Math.max(
+      0,
+      (imageDisplaySize.width * scale - viewportSize.width) / 2,
+    );
+    const maxY = Math.max(
+      0,
+      (imageDisplaySize.height * scale - viewportSize.height) / 2,
+    );
     return {
       x: clampNumber(nextPan.x, -maxX, maxX),
       y: clampNumber(nextPan.y, -maxY, maxY),
@@ -583,7 +692,8 @@ function ImageViewerOverlay({
 
   function updateNavOffsets() {
     const overlay = overlayRef.current;
-    const mediaElement = effectiveMode === "live" ? liveVideoRef.current : imageSurfaceRef.current;
+    const mediaElement =
+      effectiveMode === "live" ? liveVideoRef.current : imageSurfaceRef.current;
     if (!overlay || !mediaElement) {
       setNavOffsets(null);
       setMediaChrome(null);
@@ -601,12 +711,30 @@ function ImageViewerOverlay({
     const inset = 14;
     const minEdge = 18;
     const maxLeft = Math.max(minEdge, overlayRect.width - 64);
-    const left = clampNumber(mediaRect.left - overlayRect.left + inset, minEdge, maxLeft);
-    const right = clampNumber(overlayRect.right - mediaRect.right + inset, minEdge, maxLeft);
-    const top = clampNumber(mediaRect.top - overlayRect.top + inset, minEdge, Math.max(minEdge, overlayRect.height - 64));
-    setNavOffsets((current) => (current?.left === left && current?.right === right ? current : { left, right }));
+    const left = clampNumber(
+      mediaRect.left - overlayRect.left + inset,
+      minEdge,
+      maxLeft,
+    );
+    const right = clampNumber(
+      overlayRect.right - mediaRect.right + inset,
+      minEdge,
+      maxLeft,
+    );
+    const top = clampNumber(
+      mediaRect.top - overlayRect.top + inset,
+      minEdge,
+      Math.max(minEdge, overlayRect.height - 64),
+    );
+    setNavOffsets((current) =>
+      current?.left === left && current?.right === right
+        ? current
+        : { left, right },
+    );
     setMediaChrome((current) =>
-      current?.top === top && current?.left === left && current?.right === right ? current : { top, left, right },
+      current?.top === top && current?.left === left && current?.right === right
+        ? current
+        : { top, left, right },
     );
   }
 
@@ -632,21 +760,39 @@ function ImageViewerOverlay({
   function handleImagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (effectiveMode !== "image") return;
     if (!imageCanPan) return;
-    pointerStateRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    pointerStateRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    };
     event.currentTarget.setPointerCapture(event.pointerId);
     setIsDraggingImage(true);
   }
 
   function handleImagePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!pointerStateRef.current || pointerStateRef.current.pointerId !== event.pointerId) return;
+    if (
+      !pointerStateRef.current ||
+      pointerStateRef.current.pointerId !== event.pointerId
+    )
+      return;
     const deltaX = event.clientX - pointerStateRef.current.x;
     const deltaY = event.clientY - pointerStateRef.current.y;
-    pointerStateRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-    setImagePan((current) => clampImagePanValue({ x: current.x + deltaX, y: current.y + deltaY }));
+    pointerStateRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    };
+    setImagePan((current) =>
+      clampImagePanValue({ x: current.x + deltaX, y: current.y + deltaY }),
+    );
   }
 
   function clearImagePointer(event?: ReactPointerEvent<HTMLDivElement>) {
-    if (event && pointerStateRef.current && pointerStateRef.current.pointerId === event.pointerId) {
+    if (
+      event &&
+      pointerStateRef.current &&
+      pointerStateRef.current.pointerId === event.pointerId
+    ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     pointerStateRef.current = null;
@@ -655,14 +801,21 @@ function ImageViewerOverlay({
 
   function handleViewerWheel(event: React.WheelEvent<HTMLDivElement>) {
     if (items.length <= 1) return;
-    const mediaElement = effectiveMode === "live" ? liveVideoRef.current : imageSurfaceRef.current;
+    const mediaElement =
+      effectiveMode === "live" ? liveVideoRef.current : imageSurfaceRef.current;
     if (mediaElement) {
       const rect = mediaElement.getBoundingClientRect();
       const withinMedia =
-        event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom;
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
       if (!withinMedia) return;
     }
-    const dominantDelta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+    const dominantDelta =
+      Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+        ? event.deltaY
+        : event.deltaX;
     if (Math.abs(dominantDelta) < 2) return;
     event.preventDefault();
     const now = window.performance.now();
@@ -677,7 +830,11 @@ function ImageViewerOverlay({
       return;
     }
     const touch = event.touches[0];
-    touchNavigationRef.current = { x: touch.clientX, y: touch.clientY, at: window.performance.now() };
+    touchNavigationRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      at: window.performance.now(),
+    };
   }
 
   function handleViewerTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
@@ -688,7 +845,8 @@ function ImageViewerOverlay({
     if (!touch) return;
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.35) return;
+    if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.35)
+      return;
     navigateBy(deltaX < 0 ? 1 : -1);
   }
 
@@ -697,7 +855,11 @@ function ImageViewerOverlay({
   return (
     <div
       aria-label="图片查看层"
-      className={isChromeVisible ? "image-viewer-overlay is-chrome-visible" : "image-viewer-overlay"}
+      className={
+        isChromeVisible
+          ? "image-viewer-overlay is-chrome-visible"
+          : "image-viewer-overlay"
+      }
       onClick={onClose}
       ref={overlayRef}
       role="dialog"
@@ -720,7 +882,11 @@ function ImageViewerOverlay({
       {liveAvailable ? (
         <span
           className="image-viewer-live-badge"
-          style={mediaChrome ? { top: mediaChrome.top, left: mediaChrome.left } : undefined}
+          style={
+            mediaChrome
+              ? { top: mediaChrome.top, left: mediaChrome.left }
+              : undefined
+          }
         >
           LIVE
         </span>
@@ -760,6 +926,12 @@ function ImageViewerOverlay({
       ) : null}
 
       <div className="image-viewer-stage">
+        {transitionVisual ? (
+          <div aria-hidden="true" className="image-viewer-transition-underlay">
+            <img alt="" src={transitionVisual.imageSrc} />
+          </div>
+        ) : null}
+
         <div
           className={[
             "image-viewer-viewport",
@@ -813,7 +985,11 @@ function ImageViewerOverlay({
                   setLivePlaybackError(true);
                 }}
               />
-          {livePlaybackError ? <p className="image-viewer-note">当前浏览器无法直接播放 Live，仍可下载原片段。</p> : null}
+              {livePlaybackError ? (
+                <p className="image-viewer-note">
+                  当前浏览器无法直接播放 Live，仍可下载原片段。
+                </p>
+              ) : null}
             </div>
           ) : (
             <div className="image-viewer-media-frame is-image">
@@ -859,14 +1035,22 @@ function ImageViewerOverlay({
         {liveAvailable ? (
           <div className="image-viewer-toolbar-group">
             <button
-              className={previewMode === "image" ? "image-viewer-toolbar-button is-label is-active" : "image-viewer-toolbar-button is-label"}
+              className={
+                previewMode === "image"
+                  ? "image-viewer-toolbar-button is-label is-active"
+                  : "image-viewer-toolbar-button is-label"
+              }
               onClick={() => onPreviewModeChange("image")}
               type="button"
             >
               图片
             </button>
             <button
-              className={previewMode === "live" ? "image-viewer-toolbar-button is-label is-active" : "image-viewer-toolbar-button is-label"}
+              className={
+                previewMode === "live"
+                  ? "image-viewer-toolbar-button is-label is-active"
+                  : "image-viewer-toolbar-button is-label"
+              }
               onClick={() => onPreviewModeChange("live")}
               type="button"
             >
@@ -878,13 +1062,23 @@ function ImageViewerOverlay({
 
         <div className="image-viewer-toolbar-group is-navigation">
           {items.length > 1 ? (
-            <button aria-label="上一张" className="image-viewer-toolbar-button" onClick={() => navigateBy(-1)} type="button">
+            <button
+              aria-label="上一张"
+              className="image-viewer-toolbar-button"
+              onClick={() => navigateBy(-1)}
+              type="button"
+            >
               <ChevronLeft size={16} />
             </button>
           ) : null}
           <span className="image-viewer-toolbar-count">{`${activeIndex + 1}/${items.length}`}</span>
           {items.length > 1 ? (
-            <button aria-label="下一张" className="image-viewer-toolbar-button" onClick={() => navigateBy(1)} type="button">
+            <button
+              aria-label="下一张"
+              className="image-viewer-toolbar-button"
+              onClick={() => navigateBy(1)}
+              type="button"
+            >
               <ChevronRight size={16} />
             </button>
           ) : null}
@@ -897,7 +1091,13 @@ function ImageViewerOverlay({
               aria-label="缩小图片"
               className="image-viewer-toolbar-button"
               onClick={() =>
-                setImageScale((current) => clampNumber(Number((current - 0.14).toFixed(2)), Math.min(fitScale, 0.35), 3.5))
+                setImageScale((current) =>
+                  clampNumber(
+                    Number((current - 0.14).toFixed(2)),
+                    Math.min(fitScale, 0.35),
+                    3.5,
+                  ),
+                )
               }
               type="button"
             >
@@ -907,7 +1107,15 @@ function ImageViewerOverlay({
             <button
               aria-label="放大图片"
               className="image-viewer-toolbar-button"
-              onClick={() => setImageScale((current) => clampNumber(Number((current + 0.14).toFixed(2)), Math.min(fitScale, 0.35), 3.5))}
+              onClick={() =>
+                setImageScale((current) =>
+                  clampNumber(
+                    Number((current + 0.14).toFixed(2)),
+                    Math.min(fitScale, 0.35),
+                    3.5,
+                  ),
+                )
+              }
               type="button"
             >
               <Plus size={16} />
@@ -920,7 +1128,12 @@ function ImageViewerOverlay({
             >
               {isOriginalView ? "适应" : "1:1"}
             </button>
-            <button aria-label="旋转图片" className="image-viewer-toolbar-button" onClick={rotateImageView} type="button">
+            <button
+              aria-label="旋转图片"
+              className="image-viewer-toolbar-button"
+              onClick={rotateImageView}
+              type="button"
+            >
               <RotateCw size={16} />
             </button>
             <span className="image-viewer-toolbar-divider" />
@@ -932,8 +1145,10 @@ function ImageViewerOverlay({
             className="image-viewer-toolbar-button is-label is-download"
             download={
               effectiveMode === "live"
-                ? activeItem.liveArtifact?.label || `image_${activeItem.index}_live.mp4`
-                : activeItem.imageArtifact?.label || `image_${activeItem.index}.jpg`
+                ? activeItem.liveArtifact?.label ||
+                  `image_${activeItem.index}_live.mp4`
+                : activeItem.imageArtifact?.label ||
+                  `image_${activeItem.index}.jpg`
             }
             href={effectiveMode === "live" ? liveDownload : imageDownload}
           >
@@ -949,17 +1164,22 @@ function ImageViewerOverlay({
 function VideoPanel({
   previewArtifact,
   sourceArtifact,
+  audioArtifact,
   posterUrl,
 }: {
   previewArtifact: Artifact | null;
   sourceArtifact: Artifact | null;
+  audioArtifact: Artifact | null;
   posterUrl?: string | null;
 }) {
   const [orientation, setOrientation] = useState<VideoOrientation>("unknown");
   const [playbackError, setPlaybackError] = useState(false);
   const [aspectRatio, setAspectRatio] = useState<string>("");
   const [preferPreview, setPreferPreview] = useState(Boolean(previewArtifact));
-  const activeArtifact = (preferPreview ? previewArtifact : sourceArtifact) || sourceArtifact || previewArtifact;
+  const activeArtifact =
+    (preferPreview ? previewArtifact : sourceArtifact) ||
+    sourceArtifact ||
+    previewArtifact;
   const downloadArtifact = sourceArtifact || activeArtifact;
   const fileSize = bytesLabel(downloadArtifact?.size_bytes);
 
@@ -988,7 +1208,9 @@ function VideoPanel({
   }
 
   const panelStyle = aspectRatio
-    ? ({ ["--video-aspect-ratio" as "--video-aspect-ratio"]: aspectRatio } as CSSProperties)
+    ? ({
+        ["--video-aspect-ratio" as "--video-aspect-ratio"]: aspectRatio,
+      } as CSSProperties)
     : undefined;
 
   if (!activeArtifact || !downloadArtifact) {
@@ -996,7 +1218,11 @@ function VideoPanel({
   }
 
   return (
-    <section className="media-panel media-panel-playable" data-orientation={orientation} style={panelStyle}>
+    <section
+      className="media-panel media-panel-playable"
+      data-orientation={orientation}
+      style={panelStyle}
+    >
       <div className="media-panel-head">
         <div>
           <span className="result-section-kicker">视频</span>
@@ -1004,11 +1230,27 @@ function VideoPanel({
         </div>
 
         <div className="media-panel-actions">
-          <a className="copy-action" download href={artifactUrl(downloadArtifact)}>
+          {audioArtifact ? (
+            <a
+              className="copy-action media-action-audio"
+              download
+              href={artifactUrl(audioArtifact)}
+            >
+              <Headphones size={14} />
+              下载音频
+            </a>
+          ) : null}
+          <a
+            className="copy-action"
+            download
+            href={artifactUrl(downloadArtifact)}
+          >
             <Download size={14} />
             下载视频
           </a>
-          {fileSize ? <span className="media-size-pill">{fileSize}</span> : null}
+          {fileSize ? (
+            <span className="media-size-pill">{fileSize}</span>
+          ) : null}
         </div>
       </div>
 
@@ -1022,7 +1264,12 @@ function VideoPanel({
             src={artifactUrl(activeArtifact)}
             onCanPlay={() => setPlaybackError(false)}
             onError={() => {
-              if (preferPreview && previewArtifact && sourceArtifact && previewArtifact.download_url !== sourceArtifact.download_url) {
+              if (
+                preferPreview &&
+                previewArtifact &&
+                sourceArtifact &&
+                previewArtifact.download_url !== sourceArtifact.download_url
+              ) {
                 setPreferPreview(false);
                 return;
               }
@@ -1035,7 +1282,11 @@ function VideoPanel({
         </div>
       </div>
 
-      {playbackError ? <p className="media-panel-note">当前浏览器无法直接内联预览，仍可使用上方按钮下载原视频文件。</p> : null}
+      {playbackError ? (
+        <p className="media-panel-note">
+          当前浏览器无法直接内联预览，仍可使用上方按钮下载原视频文件。
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -1062,41 +1313,77 @@ function VideoUnavailablePanel({ notice }: { notice: string }) {
 }
 
 export function DeliverableStage({ capture }: DeliverableStageProps) {
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
+    "idle",
+  );
   const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null);
   const [previewMode, setPreviewMode] = useState<ImagePreviewMode>("image");
-  const primaryText = capture.result.views.primary || capture.result.primary_text || "";
+  const primaryText =
+    capture.result.views.primary || capture.result.primary_text || "";
   const markdownText = capture.result.views.markdown || "";
   const copyPayload = markdownText.trim() || primaryText;
-  const isLongTextResult = primaryText.trim().length >= 900 || primaryText.split("\n").filter((item) => item.trim()).length >= 8;
+  const isLongTextResult =
+    primaryText.trim().length >= 900 ||
+    primaryText.split("\n").filter((item) => item.trim()).length >= 8;
   const showImages = shouldShowImages(capture);
   const imageItems = useMemo(() => buildGalleryItems(capture), [capture]);
   const imagesZip = useMemo(
-    () => (showImages ? capture.artifacts.find((item) => item.type === "images_zip") || null : null),
+    () =>
+      showImages
+        ? capture.artifacts.find((item) => item.type === "images_zip") || null
+        : null,
     [capture.artifacts, showImages],
   );
-  const textArtifact = useMemo(() => capture.artifacts.find((item) => item.type === "txt") || null, [capture.artifacts]);
-  const markdownArtifact = useMemo(() => capture.artifacts.find((item) => item.type === "md") || null, [capture.artifacts]);
+  const textArtifact = useMemo(
+    () => capture.artifacts.find((item) => item.type === "txt") || null,
+    [capture.artifacts],
+  );
+  const markdownArtifact = useMemo(
+    () => capture.artifacts.find((item) => item.type === "md") || null,
+    [capture.artifacts],
+  );
+  const sourceAudioArtifact = useMemo(
+    () =>
+      capture.artifacts.find((item) => item.type === "source_audio") || null,
+    [capture.artifacts],
+  );
   const previewVideoArtifact = useMemo(
-    () => (capture.source.media_kind === "video" ? capture.artifacts.find((item) => item.type === "preview_media") || null : null),
+    () =>
+      capture.source.media_kind === "video"
+        ? capture.artifacts.find((item) => item.type === "preview_media") ||
+          null
+        : null,
     [capture.artifacts, capture.source.media_kind],
   );
   const sourceVideoArtifact = useMemo(
-    () => (capture.source.media_kind === "video" ? capture.artifacts.find((item) => item.type === "source_media") || null : null),
+    () =>
+      capture.source.media_kind === "video"
+        ? capture.artifacts.find((item) => item.type === "source_media") || null
+        : null,
     [capture.artifacts, capture.source.media_kind],
   );
   const fallbackVideoArtifact = useMemo(
     () =>
       capture.source.media_kind === "video"
-        ? capture.artifacts.find((item) => item.mime_type.startsWith("video/")) || null
+        ? capture.artifacts.find((item) =>
+            item.mime_type.startsWith("video/"),
+          ) || null
         : null,
     [capture.artifacts, capture.source.media_kind],
   );
-  const videoArtifact = previewVideoArtifact || sourceVideoArtifact || fallbackVideoArtifact;
+  const videoArtifact =
+    previewVideoArtifact || sourceVideoArtifact || fallbackVideoArtifact;
   const visibleFacts = useMemo(
     () =>
       capture.result.content_facts.filter((fact) =>
-        ["title", "platform", "content_type", "author", "published_at", "duration"].includes(fact.key),
+        [
+          "title",
+          "platform",
+          "content_type",
+          "author",
+          "published_at",
+          "duration",
+        ].includes(fact.key),
       ),
     [capture.result.content_facts],
   );
@@ -1123,36 +1410,42 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
 
   const titleFact = visibleFacts.find((fact) => fact.key === "title");
   const secondaryFacts = visibleFacts.filter((fact) => fact.key !== "title");
-  const factsSection = titleFact || secondaryFacts.length || sourceUrl ? (
-    <section className="facts-strip">
-      {titleFact ? (
-        <div className="facts-strip-main">
-          <div className="fact-chip fact-chip-title">
-            <span>{factLabel(titleFact.key, titleFact.label)}</span>
-            <strong title={titleFact.value}>{titleFact.value}</strong>
-          </div>
-        </div>
-      ) : null}
-
-      {secondaryFacts.length || sourceUrl ? (
-        <div className="facts-strip-side">
-          {secondaryFacts.map((fact) => (
-            <div className={`fact-chip fact-chip-${fact.key}`} key={fact.key}>
-              <span>{factLabel(fact.key, fact.label)}</span>
-              <strong title={fact.value}>{fact.value}</strong>
+  const factsSection =
+    titleFact || secondaryFacts.length || sourceUrl ? (
+      <section className="facts-strip">
+        {titleFact ? (
+          <div className="facts-strip-main">
+            <div className="fact-chip fact-chip-title">
+              <span>{factLabel(titleFact.key, titleFact.label)}</span>
+              <strong title={titleFact.value}>{titleFact.value}</strong>
             </div>
-          ))}
-          {sourceUrl ? (
-            <a className="fact-chip fact-chip-action" href={sourceUrl} rel="noreferrer" target="_blank">
-              <span>来源</span>
-              <strong>查看来源</strong>
-              <ExternalLink size={13} />
-            </a>
-          ) : null}
-        </div>
-      ) : null}
-    </section>
-  ) : null;
+          </div>
+        ) : null}
+
+        {secondaryFacts.length || sourceUrl ? (
+          <div className="facts-strip-side">
+            {secondaryFacts.map((fact) => (
+              <div className={`fact-chip fact-chip-${fact.key}`} key={fact.key}>
+                <span>{factLabel(fact.key, fact.label)}</span>
+                <strong title={fact.value}>{fact.value}</strong>
+              </div>
+            ))}
+            {sourceUrl ? (
+              <a
+                className="fact-chip fact-chip-action"
+                href={sourceUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                <span>来源</span>
+                <strong>查看来源</strong>
+                <ExternalLink size={13} />
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
+    ) : null;
 
   useEffect(() => {
     if (activeImageIndex == null) return;
@@ -1164,7 +1457,9 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
   useEffect(() => {
     if (activeImageIndex == null) return;
     const activeItem = imageItems[activeImageIndex];
-    const hasLive = Boolean(activeItem?.liveSourceUrl || activeItem?.liveArtifact);
+    const hasLive = Boolean(
+      activeItem?.liveSourceUrl || activeItem?.liveArtifact,
+    );
     setPreviewMode(hasLive ? "live" : "image");
   }, [activeImageIndex, imageItems]);
 
@@ -1188,11 +1483,17 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
       if (imageItems.length <= 1) return;
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        setActiveImageIndex((current) => (current == null ? current : (current - 1 + imageItems.length) % imageItems.length));
+        setActiveImageIndex((current) =>
+          current == null
+            ? current
+            : (current - 1 + imageItems.length) % imageItems.length,
+        );
       }
       if (event.key === "ArrowRight") {
         event.preventDefault();
-        setActiveImageIndex((current) => (current == null ? current : (current + 1) % imageItems.length));
+        setActiveImageIndex((current) =>
+          current == null ? current : (current + 1) % imageItems.length,
+        );
       }
     }
 
@@ -1215,7 +1516,9 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
           <div className="deliverable-meta">
             <span>{platformLabel(capture.source.platform)}</span>
             <span>{contentTypeLabel(capture.source.media_kind)}</span>
-            {capture.source.duration_seconds ? <span>{durationLabel(capture.source.duration_seconds)}</span> : null}
+            {capture.source.duration_seconds ? (
+              <span>{durationLabel(capture.source.duration_seconds)}</span>
+            ) : null}
           </div>
         </header>
 
@@ -1230,42 +1533,96 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                   </div>
 
                   <div className="result-actions">
+                    {sourceAudioArtifact && !hasVideoPanel ? (
+                      <a
+                        className="copy-action media-action-audio"
+                        download
+                        href={artifactUrl(sourceAudioArtifact)}
+                      >
+                        <Headphones size={14} />
+                        下载音频
+                      </a>
+                    ) : null}
+
                     {textArtifact ? (
-                      <a className="copy-action" download href={artifactUrl(textArtifact)}>
+                      <a
+                        className="copy-action"
+                        download
+                        href={artifactUrl(textArtifact)}
+                      >
                         <Download size={14} />
                         下载 .txt
                       </a>
                     ) : null}
 
                     {markdownArtifact ? (
-                      <a className="copy-action" download href={artifactUrl(markdownArtifact)}>
+                      <a
+                        className="copy-action"
+                        download
+                        href={artifactUrl(markdownArtifact)}
+                      >
                         <Download size={14} />
                         下载 .md
                       </a>
                     ) : null}
 
                     {showCopyAction ? (
-                      <button className="copy-action is-primary" onClick={() => void handleCopy()} type="button" aria-label="复制全文">
+                      <button
+                        className="copy-action is-primary"
+                        onClick={() => void handleCopy()}
+                        type="button"
+                        aria-label="复制全文"
+                      >
                         <Copy size={14} />
-                        {copyState === "copied" ? "已复制" : copyState === "failed" ? "请手动复制" : "复制全文"}
+                        {copyState === "copied"
+                          ? "已复制"
+                          : copyState === "failed"
+                            ? "请手动复制"
+                            : "复制全文"}
                       </button>
                     ) : null}
                   </div>
                 </div>
 
-                <div className={isLongTextResult ? "result-content-shell is-scrollable" : "result-content-shell"}>
+                <div
+                  className={
+                    isLongTextResult
+                      ? "result-content-shell is-scrollable"
+                      : "result-content-shell"
+                  }
+                >
                   {primaryText.trim() ? (
-                    <div className={isLongTextResult ? "result-prose result-prose-long" : "result-prose"}>
-                      {primaryText.split("\n").map((paragraph, index) =>
-                        paragraph.trim() ? <p key={`paragraph-${index}`}>{paragraph}</p> : <div className="result-gap" key={`gap-${index}`} />,
-                      )}
+                    <div
+                      className={
+                        isLongTextResult
+                          ? "result-prose result-prose-long"
+                          : "result-prose"
+                      }
+                    >
+                      {primaryText
+                        .split("\n")
+                        .map((paragraph, index) =>
+                          paragraph.trim() ? (
+                            <p key={`paragraph-${index}`}>{paragraph}</p>
+                          ) : (
+                            <div className="result-gap" key={`gap-${index}`} />
+                          ),
+                        )}
                     </div>
                   ) : (
-                    <div className={isImageOnlyResult || isVideoOnlyResult ? "result-empty result-empty-supported" : "result-empty"}>
+                    <div
+                      className={
+                        isImageOnlyResult || isVideoOnlyResult
+                          ? "result-empty result-empty-supported"
+                          : "result-empty"
+                      }
+                    >
                       {isImageOnlyResult ? (
                         <>
                           <strong>这条图文已整理完成。</strong>
-                          <p>右侧可直接查看正文图片，打包下载会在准备完成后自动可用。</p>
+                          <p>
+                            右侧可直接查看正文图片，打包下载会在准备完成后自动可用。
+                          </p>
                           <p>{`本次共保留 ${imageItems.length} 张正文图片。`}</p>
                         </>
                       ) : isVideoOnlyResult ? (
@@ -1286,12 +1643,15 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
               <VideoPanel
                 key={`${previewVideoArtifact?.download_url || "no-preview"}:${sourceVideoArtifact?.download_url || fallbackVideoArtifact?.download_url || "no-source"}`}
                 posterUrl={capture.source.thumbnail_url}
+                audioArtifact={sourceAudioArtifact}
                 previewArtifact={previewVideoArtifact}
                 sourceArtifact={sourceVideoArtifact || fallbackVideoArtifact}
               />
             ) : null}
 
-            {hasVideoPanel && !hasPlayableVideo ? <VideoUnavailablePanel notice={capture.quality.result_notice} /> : null}
+            {hasVideoPanel && !hasPlayableVideo ? (
+              <VideoUnavailablePanel notice={capture.quality.result_notice} />
+            ) : null}
 
             {!hasVideoPanel && showImages ? (
               <section className="image-gallery">
@@ -1302,7 +1662,11 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                   </div>
 
                   {imagesZip ? (
-                    <a className="copy-action" download href={artifactUrl(imagesZip)}>
+                    <a
+                      className="copy-action"
+                      download
+                      href={artifactUrl(imagesZip)}
+                    >
                       <Download size={14} />
                       全部下载
                     </a>
@@ -1318,7 +1682,11 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                   {imageItems.length ? (
                     <div className="image-grid">
                       {imageItems.map((item, index) => (
-                        <ImageGalleryCard item={item} key={`image-${item.index}`} onOpen={() => setActiveImageIndex(index)} />
+                        <ImageGalleryCard
+                          item={item}
+                          key={`image-${item.index}`}
+                          onOpen={() => setActiveImageIndex(index)}
+                        />
                       ))}
                     </div>
                   ) : (

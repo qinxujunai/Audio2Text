@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "万象成文",
+  "version": "2.0.0",
+  "identifier": "online.praxisai.wanxiang",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../../frontend/dist"
+  },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:*; img-src 'self' asset: https: data: blob:; media-src 'self' http://127.0.0.1:* https: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    },
+    "windows": [
+      {
+        "label": "main",
+        "title": "万象成文",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 980,
+        "minHeight": 680,
+        "center": true,
+        "visible": false,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Praxis AI",
+    "copyright": "Copyright 2026 Praxis AI",
+    "category": "Productivity",
+    "shortDescription": "把公开链接或本地音视频整理成可阅读、可下载的文字。",
+    "longDescription": "万象成文是一款本地优先的内容整理工具，支持公开视频、播客、图文和本地音视频文件。",
+    "resources": {
+      "sidecar/": "sidecar/",
+      "../../runtime-packs.json": "runtime-packs.json",
+      "../../NOTICE": "NOTICE",
+      "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
+  }
+}

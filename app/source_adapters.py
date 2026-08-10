@@ -1058,6 +1058,8 @@ class XiaohongshuAdapter(BaseSourceAdapter):
             )
 
         browser_error: str | None = None
+        browser_reason_code: str | None = None
+        browser_retryable = True
         browser_outcome: ExtractionOutcome | None = None
         provider_traces: list[ProviderTraceEntry] = [
             ProviderTraceEntry(stage="extract", level="info", provider="browser_provider", message="开始尝试浏览器会话。")
@@ -1079,6 +1081,8 @@ class XiaohongshuAdapter(BaseSourceAdapter):
                 return browser_outcome
         except BrowserProviderError as exc:
             browser_error = exc.message
+            browser_reason_code = exc.reason_code
+            browser_retryable = exc.retryable
             provider_traces.append(
                 ProviderTraceEntry(
                     stage="extract",
@@ -1090,6 +1094,8 @@ class XiaohongshuAdapter(BaseSourceAdapter):
             )
         except ExtractionError as exc:
             browser_error = exc.message
+            browser_reason_code = exc.reason_code
+            browser_retryable = exc.retryable
             provider_traces.append(
                 ProviderTraceEntry(
                     stage="extract",
@@ -1143,6 +1149,15 @@ class XiaohongshuAdapter(BaseSourceAdapter):
                 browser_outcome.fallback_used = False
                 browser_outcome.provider_traces = list(provider_traces)
                 return _prepend_warnings(browser_outcome, [browser_error] if browser_error else [])
+            if browser_reason_code in {"browser_challenge_required", "browser_session_expired"} and browser_error:
+                raise ExtractionError(
+                    "extract",
+                    browser_error,
+                    warnings=([browser_error] if browser_error else []) + list(exc.warnings),
+                    reason_code=browser_reason_code,
+                    retryable=browser_retryable,
+                    provider_traces=list(provider_traces),
+                ) from exc
             exc.warnings = ([browser_error] if browser_error else []) + list(exc.warnings)
             exc.provider_traces = list(provider_traces)
             raise

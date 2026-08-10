@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "application_compatibility": ">=2.0.0 <3.0.0",
+  "packs": [
+    {
+      "id": "ffmpeg-essentials-windows-x64",
+      "version": "9.0",
+      "url": "https://github.com/qinxujunai/Audio2Text/releases/download/runtime-v1/ffmpeg-essentials-9.0-windows-x64.zip",
+      "sha256": "92ce52515025d2a89ba6fee617081aeeab10fa6044586d79f591f977647b7e57",
+      "size_bytes": 77319028,
+      "install_subdir": "ffmpeg",
+      "archive_format": "zip",
+      "required": true
+    },
+    {
+      "id": "sensevoice-small-int8",
+      "version": "2025.09.09",
+      "url": "https://github.com/qinxujunai/Audio2Text/releases/download/runtime-v1/sensevoice-small-int8-2025-09-09-v2.zip",
+      "sha256": "eb81ab14d94ac71f4d52820f7a8bf2e091d58c49ae06e08b3b330a60d5109886",
+      "size_bytes": 154731511,
+      "install_subdir": "models/sensevoice/small-int8",
+      "archive_format": "zip",
+      "required": true
+    }
+  ]
+}

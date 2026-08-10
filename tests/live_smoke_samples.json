@@ -10,18 +10,20 @@
     },
     {
       "platform": "bilibili",
-      "variant": "subtitle_video",
-      "url": "https://www.bilibili.com/video/BV1tuwezwEi7/",
+      "variant": "user_reported_video",
+      "url": "https://www.bilibili.com/video/BV1xBjW6pEym/",
       "expected_media_kind": "video",
       "require_text": true,
-      "require_source_media": true
+      "require_source_media": true,
+      "require_source_audio": true
     },
     {
       "platform": "xiaoyuzhou",
-      "variant": "transcript_audio",
-      "url": "https://www.xiaoyuzhoufm.com/episode/69b6b4fbf8b8079bfa778b80",
+      "variant": "user_reported_audio",
+      "url": "https://www.xiaoyuzhoufm.com/episode/6a2fffb043a22a6955844245",
       "expected_media_kind": "audio",
-      "require_text": true
+      "require_text": true,
+      "require_source_audio": true
     },
     {
       "platform": "douyin",
@@ -34,18 +36,22 @@
     {
       "platform": "xiaohongshu",
       "variant": "image",
-      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643",
+      "url": "https://www.xiaohongshu.com/discovery/item/69e6cc20000000001d01becd",
       "require_image_urls": true
     },
     {
       "platform": "xiaohongshu",
       "variant": "video",
-      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643"
+      "url": "https://www.xiaohongshu.com/discovery/item/6956513d000000001e022eda",
+      "expected_media_kind": "video",
+      "require_source_media": true
     },
     {
       "platform": "xiaohongshu",
       "variant": "live",
-      "url": "https://www.xiaohongshu.com/discovery/item/69cc3a5c000000001a029643"
+      "url": "https://www.xiaohongshu.com/discovery/item/6a2e9f630000000017009d6a",
+      "require_image_urls": true,
+      "require_live_artifact": true
     },
     {
       "platform": "wechat_article",

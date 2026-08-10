@@ -156,8 +156,13 @@ def main() -> int:
         return 1
 
     ensure_runtime_ready()
+    application = "app.main:app"
+    if getattr(sys, "frozen", False):
+        from app.main import app as packaged_application
+
+        application = packaged_application
     uvicorn.run(
-        "app.main:app",
+        application,
         host=API_HOST,
         port=API_PORT,
         reload=False,

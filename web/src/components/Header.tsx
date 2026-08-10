@@ -1,14 +1,23 @@
-import { Activity } from "lucide-react";
+import { Activity, Download } from "lucide-react";
 
 type HeaderStatus = "idle" | "processing" | "done" | "failed";
 
 type HeaderProps = {
   status: HeaderStatus;
   featureName: string;
+  showWindowsDownload: boolean;
   onReset: () => void;
 };
 
-export function Header({ status, featureName, onReset }: HeaderProps) {
+const WINDOWS_DOWNLOAD_URL =
+  "https://github.com/qinxujunai/Audio2Text/releases/latest/download/Wanxiang-Windows-x64-Setup.exe";
+
+export function Header({
+  status,
+  featureName,
+  showWindowsDownload,
+  onReset,
+}: HeaderProps) {
   return (
     <header className="app-header">
       <button className="brand-lockup" onClick={onReset} type="button">
@@ -23,6 +32,12 @@ export function Header({ status, featureName, onReset }: HeaderProps) {
       </button>
 
       <div className="header-meta">
+        {showWindowsDownload ? (
+          <a className="header-download" href={WINDOWS_DOWNLOAD_URL}>
+            <Download size={16} aria-hidden="true" />
+            <span>Windows 版</span>
+          </a>
+        ) : null}
         {status === "processing" ? (
           <span className="status-chip">
             <Activity className="icon-spin" size={14} />

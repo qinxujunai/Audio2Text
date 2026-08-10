@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 CaptureStatus = Literal["queued", "processing", "done", "failed"]
+CaptureResultState = Literal["processing", "text_ready", "complete", "failed"]
+ArtifactStatus = Literal["pending", "ready", "failed"]
 InputType = Literal["url", "file"]
 ContentType = Literal["video", "audio", "article", "image_article", "webpage", "unknown"]
 ResultOrigin = Literal["subtitle", "transcript", "article", "notes", "ocr"]
@@ -24,6 +26,8 @@ class ArtifactModel(BaseModel):
     download_url: str
     mime_type: str = "application/octet-stream"
     size_bytes: int | None = None
+    status: ArtifactStatus = "ready"
+    optional: bool = False
 
 
 class ArtifactPayloadModel(BaseModel):
@@ -32,6 +36,8 @@ class ArtifactPayloadModel(BaseModel):
     download_url: str
     mime_type: str = "application/octet-stream"
     size_bytes: int | None = None
+    status: ArtifactStatus = "ready"
+    optional: bool = False
 
 
 class CaptureSourceImagePayloadModel(BaseModel):
@@ -147,6 +153,7 @@ class CaptureModel(BaseModel):
     id: str
     input_type: InputType
     status: CaptureStatus
+    result_state: CaptureResultState = "processing"
     title: str | None = None
     source_platform: str
     content_type: str
@@ -191,6 +198,7 @@ class CaptureCreateUrlRequest(BaseModel):
 class CaptureStatePayloadModel(BaseModel):
     id: str
     status: CaptureStatus
+    result_state: CaptureResultState = "processing"
     input_kind: InputType
     current_stage: str = "queued"
     progress_percent: int = 0

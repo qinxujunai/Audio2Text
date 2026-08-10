@@ -7,7 +7,11 @@ import sys
 # =========================
 # 项目基础路径
 # =========================
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = (
+    Path(sys.executable).resolve().parent
+    if getattr(sys, "frozen", False)
+    else Path(__file__).resolve().parents[1]
+)
 SETTINGS_FILE = PROJECT_ROOT / "audio2text.settings.json"
 EXAMPLE_SETTINGS_FILE = PROJECT_ROOT / "audio2text.settings.example.json"
 
@@ -94,6 +98,11 @@ LOGS_DIR = WORKSPACE_DIR / "logs"
 RUNTIME_DIR = WORKSPACE_DIR / "runtime"
 MODELS_DIR = RUNTIME_DIR / "models"
 PLAYWRIGHT_BROWSERS_DIR = RUNTIME_DIR / "playwright-browsers"
+SENSEVOICE_MODEL_DIR = _path_setting(
+    "sensevoice_model_path",
+    "AUDIO2TEXT_SENSEVOICE_MODEL_PATH",
+    MODELS_DIR / "sensevoice" / "small-int8",
+)
 
 LEGACY_BUNDLED_MODEL_PATH = PROJECT_ROOT / "Assets" / "Models" / "FasterWhisper" / "medium"
 DEFAULT_MODEL_PATH = MODELS_DIR / "faster-whisper" / "medium"
@@ -127,6 +136,13 @@ MAX_UPLOAD_SIZE_MB = _int_setting(
 
 WORKER_RELAY_BASE = "https://wanxiang.praxisai.online/__proxy__"
 WORKER_TRANSCRIBE_URL = "https://wanxiang.praxisai.online/__transcribe__"
+WORKER_TRANSCRIBE_SHARED_SECRET = str(
+    _setting(
+        "worker_transcribe_shared_secret",
+        "AUDIO2TEXT_WORKER_TRANSCRIBE_SHARED_SECRET",
+        "",
+    )
+).strip()
 
 _cn_proxy_raw = str(
     _setting(
@@ -231,6 +247,9 @@ ALLOWED_ORIGINS = _csv_setting(
         "http://localhost:8000",
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "tauri://localhost",
     ],
 )
 

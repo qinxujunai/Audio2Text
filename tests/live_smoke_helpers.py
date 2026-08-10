@@ -92,6 +92,14 @@ def validate_live_smoke_samples(payload: object) -> list[str]:
     if missing_variants:
         errors.append("xiaohongshu success samples are missing variants: " + ", ".join(missing_variants))
 
+    xiaohongshu_urls = [
+        str(sample.get("url", "")).strip()
+        for sample in success_items
+        if isinstance(sample, dict) and str(sample.get("platform", "")).strip() == "xiaohongshu"
+    ]
+    if len(xiaohongshu_urls) != len(set(xiaohongshu_urls)):
+        errors.append("xiaohongshu success variants must use distinct sample URLs")
+
     return errors
 
 

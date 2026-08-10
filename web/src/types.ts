@@ -43,6 +43,8 @@ export type Artifact = {
   download_url: string;
   mime_type: string;
   size_bytes?: number | null;
+  status: "pending" | "ready" | "failed";
+  optional: boolean;
 };
 
 export type CaptureSourceImage = {
@@ -55,6 +57,7 @@ export type CaptureEnvelope = {
   capture: {
     id: string;
     status: CaptureStatus;
+    result_state: "processing" | "text_ready" | "complete" | "failed";
     input_kind: "url" | "file";
     current_stage: string;
     progress_percent: number;
@@ -92,7 +95,8 @@ export type CaptureEnvelope = {
     completeness: "full" | "substantial" | "partial";
     cache_hit: boolean;
     transcript_status: "skipped" | "subtitle" | "transcribed" | "failed";
-    text_source: "none" | "subtitle" | "article" | "notes" | "transcript" | "ocr";
+    text_source:
+      "none" | "subtitle" | "article" | "notes" | "transcript" | "ocr";
     subtitle_source: "none" | "manual" | "auto" | "translated";
     selected_language: string;
     result_notice: string;
@@ -130,4 +134,14 @@ export type ConfigResponse = {
   public_preview_mode?: boolean;
   transcription_available?: boolean;
   transcription_provider?: string;
+  runtime_target?: string;
+  capabilities?: Record<string, boolean>;
+};
+
+export type RuntimePack = {
+  id: string;
+  version: string;
+  size_bytes: number;
+  required: boolean;
+  installed: boolean;
 };

@@ -1,0 +1,98 @@
+name: Release Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install and test
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip uv
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s tests -p "test_*.py"
+          node --test scripts/cf_worker_security.test.mjs
+          Push-Location web
+          npm ci
+          npm audit --omit=dev --audit-level=high
+          npm exec tsc -- --noEmit
+          npm run build
+          Pop-Location
+
+      - name: Build Python sidecar
+        shell: pwsh
+        run: .\scripts\build_desktop_sidecar.ps1 -Clean
+
+      - name: Build Windows installers
+        working-directory: web
+        shell: pwsh
+        run: npm run desktop:build
+
+      - name: Collect release assets and hashes
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          $installer = Get-ChildItem web\src-tauri\target\release\bundle\nsis -File -Filter *.exe |
+            Select-Object -First 1
+          if (-not $installer) { throw "NSIS installer was not generated" }
+          Copy-Item $installer.FullName release\Wanxiang-Windows-x64-Setup.exe
+          Get-ChildItem release -File | Get-FileHash -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
+            Set-Content release\SHA256SUMS.txt -Encoding ascii
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: release/sbom.spdx.json
+          upload-artifact: false
+
+      - name: Attest installers
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            release/*.exe
+
+      - name: Attest SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            release/*.exe
+          sbom-path: release/sbom.spdx.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wanxiang-windows-${{ github.sha }}
+          path: release/*
+          if-no-files-found: error
+
+      - name: Upload tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" release/* --verify-tag --generate-notes --title "万象成文 ${{ github.ref_name }}"
