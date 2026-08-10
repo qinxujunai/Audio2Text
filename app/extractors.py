@@ -353,6 +353,8 @@ def _classify_external_error(message: str, *, platform: str = "", stage: str = "
         return "source_not_found", False
     if "http error 403" in cleaned or "forbidden" in cleaned:
         return "source_access_restricted", False
+    if "http error 412" in cleaned or "precondition failed" in cleaned:
+        return f"{platform or 'source'}_{stage}_precondition_failed", True
     if "timed out" in cleaned or "timeout" in cleaned:
         return f"{platform or 'source'}_{stage}_timeout", True
     if "connection" in cleaned or "temporarily unavailable" in cleaned:
@@ -576,13 +578,22 @@ def _fetch_text(url: str, *, timeout_seconds: float | None = None, platform: str
         ) from exc
 
 
-def _download_file(url: str, target_path: Path, *, platform: str | None = None) -> Path:
+def _download_file(
+    url: str,
+    target_path: Path,
+    *,
+    platform: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> Path:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     last_error: httpx.HTTPError | None = None
     for _ in range(3):
         try:
             target_path.unlink(missing_ok=True)
-            with _httpx_client(proxy=_proxy_for_platform(platform)) as client:
+            request_headers = _request_headers()
+            if headers:
+                request_headers.update(headers)
+            with _httpx_client(proxy=_proxy_for_platform(platform), headers=request_headers) as client:
                 with client.stream("GET", url) as response:
                     response.raise_for_status()
                     with open(target_path, "wb") as handle:
@@ -1150,6 +1161,14 @@ def _ytdlp_metadata(url: str, capture_dir: Path, cookie_text: str = "", platform
         "http_headers": {"User-Agent": DEFAULT_USER_AGENT},
         "logger": SilentYtdlpLogger(),
     }
+    if platform == "youtube":
+        base_options.update(
+            {
+                "socket_timeout": 8,
+                "retries": 0,
+                "extractor_retries": 0,
+            }
+        )
     last_exc: Exception | None = None
     for browser_cookie_source in _browser_cookie_sources(cookie_file, platform):
         options = dict(base_options)
@@ -1287,10 +1306,10 @@ def _download_media_selection_with_ytdlp(
     if platform == "youtube":
         base_options.update(
             {
-                "socket_timeout": 20,
-                "retries": 3,
-                "fragment_retries": 3,
-                "extractor_retries": 3,
+                "socket_timeout": 8,
+                "retries": 0,
+                "fragment_retries": 1,
+                "extractor_retries": 0,
             }
         )
     last_exc: Exception | None = None
@@ -1412,7 +1431,11 @@ def extract_youtube_transcript(
     if not video_id:
         raise ExtractionError("resolve", "YouTube 链接可访问，但没有解析出视频 ID。")
 
-    final_url, html = _fetch_text(resolved.normalized_url, platform="youtube")
+    final_url, html = _fetch_text(
+        resolved.normalized_url,
+        timeout_seconds=10.0,
+        platform="youtube",
+    )
     meta = _extract_meta_tags(html)
     title = meta.get("og:title") or meta.get("title") or f"YouTube {video_id}"
     description = meta.get("og:description") or meta.get("description") or ""
@@ -1510,7 +1533,7 @@ def _youtube_via_invidious(video_id: str) -> tuple[str, str, str, str, str]:
     random.shuffle(instances)
     for instance in instances:
         try:
-            with _httpx_client(timeout=12.0) as client:
+            with _httpx_client(timeout=6.0) as client:
                 resp = client.get(f"{instance}/api/v1/videos/{video_id}")
                 resp.raise_for_status()
                 data = resp.json()
@@ -1591,7 +1614,7 @@ def _extract_youtube_captions_from_page(html: str) -> str:
         caption_url = "https:" + caption_url
 
     # Fetch caption XML via relay or direct
-    _, caption_xml = _fetch_text(caption_url, platform="youtube")
+    _, caption_xml = _fetch_text(caption_url, timeout_seconds=10.0, platform="youtube")
 
     try:
         root = ET.fromstring(caption_xml)
@@ -1970,12 +1993,149 @@ def _extract_bilibili_video_id(url: str) -> str:
         return ""
     for segment in path.split("/"):
         if segment.lower().startswith("bv") and len(segment) >= 10:
-            return segment.upper()
+            return segment
     for segment in path.split("/"):
         if segment.lower().startswith("av") and segment[2:].isdigit():
             return segment.lower()
     match = re.search(r"(BV[a-zA-Z0-9]{8,12})", url, re.IGNORECASE)
     return match.group(1) if match else ""
+
+
+def _bilibili_headers() -> dict[str, str]:
+    headers = _request_headers()
+    headers.update(
+        {
+            "Referer": "https://www.bilibili.com/",
+            "Origin": "https://www.bilibili.com",
+        }
+    )
+    return headers
+
+
+def _bilibili_api_json(client: httpx.Client, url: str, *, reason_code: str) -> dict:
+    try:
+        response = client.get(url)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        code, retryable = _classify_external_error(str(exc), platform="bilibili", stage="extract")
+        raise ExtractionError(
+            "extract",
+            f"B站 API 请求失败：{_strip_ansi(str(exc))}",
+            reason_code=code if code != DEFAULT_REASON_CODES["extract"] else reason_code,
+            retryable=retryable,
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise ExtractionError("extract", "B站 API 没有返回有效数据。", reason_code=reason_code, retryable=True)
+    if payload.get("code") not in (0, None):
+        message = str(payload.get("message") or payload.get("msg") or "B站 API 返回异常。")
+        raise ExtractionError("extract", message, reason_code=reason_code, retryable=True)
+    return payload
+
+
+def _bilibili_subtitle_url(player_data: dict) -> str:
+    subtitle_info = player_data.get("subtitle", {}).get("subtitles") if isinstance(player_data.get("subtitle"), dict) else []
+    if not isinstance(subtitle_info, list) or not subtitle_info:
+        return ""
+    for item in subtitle_info:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("subtitle_url") or "").strip()
+        if not url:
+            continue
+        return url if url.startswith("http") else f"https:{url}"
+    return ""
+
+
+def _bilibili_progressive_media_url(playurl_data: dict) -> str:
+    durls = playurl_data.get("durl") if isinstance(playurl_data.get("durl"), list) else []
+    for item in durls:
+        if isinstance(item, dict) and item.get("url"):
+            return str(item["url"])
+    return ""
+
+
+def _bilibili_best_dash_pair(playurl_data: dict) -> tuple[str, str]:
+    dash = playurl_data.get("dash") if isinstance(playurl_data.get("dash"), dict) else {}
+    videos = dash.get("video") if isinstance(dash.get("video"), list) else []
+    audios = dash.get("audio") if isinstance(dash.get("audio"), list) else []
+
+    def media_url(item: dict) -> str:
+        return str(item.get("baseUrl") or item.get("base_url") or "").strip()
+
+    def video_rank(item: dict) -> tuple[int, int]:
+        try:
+            height = int(item.get("height") or 0)
+        except (TypeError, ValueError):
+            height = 0
+        try:
+            bandwidth = int(item.get("bandwidth") or 0)
+        except (TypeError, ValueError):
+            bandwidth = 0
+        height_score = height if height <= VIDEO_DELIVERY_TARGET_MAX_HEIGHT else 0
+        return height_score, bandwidth
+
+    def audio_rank(item: dict) -> int:
+        try:
+            return int(item.get("bandwidth") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    video = next((item for item in sorted(videos, key=video_rank, reverse=True) if isinstance(item, dict) and media_url(item)), None)
+    audio = next((item for item in sorted(audios, key=audio_rank, reverse=True) if isinstance(item, dict) and media_url(item)), None)
+    return (media_url(video), media_url(audio)) if video and audio else ("", "")
+
+
+def _download_bilibili_media(
+    client: httpx.Client,
+    *,
+    aid: object,
+    cid: object,
+    bvid: str,
+    capture_dir: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[Path | None, list[str]]:
+    warnings: list[str] = []
+    common_query = f"avid={aid}&cid={cid}&bvid={bvid}&fnver=0&fourk=1"
+    progressive_url = f"https://api.bilibili.com/x/player/playurl?{common_query}&qn=64&fnval=0"
+    dash_url = f"https://api.bilibili.com/x/player/playurl?{common_query}&qn=64&fnval=16"
+
+    try:
+        payload = _bilibili_api_json(client, progressive_url, reason_code="bilibili_playurl_failed")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        media_url = _bilibili_progressive_media_url(data)
+        if media_url:
+            media_path = capture_dir / "bilibili_source.mp4"
+            if progress_callback is not None:
+                progress_callback(36, "正在下载 B站原视频文件。")
+            _download_file(media_url, media_path, platform="bilibili", headers=_bilibili_headers())
+            if media_path.exists():
+                return media_path, warnings
+    except ExtractionError as exc:
+        warnings.append(f"渐进式视频下载失败：{exc.message}")
+
+    try:
+        payload = _bilibili_api_json(client, dash_url, reason_code="bilibili_dash_failed")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        video_url, audio_url = _bilibili_best_dash_pair(data)
+        if not video_url or not audio_url:
+            return None, warnings + ["B站 DASH 播放地址缺少视频或音频流。"]
+        if progress_callback is not None:
+            progress_callback(36, "正在下载 B站视频与音频流。")
+        video_path = capture_dir / "bilibili_video.m4s"
+        audio_path = capture_dir / "bilibili_audio.m4s"
+        output_path = capture_dir / "bilibili_source.mp4"
+        _download_file(video_url, video_path, platform="bilibili", headers=_bilibili_headers())
+        _download_file(audio_url, audio_path, platform="bilibili", headers=_bilibili_headers())
+        merged = _merge_media_streams(video_path, audio_path, output_path)
+        if merged is not None:
+            return merged, warnings
+        warnings.append("B站 DASH 视频与音频合并失败。")
+    except ExtractionError as exc:
+        warnings.append(f"DASH 视频下载失败：{exc.message}")
+
+    return None, warnings
 
 
 def extract_bilibili_direct(
@@ -1991,85 +2151,61 @@ def extract_bilibili_direct(
     if progress_callback is not None:
         progress_callback(22, "正在请求 B站视频信息。")
 
-    headers = _request_headers()
-    headers["Referer"] = "https://www.bilibili.com/"
+    headers = _bilibili_headers()
     info_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
 
     with _httpx_client(headers=headers) as client:
-        try:
-            response = client.get(info_url)
-            response.raise_for_status()
-            payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            raise ExtractionError("extract", f"B站 API 请求失败：{exc}", retryable=True) from exc
+        payload = _bilibili_api_json(client, info_url, reason_code="bilibili_video_invalid")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else None
+        if not isinstance(data, dict):
+            raise ExtractionError("extract", "B站 API 没有返回视频数据。", reason_code="bilibili_video_invalid", retryable=True)
 
-    data = payload.get("data") if isinstance(payload, dict) else None
-    if not isinstance(data, dict):
-        raise ExtractionError("extract", "B站 API 没有返回视频数据。", retryable=True)
+        title = str(data.get("title") or resolved.normalized_url)
+        description = str(data.get("desc") or "")
+        duration_seconds = float(data["duration"]) if data.get("duration") else None
+        author = str(data.get("owner", {}).get("name") or "")
+        thumbnail_url = str(data.get("pic") or "")
+        cid_list = data.get("pages") if isinstance(data.get("pages"), list) else []
+        cid = cid_list[0].get("cid") if cid_list and isinstance(cid_list[0], dict) else data.get("cid")
+        aid = data.get("aid")
 
-    title = str(data.get("title") or resolved.normalized_url)
-    description = str(data.get("desc") or "")
-    duration_seconds = float(data["duration"]) if data.get("duration") else None
-    author = str(data.get("owner", {}).get("name") or "")
-    thumbnail_url = str(data.get("pic") or "")
-    cid_list = data.get("pages") if isinstance(data.get("pages"), list) else []
-    cid = cid_list[0].get("cid") if cid_list else data.get("cid")
-    aid = data.get("aid")
-
-    if progress_callback is not None:
-        progress_callback(28, "已拿到视频信息，正在获取播放地址。")
-
-    subtitle_text = ""
-    subtitle_timeline = ""
-    media_url = ""
-    warnings: list[str] = []
-
-    if cid and aid:
-        try:
-            player_url = (
-                f"https://api.bilibili.com/x/player/wbi/v2"
-                f"?aid={aid}&cid={cid}&bvid={bvid}&fnval=4048&fnver=0&fourk=1"
-            )
-            player_resp = client.get(player_url)
-            player_resp.raise_for_status()
-            player_data = player_resp.json()
-
-            if isinstance(player_data.get("data"), dict):
-                pd = player_data["data"]
-
-                subtitle_info = pd.get("subtitle", {}).get("subtitles") if isinstance(pd.get("subtitle"), dict) else []
-                if subtitle_info:
-                    best_sub = subtitle_info[0]
-                    sub_url = best_sub.get("subtitle_url", "")
-                    if sub_url and not sub_url.startswith("http"):
-                        sub_url = f"https:{sub_url}"
-                    if sub_url:
-                        try:
-                            sub_path = capture_dir / "bilibili_subtitle.json"
-                            _download_file(sub_url, sub_path)
-                            raw = sub_path.read_text(encoding="utf-8", errors="ignore")
-                            subtitle_text, subtitle_timeline = _parse_bilibili_subtitle(raw)
-                        except Exception as exc:
-                            warnings.append(f"字幕下载失败：{exc}")
-
-                durls = pd.get("durl") if isinstance(pd.get("durl"), list) else []
-                if durls:
-                    media_url = str(durls[0].get("url") or "")
-        except (httpx.HTTPError, ValueError) as exc:
-            warnings.append(f"播放地址获取失败：{exc}")
-
-    if media_url:
-        media_path = capture_dir / "bilibili_source.mp4"
         if progress_callback is not None:
-            progress_callback(36, "正在下载原视频文件。")
-        try:
-            _download_file(media_url, media_path, platform="bilibili", headers={"Referer": "https://www.bilibili.com/"})
-            if not media_path.exists():
-                media_url = ""
-                warnings.append("视频文件未能成功下载。")
-        except ExtractionError as exc:
-            media_url = ""
-            warnings.append(exc.message)
+            progress_callback(28, "已拿到视频信息，正在获取字幕和播放地址。")
+
+        subtitle_text = ""
+        subtitle_timeline = ""
+        media_path: Path | None = None
+        warnings: list[str] = []
+
+        if cid and aid:
+            try:
+                player_url = (
+                    "https://api.bilibili.com/x/player/wbi/v2"
+                    f"?aid={aid}&cid={cid}&bvid={bvid}&fnval=4048&fnver=0&fourk=1"
+                )
+                player_payload = _bilibili_api_json(client, player_url, reason_code="bilibili_player_failed")
+                player_data = player_payload.get("data") if isinstance(player_payload.get("data"), dict) else {}
+                sub_url = _bilibili_subtitle_url(player_data)
+                if sub_url:
+                    try:
+                        sub_path = capture_dir / "bilibili_subtitle.json"
+                        _download_file(sub_url, sub_path, platform="bilibili", headers=headers)
+                        raw = sub_path.read_text(encoding="utf-8", errors="ignore")
+                        subtitle_text, subtitle_timeline = _parse_bilibili_subtitle(raw)
+                    except Exception as exc:
+                        warnings.append(f"字幕下载失败：{exc}")
+            except ExtractionError as exc:
+                warnings.append(f"播放信息获取失败：{exc.message}")
+
+            media_path, media_warnings = _download_bilibili_media(
+                client,
+                aid=aid,
+                cid=cid,
+                bvid=bvid,
+                capture_dir=capture_dir,
+                progress_callback=progress_callback,
+            )
+            warnings.extend(media_warnings)
 
     if progress_callback is not None:
         progress_callback(50, "B站内容提取完成。")
@@ -2087,7 +2223,7 @@ def extract_bilibili_direct(
         thumbnail_url=thumbnail_url,
         duration_seconds=duration_seconds,
         image_urls=[],
-        strategy=["direct_api"] + (["subtitle"] if subtitle_text else []) + (["media_direct"] if media_url else []),
+        strategy=["direct_api"] + (["subtitle"] if subtitle_text else []) + (["media_direct"] if media_path else []),
         warnings=warnings,
         notes_text=description[:280] if description else "",
         subtitle_text=subtitle_text,
@@ -2096,8 +2232,8 @@ def extract_bilibili_direct(
         selected_language="zh" if subtitle_text else "",
         article_text="",
         primary_text=subtitle_text,
-        media_file_path=str(media_path) if media_path and Path(media_path).exists() else "",
-        needs_transcription=bool(media_url) and not bool(subtitle_text),
+        media_file_path=str(media_path) if media_path and media_path.exists() else "",
+        needs_transcription=bool(media_path) and not bool(subtitle_text),
     )
 
 

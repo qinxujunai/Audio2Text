@@ -601,6 +601,60 @@ def _persist_source_media_artifact(capture, media_file_path: str | None) -> Arti
     return _artifact_entry(capture.id, "source_media", "原视频", target)
 
 
+def _audio_codec_for_path(path: Path) -> str:
+    try:
+        with av.open(str(path)) as container:
+            for stream in container.streams:
+                if stream.type == "audio":
+                    return str(getattr(getattr(stream, "codec_context", None), "name", "") or "").lower()
+    except Exception:
+        return ""
+    return ""
+
+
+def _persist_source_audio_artifact(capture, artifact_dir: Path, media_file_path: str | None) -> ArtifactModel | None:
+    if capture.source.content_type not in {"audio", "video"} or not media_file_path:
+        return None
+
+    source_path = Path(media_file_path)
+    if not source_path.exists() or not source_path.is_file():
+        return None
+
+    audio_codec = _audio_codec_for_path(source_path)
+    if not audio_codec:
+        return None
+
+    if capture.source.content_type == "audio":
+        return _artifact_entry(capture.id, "source_audio", "原音频", source_path)
+
+    if not FFMPEG_PATH.exists():
+        return None
+
+    target_path = artifact_dir / "source_audio.m4a"
+    target_path.unlink(missing_ok=True)
+    copy_friendly_codecs = {"aac", "mp4a"}
+    audio_args = ["-c:a", "copy"] if audio_codec in copy_friendly_codecs else ["-c:a", "aac", "-b:a", "192k"]
+    command = [
+        str(FFMPEG_PATH),
+        "-y",
+        "-i",
+        str(source_path),
+        "-vn",
+        "-map",
+        "0:a:0",
+        *audio_args,
+        "-movflags",
+        "+faststart",
+        str(target_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0 or not target_path.exists():
+        target_path.unlink(missing_ok=True)
+        logger.warning("source audio export failed for %s: %s", source_path, (result.stderr or result.stdout or "").strip())
+        return None
+    return _artifact_entry(capture.id, "source_audio", "原音频", target_path)
+
+
 def _probe_video_stream_profile(path: Path) -> tuple[str, str, str]:
     try:
         with av.open(str(path)) as container:
@@ -1125,6 +1179,9 @@ def _persist_result_artifacts(
     source_media_artifact = _persist_source_media_artifact(capture, media_file_path)
     if source_media_artifact is not None:
         artifacts.append(source_media_artifact)
+    source_audio_artifact = _persist_source_audio_artifact(capture, artifact_dir, media_file_path)
+    if source_audio_artifact is not None:
+        artifacts.append(source_audio_artifact)
     preview_media_artifact = _persist_preview_media_artifact(capture, artifact_dir, media_file_path)
     if preview_media_artifact is not None:
         artifacts.append(preview_media_artifact)
@@ -1243,6 +1300,7 @@ def _prepare_image_assets_in_background(capture_id: str) -> None:
         current = repository.get(capture_id) or capture
         persist_capture(
             asset_preparation_pending=False,
+            result_state="complete",
             result=persisted_result,
             processing=_update_processing(
                 current,
@@ -1259,6 +1317,7 @@ def _prepare_image_assets_in_background(capture_id: str) -> None:
         if current is not None and current.asset_preparation_pending:
             persist_capture(
                 asset_preparation_pending=False,
+                result_state="complete",
                 processing=_update_processing(
                     current,
                     current_stage="completed",
@@ -1415,6 +1474,7 @@ def recover_pending_captures() -> None:
             repository.update(
                 capture_id,
                 status="failed",
+                result_state="failed",
                 finished_at=now_iso(),
                 error_stage="input",
                 error_message="排队中的本地文件已经不存在，请重新上传。",
@@ -1430,6 +1490,7 @@ def recover_pending_captures() -> None:
         repository.update(
             capture_id,
             status="queued",
+            result_state="processing",
             error_stage=None,
             error_message=None,
             processing=_update_processing(
@@ -1517,6 +1578,7 @@ def process_capture(capture_id: str) -> None:
         diagnostics.start("resolve", input_type=capture.input_type)
         persist_capture(
             status="processing",
+            result_state="processing",
             started_at=capture.started_at or now_iso(),
             processing=_update_processing(
                 capture,
@@ -1713,6 +1775,7 @@ def process_capture(capture_id: str) -> None:
         _ensure_final_result(source, result)
         persist_capture(
             source=source,
+            result_state="text_ready",
             processing=_update_processing(
                 capture,
                 current_stage="compose",
@@ -1756,6 +1819,7 @@ def process_capture(capture_id: str) -> None:
         )
         persist_capture(
             status="done",
+            result_state="text_ready" if prepare_images_async else "complete",
             finished_at=now_iso(),
             source=source,
             asset_preparation_pending=prepare_images_async,
@@ -1794,6 +1858,7 @@ def process_capture(capture_id: str) -> None:
         repository.update(
             capture.id,
             status="failed",
+            result_state="failed",
             finished_at=now_iso(),
             error_stage=exc.stage,
             error_message=_public_error_message_with_reason(exc.stage, exc.reason_code, exc.message),
@@ -1830,6 +1895,7 @@ def process_capture(capture_id: str) -> None:
         repository.update(
             capture.id,
             status="failed",
+            result_state="failed",
             finished_at=now_iso(),
             error_stage="internal",
             error_message=PUBLIC_ERROR_MESSAGES["internal"],

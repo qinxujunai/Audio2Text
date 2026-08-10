@@ -5,6 +5,7 @@
 这是一个单机、单实例、文件存储、单页交付型产品。
 
 部署目标固定为：
+
 - 保持项目级环境隔离
 - 保持结果可交付
 - 保持失败可解释
@@ -30,9 +31,10 @@ workspace/
 ```
 
 说明：
+
 - `models`、`playwright-browsers`、`ffmpeg`、`browser-profile` 都属于项目级运行时目录。
 - `captures`、`artifacts`、`temp`、`logs` 都属于项目级数据目录。
-- 视频预览件 `preview_media`、下载原件 `source_media`、图片、Live 片段、`.txt/.md` 都会落到 `workspace/artifacts/<capture_id>/`。
+- 视频预览件 `preview_media`、下载原件 `source_media`、音频导出件 `source_audio`、图片、Live 片段、`.txt/.md` 都会落到 `workspace/artifacts/<capture_id>/`。
 
 ## 启动前 preflight
 
@@ -166,6 +168,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 要求：
+
 - `workspace/runtime/models/faster-whisper/medium` 已经存在可用模型文件。
 - 如需浏览器提取链路，挂载后的 `workspace/runtime/playwright-browsers` 也要可用。
 
@@ -184,6 +187,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 当前约定：
+
 - 镜像内会自行执行前端构建。
 - Docker 不依赖宿主机已有 `frontend/dist`。
 - 容器内默认使用镜像自带 `/usr/bin/ffmpeg`。
@@ -205,6 +209,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 ```
 
 默认会做四件事：
+
 - 检查本地服务是否可用；不可用时自动启动 `scripts.start_api`。
 - 优先创建 Cloudflare Quick Tunnel。
 - 如果 Cloudflare 建连失败，自动回退 localtunnel。
@@ -218,13 +223,20 @@ $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 ```
 
 注意：
+
 - 电脑不能关，启动窗口不能关。
 - localtunnel 首次访问可能出现 IP 确认页；按启动器提示输入页面显示的 IP 即可继续。
 - 这仍是临时演示链接，不是正式云部署。
 
 ### 内部 tunnel helper
 
-日常启动只使用 `start_api.bat`。它会调用 `scripts.public_preview`，并在内部优先尝试 Cloudflare Quick Tunnel，失败时回退 localtunnel。
+日常启动只使用 `start_api.bat`。它会先调用 `scripts/start_api_bootstrap.ps1` 做环境自检和自愈，再调用 `scripts.public_preview`；公网链路优先尝试 Cloudflare Quick Tunnel，失败时回退 localtunnel。
+
+启动自检负责：
+
+- `.venv` 缺失、损坏或 uv 托管 Python 路径漂移时，自动用 Python 3.11 重建虚拟环境。
+- 按 `requirements.txt` 的锁定版本安装依赖，减少换电脑或未来依赖漂移造成的故障。
+- 检查前端构建产物、模型、ffmpeg、Playwright Chromium、CUDA runtime 和端口。
 
 `scripts/start_cloudflare_tunnel.py` 和 `scripts/start_localtunnel.py` 只保留为内部 helper，供公网预览编排器自动调用，或排障时临时使用。不要把它们作为用户文档里的同级启动入口。
 
@@ -235,6 +247,7 @@ $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 适合做免费云端预览。它能给 `https://<namespace>-<space>.hf.space` 链接，但免费磁盘不是长期持久存储，运行产物只适合演示。
 
 前提：
+
 - 已安装项目 `.venv` 内的 `hf` CLI；当前仓库可直接使用 `.\.venv\Scripts\hf.exe`。
 - 已执行 `.\.venv\Scripts\hf.exe auth login`。
 - 已准备 OpenAI-compatible 转写服务；不要在免费 Space 里默认依赖本地 Faster-Whisper 模型目录。
@@ -277,6 +290,7 @@ app_port: 8000
 ```
 
 限制：
+
 - 免费 Space 的 `workspace` 数据可能随重启、重建或休眠丢失，不要当正式资料库。
 - OpenAI-compatible provider 的 API key 只能放在 Space Secret，不要写进仓库。
 - 高波动平台仍可能因为浏览器会话、验证码、平台风控失败。

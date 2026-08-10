@@ -1,0 +1,15 @@
+{
+  "name": "wanxiang-showcase",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "studio": "remotion studio src/index.ts --no-open",
+    "render": "remotion render src/index.ts WanxiangDemo ../docs/assets/wanxiang-demo.mp4 --codec h264 --crf 20"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.507",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "remotion": "4.0.507"
+  }
+}

@@ -73,6 +73,12 @@ class PlatformLiveSmokeTestCase(unittest.TestCase):
                         f"expected source_media artifact for {sample['platform']}",
                     )
 
+                if sample.get("require_source_audio", False):
+                    self.assertTrue(
+                        any(item["type"] == "source_audio" for item in payload["artifacts"]),
+                        f"expected source_audio artifact for {sample['platform']}",
+                    )
+
                 if sample.get("require_image_urls", False):
                     self.assertTrue(payload["source"]["image_urls"])
 

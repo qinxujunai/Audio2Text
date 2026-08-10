@@ -32,11 +32,18 @@ export function ProcessingStage({
   progressDetail,
   onReset,
 }: ProcessingStageProps) {
-  const normalizedProgress = Math.min(100, Math.max(phase === "bootstrapping" ? 18 : progressPercent || 0, 0));
+  const normalizedProgress = Math.min(
+    100,
+    Math.max(phase === "bootstrapping" ? 18 : progressPercent || 0, 0),
+  );
   const safeDetail = safeProgressDetail(progressDetail);
 
   return (
-    <section className={phase === "failed" ? "processing-stage is-failed" : "processing-stage"}>
+    <section
+      className={
+        phase === "failed" ? "processing-stage is-failed" : "processing-stage"
+      }
+    >
       <div className="processing-shell">
         {phase !== "failed" ? (
           <div className="processing-indicator" aria-hidden="true">
@@ -46,13 +53,18 @@ export function ProcessingStage({
         ) : null}
 
         <div className="processing-copy">
-          {phase === "failed" ? <span className="eyebrow">{eyebrow}</span> : null}
+          {phase === "failed" ? (
+            <span className="eyebrow">{eyebrow}</span>
+          ) : null}
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
 
         {phase !== "failed" ? (
-          <div className="processing-meter" aria-label={`当前进度 ${normalizedProgress}%`}>
+          <div
+            className="processing-meter"
+            aria-label={`当前进度 ${normalizedProgress}%`}
+          >
             <div className="processing-meter-track">
               <motion.span
                 className="processing-meter-fill"

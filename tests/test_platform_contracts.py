@@ -18,7 +18,11 @@ from app.browser_provider import (
 )
 from app.extractors import (
     ExtractionOutcome,
+    _bilibili_best_dash_pair,
+    _bilibili_progressive_media_url,
+    _bilibili_subtitle_url,
     _classify_external_error,
+    _extract_bilibili_video_id,
     _parse_web_subtitle,
     _select_subtitle_track,
     _select_youtube_transcript,
@@ -131,6 +135,59 @@ class PlatformContractsTestCase(unittest.TestCase):
                 resolved = resolve_url(url)
                 self.assertEqual(resolved.platform, expected)
 
+    def test_bilibili_direct_contract_selects_subtitles_and_media(self) -> None:
+        self.assertEqual(
+            _extract_bilibili_video_id("https://www.bilibili.com/video/BV1xBjW6pEym/"),
+            "BV1xBjW6pEym",
+        )
+
+        subtitle_url = _bilibili_subtitle_url(
+            {
+                "subtitle": {
+                    "subtitles": [
+                        {"subtitle_url": "//example.com/subtitle.json"},
+                    ]
+                }
+            }
+        )
+        self.assertEqual(subtitle_url, "https://example.com/subtitle.json")
+
+        progressive_url = _bilibili_progressive_media_url(
+            {"durl": [{"url": "https://media.example.com/progressive.mp4"}]}
+        )
+        self.assertEqual(progressive_url, "https://media.example.com/progressive.mp4")
+
+        video_url, audio_url = _bilibili_best_dash_pair(
+            {
+                "dash": {
+                    "video": [
+                        {
+                            "baseUrl": "https://media.example.com/4k.m4s",
+                            "height": 2160,
+                            "bandwidth": 3000000,
+                        },
+                        {
+                            "baseUrl": "https://media.example.com/720p.m4s",
+                            "height": 720,
+                            "bandwidth": 1500000,
+                        },
+                    ],
+                    "audio": [
+                        {
+                            "baseUrl": "https://media.example.com/audio-low.m4s",
+                            "bandwidth": 64000,
+                        },
+                        {
+                            "baseUrl": "https://media.example.com/audio-high.m4s",
+                            "bandwidth": 192000,
+                        },
+                    ],
+                }
+            }
+        )
+        self.assertEqual(video_url, "https://media.example.com/720p.m4s")
+        self.assertEqual(audio_url, "https://media.example.com/audio-high.m4s")
+
     def test_douyin_provider_order_prefers_browser_before_open_source(self) -> None:
         resolved = SimpleNamespace(normalized_url="https://www.douyin.com/video/1234567890")
         providers = source_adapters.DouyinAdapter().build_providers(resolved, Path(tempfile.gettempdir()))
@@ -146,6 +203,34 @@ class PlatformContractsTestCase(unittest.TestCase):
             [provider.name for provider in providers],
             ["browser_provider", "open_source_provider"],
         )
+
+    def test_xiaohongshu_preserves_browser_challenge_error_priority(self) -> None:
+        adapter = source_adapters.XiaohongshuAdapter()
+        resolved = SimpleNamespace(normalized_url="https://www.xiaohongshu.com/explore/demo")
+
+        with patch.object(
+            adapter,
+            "_browser_extract",
+            side_effect=BrowserProviderError(
+                "当前页面触发了平台验证，请刷新项目级浏览器会话后再试。",
+                reason_code="browser_challenge_required",
+                retryable=True,
+            ),
+        ), patch(
+            "app.source_adapters.extract_with_ytdlp",
+            side_effect=extractors.ExtractionError(
+                "extract",
+                "ERROR: [XiaoHongShu] No video formats found!",
+                reason_code="extract_failed",
+                retryable=False,
+            ),
+        ):
+            with self.assertRaises(extractors.ExtractionError) as caught:
+                adapter.extract(resolved, Path(tempfile.gettempdir()))
+
+        self.assertEqual(caught.exception.reason_code, "browser_challenge_required")
+        self.assertTrue(caught.exception.retryable)
+        self.assertIn("平台验证", caught.exception.message)
 
     def test_adapter_success_records_extractor_and_fallback_metadata(self) -> None:
         adapter = _FallbackAdapter()
@@ -772,6 +857,10 @@ class PlatformContractsTestCase(unittest.TestCase):
         self.assertEqual(
             _classify_external_error("ERROR: 1111111111: KeyError('bvid')", platform="bilibili", stage="extract"),
             ("bilibili_video_invalid", False),
+        )
+        self.assertEqual(
+            _classify_external_error("HTTP Error 412: Precondition Failed", platform="bilibili", stage="extract"),
+            ("bilibili_extract_precondition_failed", True),
         )
 
     def test_public_error_message_prefers_reason_code(self) -> None:

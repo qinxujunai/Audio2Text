@@ -3,14 +3,58 @@ import type {
   CaptureListResponse,
   ConfigResponse,
   CreateCaptureResponse,
+  RuntimePack,
 } from "./types";
 
-const API_BASE = window.location.origin.replace(/\/$/, "");
+type DesktopRuntime = { api_base: string; token: string };
+
+const WEB_API_BASE = window.location.origin.replace(/\/$/, "");
+let desktopRuntime: DesktopRuntime | null = null;
+let desktopRuntimePromise: Promise<DesktopRuntime | null> | null = null;
 const TEMPORARY_BUSY_MESSAGE = "服务暂时繁忙，请稍后重试。";
 
 type RequestError = Error & {
   status?: number;
 };
+
+async function getRuntime(): Promise<DesktopRuntime | null> {
+  if (desktopRuntime) return desktopRuntime;
+  if (!("__TAURI_INTERNALS__" in window)) return null;
+  if (!desktopRuntimePromise) {
+    desktopRuntimePromise = import("@tauri-apps/api/core")
+      .then(async ({ invoke }) => {
+        let lastError: unknown = null;
+        for (let attempt = 0; attempt < 30; attempt++) {
+          try {
+            return await invoke<DesktopRuntime>("desktop_runtime_info");
+          } catch (error) {
+            lastError = error;
+            await wait(100);
+          }
+        }
+        throw lastError;
+      })
+      .then((runtime) => {
+        desktopRuntime = runtime;
+        return runtime;
+      })
+      .catch((error) => {
+        desktopRuntimePromise = null;
+        throw error;
+      });
+  }
+  return desktopRuntimePromise;
+}
+
+export function resolveApiUrl(path: string, includeDesktopToken = false) {
+  const runtime = desktopRuntime;
+  const base = runtime?.api_base.replace(/\/$/, "") || WEB_API_BASE;
+  const url = new URL(path, `${base}/`);
+  if (includeDesktopToken && runtime?.token) {
+    url.searchParams.set("desktop_token", runtime.token);
+  }
+  return url.toString();
+}
 
 function _sanitizeErrorMessage(raw: string): string {
   const trimmed = raw.trim();
@@ -23,17 +67,31 @@ function _sanitizeErrorMessage(raw: string): string {
   return trimmed;
 }
 
-async function request<T>(path: string, options?: RequestInit, retries = 3): Promise<T> {
+async function request<T>(
+  path: string,
+  options?: RequestInit,
+  retries = 3,
+): Promise<T> {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(`${API_BASE}${path}`, options);
+      const runtime = await getRuntime();
+      const headers = new Headers(options?.headers);
+      if (runtime?.token) {
+        headers.set("X-Wanxiang-Desktop-Token", runtime.token);
+      }
+      const response = await fetch(resolveApiUrl(path), { ...options, headers });
       const contentType = response.headers.get("content-type") || "";
-      const payload = contentType.includes("application/json") ? await response.json() : await response.text();
+      const payload = contentType.includes("application/json")
+        ? await response.json()
+        : await response.text();
 
       if (!response.ok) {
         // Retry on server errors (502/503/504) and rate limits (429)
-        if (attempt < retries && (response.status >= 502 || response.status === 429)) {
+        if (
+          attempt < retries &&
+          (response.status >= 502 || response.status === 429)
+        ) {
           await wait(500 * (attempt + 1));
           continue;
         }
@@ -44,7 +102,9 @@ async function request<T>(path: string, options?: RequestInit, retries = 3): Pro
               ? payload.detail
               : JSON.stringify(payload);
         const safeMessage = _sanitizeErrorMessage(rawDetail || "");
-        const error = new Error(safeMessage || `HTTP ${response.status}`) as RequestError;
+        const error = new Error(
+          safeMessage || `HTTP ${response.status}`,
+        ) as RequestError;
         error.status = response.status;
         throw error;
       }
@@ -53,7 +113,12 @@ async function request<T>(path: string, options?: RequestInit, retries = 3): Pro
     } catch (error: any) {
       lastError = error;
       // Retry on network errors
-      if (attempt < retries && (error.name === 'TypeError' || error.message?.includes('fetch') || error.message?.includes('NetworkError'))) {
+      if (
+        attempt < retries &&
+        (error.name === "TypeError" ||
+          error.message?.includes("fetch") ||
+          error.message?.includes("NetworkError"))
+      ) {
         await wait(500 * (attempt + 1));
         continue;
       }
@@ -134,17 +199,41 @@ export function clearCompletedCaptures() {
 }
 
 export function deleteCapture(captureId: string) {
-  return request<{ deleted: boolean; capture_id: string }>(`/v1/captures/${captureId}`, {
-    method: "DELETE",
-  });
+  return request<{ deleted: boolean; capture_id: string }>(
+    `/v1/captures/${captureId}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 export function retryCapture(captureId: string) {
-  return request<{ capture_id: string; status: string }>(`/v1/captures/${captureId}/retry`, {
-    method: "POST",
-  });
+  return request<{ capture_id: string; status: string }>(
+    `/v1/captures/${captureId}/retry`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export function captureEventsUrl(captureId: string) {
-  return `${API_BASE}/v1/captures/${captureId}/events`;
+  return resolveApiUrl(`/v1/captures/${captureId}/events`, true);
+}
+
+export function listRuntimePacks() {
+  return request<{ packs: RuntimePack[] }>("/v1/runtime/packs");
+}
+
+export function installRuntimePack(packId: string) {
+  return request<{ id: string; version: string; installed: boolean }>(
+    `/v1/runtime/packs/${encodeURIComponent(packId)}/install`,
+    { method: "POST" },
+    0,
+  );
+}
+
+export async function restartDesktopRuntime() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("restart_backend");
+  window.location.reload();
 }

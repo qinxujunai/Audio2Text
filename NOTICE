@@ -1,0 +1,13 @@
+Wanxiang Chengwen 2.0
+Copyright 2026 Praxis AI
+
+This product includes open-source software maintained by their respective
+copyright holders. Source code is licensed under Apache-2.0 unless a file or
+component states otherwise.
+
+Runtime packages and speech-recognition model weights are separate works and
+retain their own licenses. A release must include the matching third-party
+notices and model license before those artifacts are redistributed.
+
+Praxis AI and Wanxiang Chengwen are product identifiers. This license does not
+grant trademark rights.
