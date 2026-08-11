@@ -163,6 +163,13 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertNotIn("run_mode", payload)
         self.assertIsInstance(payload["components"], dict)
 
+    def test_brand_mark_is_served_from_the_built_frontend(self) -> None:
+        response = self.client.get("/brand-mark.svg")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("image/svg+xml"))
+        self.assertIn(b'<svg xmlns="http://www.w3.org/2000/svg"', response.content)
+
     def test_windows_connection_reset_filter_is_narrow(self) -> None:
         with patch.object(capture_main.sys, "platform", "win32"):
             self.assertTrue(

@@ -22,7 +22,7 @@ export function Header({
     <header className="app-header">
       <button className="brand-lockup" onClick={onReset} type="button">
         <span className="brand-mark" aria-hidden="true">
-          <span />
+          <img src="/brand-mark.svg" alt="" />
         </span>
         <span className="brand-copy">
           <strong>Praxis AI</strong>
