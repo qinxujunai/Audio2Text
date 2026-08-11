@@ -48,6 +48,25 @@ def _has_playwright_chromium() -> bool:
         return False
 
 
+def _has_system_chromium() -> bool:
+    if not sys.platform.startswith("win"):
+        return bool(shutil.which("microsoft-edge") or shutil.which("google-chrome") or shutil.which("chromium"))
+    roots = [
+        os.environ.get("PROGRAMFILES(X86)", ""),
+        os.environ.get("PROGRAMFILES", ""),
+        os.environ.get("LOCALAPPDATA", ""),
+    ]
+    relative_paths = (
+        Path("Microsoft/Edge/Application/msedge.exe"),
+        Path("Google/Chrome/Application/chrome.exe"),
+    )
+    return any(Path(root, relative).is_file() for root in roots if root for relative in relative_paths)
+
+
+def browser_runtime_available() -> bool:
+    return _has_playwright_chromium() or _has_system_chromium()
+
+
 def _browser_profile_has_session_state() -> bool:
     if not BROWSER_PROFILE_DIR.exists():
         return False
@@ -252,7 +271,7 @@ def _check_cuda_runtime(result: PreflightResult) -> None:
 
 
 def _check_playwright_runtime(result: PreflightResult) -> None:
-    if _has_playwright_chromium():
+    if browser_runtime_available():
         return
     result.warnings.append(
         f"Playwright Chromium 运行时未安装到项目目录: {PLAYWRIGHT_BROWSERS_DIR}。抖音 / 小红书浏览器提取暂不可用。"

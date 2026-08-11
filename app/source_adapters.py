@@ -1149,7 +1149,11 @@ class XiaohongshuAdapter(BaseSourceAdapter):
                 browser_outcome.fallback_used = False
                 browser_outcome.provider_traces = list(provider_traces)
                 return _prepend_warnings(browser_outcome, [browser_error] if browser_error else [])
-            if browser_reason_code in {"browser_challenge_required", "browser_session_expired"} and browser_error:
+            if browser_reason_code in {
+                "browser_challenge_required",
+                "browser_session_expired",
+                "browser_network_risk",
+            } and browser_error:
                 raise ExtractionError(
                     "extract",
                     browser_error,

@@ -9,6 +9,13 @@ approximately RTF 0.153 on RTX 3060 and 2.01 on CPU. This is a speed and packagi
 decision, not a final accuracy verdict; the 60-sample / 3-hour benchmark gate still
 applies before replacing the precision profile.
 
+An additional 989-second Bilibili course sample measured SenseVoice at 48.21 seconds
+(RTF 0.049, 5,604 characters) and Faster-Whisper medium on an RTX 3060 at 96.56
+seconds (RTF 0.098, 5,739 characters). The desktop `auto` policy therefore keeps
+SenseVoice for Chinese-first platforms. It selects GPU Faster-Whisper only when a
+validated model is already available and the platform or language benefits from the
+precision profile; initialization failure falls back to SenseVoice.
+
 Use `scripts.benchmark_transcription` to compare Faster-Whisper model directories or Hugging Face model IDs with the same audio samples.
 
 ```powershell

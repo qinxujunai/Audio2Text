@@ -1127,7 +1127,6 @@ img {
 }
 
 .retry-button {
-  margin-top: 26px;
   height: 44px;
   padding: 0 20px;
   border-radius: 999px;
@@ -1139,6 +1138,24 @@ img {
     transform var(--motion-fast),
     background var(--motion-fast),
     box-shadow var(--motion-fast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.processing-actions {
+  margin-top: 26px;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.retry-button.is-secondary {
+  border: 1px solid rgba(17, 17, 17, 0.12);
+  background: #ffffff;
+  color: #111111;
 }
 
 .retry-button:hover,

@@ -27,7 +27,7 @@ class PlatformLiveSmokeTestCase(unittest.TestCase):
             raise unittest.SkipTest("Live smoke sample file is missing.")
 
         cls.samples = load_live_smoke_samples(cls.sample_path)
-        cls.client = httpx.Client(base_url=cls.base_url, timeout=60.0)
+        cls.client = httpx.Client(base_url=cls.base_url, timeout=60.0, trust_env=False)
 
     @classmethod
     def tearDownClass(cls) -> None:

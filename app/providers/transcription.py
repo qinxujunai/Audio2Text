@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import shutil
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -98,6 +101,32 @@ class TranscriptionProvider(Protocol):
         progress_callback: TranscriptionProgressCallback | None = None,
     ) -> TranscriptionResult:
         ...
+
+
+@lru_cache(maxsize=1)
+def _nvidia_gpu_memory_mb() -> int:
+    executable = shutil.which("nvidia-smi")
+    if not executable:
+        return 0
+    try:
+        completed = subprocess.run(
+            [executable, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if completed.returncode != 0:
+        return 0
+    memory_values = []
+    for line in completed.stdout.splitlines():
+        try:
+            memory_values.append(int(line.strip()))
+        except ValueError:
+            continue
+    return max(memory_values, default=0)
 
 
 class LocalFasterWhisperProvider:
@@ -242,6 +271,9 @@ class CloudflareWorkersAIWhisperProvider:
 
 class LocalSenseVoiceProvider:
     name = "local_sensevoice"
+    sample_rate = 16000
+    target_chunk_seconds = 24
+    max_chunk_seconds = 28
 
     def __init__(self, model_dir: str | Path | None = None, *, num_threads: int | None = None) -> None:
         self.model_dir = Path(model_dir or SENSEVOICE_MODEL_DIR)
@@ -287,6 +319,42 @@ class LocalSenseVoiceProvider:
             raise RuntimeError("媒体文件中没有可识别的音频内容。")
         return np.concatenate(chunks).astype("float32", copy=False)
 
+    @classmethod
+    def _split_audio(cls, samples):
+        target_samples = cls.target_chunk_seconds * cls.sample_rate
+        max_samples = cls.max_chunk_seconds * cls.sample_rate
+        if len(samples) <= max_samples:
+            return [samples]
+
+        import numpy as np
+
+        chunks = []
+        start = 0
+        total = len(samples)
+        search_radius = 3 * cls.sample_rate
+        energy_window = max(1, cls.sample_rate // 3)
+        search_step = max(1, cls.sample_rate // 10)
+        minimum_chunk = 8 * cls.sample_rate
+
+        while total - start > max_samples:
+            target = start + target_samples
+            search_start = max(start + minimum_chunk, target - search_radius)
+            search_end = min(start + max_samples, target + search_radius)
+            candidates = range(search_start, search_end + 1, search_step)
+
+            def boundary_energy(index: int) -> float:
+                half_window = energy_window // 2
+                window = samples[max(start, index - half_window) : min(total, index + half_window)]
+                return float(np.mean(np.abs(window))) if len(window) else float("inf")
+
+            end = min(candidates, key=boundary_energy, default=min(target, total))
+            chunks.append(samples[start:end])
+            start = end
+
+        if start < total:
+            chunks.append(samples[start:total])
+        return chunks
+
     def transcribe(
         self,
         media_file_path: str,
@@ -303,19 +371,26 @@ class LocalSenseVoiceProvider:
         if progress_callback is not None:
             progress_callback(0.1, "正在使用轻量引擎识别音频。")
         samples = self._decode_audio(path)
+        chunks = self._split_audio(samples)
         recognizer = self._recognizer()
-        stream = recognizer.create_stream()
-        stream.accept_waveform(16000, samples)
-        recognizer.decode_stream(stream)
-        transcript = str(stream.result.text or "").strip()
-        if progress_callback is not None:
-            progress_callback(1.0, "音频识别完成，正在整理文字。")
+        transcript_parts = []
+        for index, chunk in enumerate(chunks):
+            stream = recognizer.create_stream()
+            stream.accept_waveform(self.sample_rate, chunk)
+            recognizer.decode_stream(stream)
+            text = str(stream.result.text or "").strip()
+            if text:
+                transcript_parts.append(text)
+            if progress_callback is not None:
+                ratio = 0.1 + (0.9 * (index + 1) / len(chunks))
+                progress_callback(ratio, f"正在识别音频片段 {index + 1}/{len(chunks)}。")
+        transcript = "\n".join(transcript_parts)
         return TranscriptionResult(
             provider=self.name,
             transcript_text=transcript,
             timeline_text="",
             language=None,
-            segment_count=1 if transcript else 0,
+            segment_count=len(transcript_parts),
         )
 
 
@@ -335,7 +410,23 @@ class UnavailableTranscriptionProvider:
         raise RuntimeError("当前云端预览未配置转写服务。请配置 OpenAI-compatible 转写服务后再处理音视频。")
 
 
-def get_transcription_provider() -> TranscriptionProvider:
+class FallbackTranscriptionProvider:
+    def __init__(self, primary: TranscriptionProvider, fallback: TranscriptionProvider) -> None:
+        self.primary = primary
+        self.fallback = fallback
+        self.name = f"{primary.name}_with_{fallback.name}_fallback"
+
+    def transcribe(self, media_file_path: str, **kwargs) -> TranscriptionResult:
+        try:
+            return self.primary.transcribe(media_file_path, **kwargs)
+        except Exception:
+            progress_callback = kwargs.get("progress_callback")
+            if progress_callback is not None:
+                progress_callback(0.05, "加速引擎暂不可用，已切换兼容模式。")
+            return self.fallback.transcribe(media_file_path, **kwargs)
+
+
+def get_transcription_provider(*, platform: str = "") -> TranscriptionProvider:
     if TRANSCRIPTION_PROVIDER == "openai_compatible" and OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY and OPENAI_COMPATIBLE_MODEL:
         return OpenAICompatibleTranscriptionProvider(
             base_url=OPENAI_COMPATIBLE_BASE_URL,
@@ -354,8 +445,14 @@ def get_transcription_provider() -> TranscriptionProvider:
     if TRANSCRIPTION_PROVIDER == "local_sensevoice" and sensevoice_ready:
         return LocalSenseVoiceProvider()
     if TRANSCRIPTION_PROVIDER == "auto":
-        if DEVICE == "cuda" and faster_whisper_ready:
-            return LocalFasterWhisperProvider()
+        chinese_first_platforms = {"bilibili", "xiaoyuzhou", "douyin", "xiaohongshu"}
+        gpu_ready = DEVICE in {"auto", "cuda"} and _nvidia_gpu_memory_mb() >= 4096
+        prefer_faster_whisper = faster_whisper_ready and gpu_ready and (
+            DEVICE == "cuda" or platform not in chinese_first_platforms
+        )
+        if prefer_faster_whisper:
+            primary = LocalFasterWhisperProvider()
+            return FallbackTranscriptionProvider(primary, LocalSenseVoiceProvider()) if sensevoice_ready else primary
         if sensevoice_ready:
             return LocalSenseVoiceProvider()
         if faster_whisper_ready:

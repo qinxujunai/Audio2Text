@@ -2001,6 +2001,33 @@ def _extract_bilibili_video_id(url: str) -> str:
     return match.group(1) if match else ""
 
 
+def _select_bilibili_page(url: str, pages: object) -> tuple[dict, int]:
+    page_items = [item for item in pages if isinstance(item, dict)] if isinstance(pages, list) else []
+    if not page_items:
+        return {}, 1
+
+    requested_page = 1
+    raw_page = parse_qs(urlparse(url).query).get("p", ["1"])[0]
+    try:
+        requested_page = max(1, int(raw_page))
+    except (TypeError, ValueError):
+        requested_page = 1
+
+    def page_value(item: dict) -> int:
+        try:
+            return int(item.get("page") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    selected = next((item for item in page_items if page_value(item) == requested_page), None)
+    if selected is None and requested_page <= len(page_items):
+        selected = page_items[requested_page - 1]
+    if selected is None:
+        selected = page_items[0]
+        requested_page = page_value(selected) or 1
+    return selected, requested_page
+
+
 def _bilibili_headers() -> dict[str, str]:
     headers = _request_headers()
     headers.update(
@@ -2160,13 +2187,17 @@ def extract_bilibili_direct(
         if not isinstance(data, dict):
             raise ExtractionError("extract", "B站 API 没有返回视频数据。", reason_code="bilibili_video_invalid", retryable=True)
 
-        title = str(data.get("title") or resolved.normalized_url)
+        parent_title = str(data.get("title") or resolved.normalized_url)
         description = str(data.get("desc") or "")
-        duration_seconds = float(data["duration"]) if data.get("duration") else None
         author = str(data.get("owner", {}).get("name") or "")
         thumbnail_url = str(data.get("pic") or "")
         cid_list = data.get("pages") if isinstance(data.get("pages"), list) else []
-        cid = cid_list[0].get("cid") if cid_list and isinstance(cid_list[0], dict) else data.get("cid")
+        selected_page, page_number = _select_bilibili_page(resolved.normalized_url, cid_list)
+        cid = selected_page.get("cid") or data.get("cid")
+        page_title = str(selected_page.get("part") or "").strip()
+        title = page_title or parent_title
+        selected_duration = selected_page.get("duration")
+        duration_seconds = float(selected_duration or data.get("duration")) if (selected_duration or data.get("duration")) else None
         aid = data.get("aid")
 
         if progress_callback is not None:
@@ -2214,8 +2245,8 @@ def extract_bilibili_direct(
         platform="bilibili",
         content_type="video",
         title=title,
-        canonical_url=f"https://www.bilibili.com/video/{bvid}",
-        source_item_id=bvid,
+        canonical_url=f"https://www.bilibili.com/video/{bvid}" + (f"?p={page_number}" if page_number > 1 else ""),
+        source_item_id=f"{bvid}:p{page_number}" if page_number > 1 else bvid,
         description=description,
         author=author,
         published_at=None,

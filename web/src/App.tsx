@@ -13,7 +13,9 @@ import {
   installRuntimePack,
   listCaptures,
   listRuntimePacks,
+  openPlatformSession,
   restartDesktopRuntime,
+  retryCapture,
 } from "./api";
 import { DeliverableStage } from "./components/DeliverableStage";
 import { Header } from "./components/Header";
@@ -194,6 +196,32 @@ export default function App() {
     } catch (error) {
       setRuntimeError(error instanceof Error ? error.message : "安装没有完成，请检查网络后重试。");
       setRuntimeBusy(false);
+    }
+  }
+
+  async function retryCurrentCapture() {
+    if (!currentCapture || submitting) return;
+    setSubmitting(true);
+    setWorkspaceError(null);
+    try {
+      await retryCapture(currentCapture.capture.id);
+      const nextCapture = await getCapture(currentCapture.capture.id);
+      setCurrentCapture(nextCapture);
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : "暂时无法重新处理，请稍后再试。");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function refreshPlatformSession() {
+    const platform = currentCapture?.source.platform;
+    if (platform !== "xiaohongshu" && platform !== "douyin") return;
+    try {
+      await openPlatformSession(platform);
+      setToast("平台页面已打开。完成验证后，返回这里重新处理。");
+    } catch {
+      setToast("暂时无法打开平台页面，请重新启动应用后再试。");
     }
   }
 
@@ -663,7 +691,6 @@ export default function App() {
                 submitting={submitting || clearBusy}
                 supportedExtensions={supportedExtensions}
                 maxUploadSizeMb={config?.max_upload_size_mb || 0}
-                freeDurationMinutes={config?.free_duration_minutes || 30}
                 captures={recentCaptures}
                 currentCaptureId={currentCapture?.capture.id}
                 onInputChange={setInput}
@@ -735,6 +762,20 @@ export default function App() {
                 onReset={
                   phase === "failed" || loadingDeepLink
                     ? resetWorkspace
+                    : undefined
+                }
+                onRetry={
+                  phase === "failed" && currentCapture?.capture.retryable
+                    ? () => void retryCurrentCapture()
+                    : undefined
+                }
+                onRefreshSession={
+                  phase === "failed" &&
+                  config?.runtime_target === "windows_desktop" &&
+                  ["browser_challenge_required", "browser_session_expired"].includes(
+                    currentCapture?.capture.failure_reason_code || "",
+                  )
+                    ? () => void refreshPlatformSession()
                     : undefined
                 }
               />

@@ -71,6 +71,7 @@ export type CaptureEnvelope = {
     error_message?: string | null;
     retry_count: number;
     retryable: boolean;
+    failure_reason_code?: string | null;
     asset_preparation_pending: boolean;
   };
   source: {
@@ -129,7 +130,7 @@ export type ConfigResponse = {
   capture_history_limit: number;
   supported_extensions: string[];
   max_upload_size_mb: number;
-  free_duration_minutes: number;
+  free_duration_minutes?: number;
   deployment_mode?: string;
   public_preview_mode?: boolean;
   transcription_available?: boolean;

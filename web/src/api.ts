@@ -244,3 +244,8 @@ export async function restartDesktopRuntime() {
   await invoke("restart_backend");
   window.location.reload();
 }
+
+export async function openPlatformSession(platform: "xiaohongshu" | "douyin") {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_platform_session", { platform });
+}

@@ -27,7 +27,7 @@ PLATFORM_RULES = [
     (("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"), "youtube", "video", "YouTube"),
     (("bilibili.com", "www.bilibili.com", "m.bilibili.com", "b23.tv"), "bilibili", "video", "哔哩哔哩"),
     (("xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"), "xiaoyuzhou", "audio", "小宇宙"),
-    (("douyin.com", "www.douyin.com", "v.douyin.com"), "douyin", "video", "抖音"),
+    (("douyin.com", "www.douyin.com", "v.douyin.com", "jingxuan.douyin.com"), "douyin", "video", "抖音"),
     (("xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com"), "xiaohongshu", "webpage", "小红书"),
     (("mp.weixin.qq.com",), "wechat_article", "article", "微信公众号"),
 ]
@@ -176,7 +176,15 @@ def infer_source_item_id(platform: str, normalized_url: str) -> str:
         return match.group(1) if match else ""
     if platform == "bilibili":
         match = re.search(r"/video/((?:BV|av)[^/?#]+)", url, re.IGNORECASE)
-        return match.group(1) if match else ""
+        if not match:
+            return ""
+        video_id = match.group(1)
+        page_values = parse_qs(urlparse(url).query).get("p") or []
+        try:
+            page_number = max(1, int(page_values[0])) if page_values else 1
+        except (TypeError, ValueError):
+            page_number = 1
+        return f"{video_id}:p{page_number}" if page_number > 1 else video_id
     if platform == "xiaoyuzhou":
         match = re.search(r"/episode/([^/?#]+)", url, re.IGNORECASE)
         return match.group(1) if match else ""

@@ -18,6 +18,7 @@ from app.store_fs import CaptureStoreUnavailableError
 from app.pipeline import enqueue_capture, ensure_worker_started, recover_pending_captures
 from app.resolver import infer_source_item_id, resolve_url
 from app.runtime_packs import RuntimePackError, RuntimePackManager
+from app.runtime_preflight import browser_runtime_available
 from app.schemas import (
     ArtifactPayloadModel,
     CaptureCreateUrlRequest,
@@ -315,6 +316,7 @@ def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
             error_message=capture.error_message,
             retry_count=capture.processing.retry_count,
             retryable=capture.processing.retryable,
+            failure_reason_code=getattr(capture.processing, "failure_reason_code", None),
             asset_preparation_pending=bool(getattr(capture, "asset_preparation_pending", False)),
         ),
         source=CaptureSourcePayloadModel(
@@ -441,6 +443,7 @@ def _config_payload() -> dict[str, Any]:
             "url_capture": True,
             "file_upload": True,
             "source_audio": True,
+            "hardware_auto_selection": True,
             "desktop_runtime_management": RUNTIME_TARGET == "windows_desktop",
             "cloud_demo": DEPLOYMENT_MODE == "cloud_preview",
         },
@@ -455,8 +458,8 @@ def _component_status() -> dict[str, str]:
         "storage": "ready" if repository is not None else "unavailable",
         "transcription": "ready" if TRANSCRIPTION_AVAILABLE else "unavailable",
         "ffmpeg": "ready" if FFMPEG_PATH.exists() else ("missing" if local_runtime else "not_required"),
-        "browser": "ready" if PLAYWRIGHT_BROWSERS_DIR.exists() else ("missing" if local_runtime else "not_required"),
-        "model": "ready" if MODEL_PATH.exists() else ("missing" if local_runtime else "not_required"),
+        "browser": "ready" if browser_runtime_available() else ("missing" if local_runtime else "not_required"),
+        "model": "ready" if local_runtime and TRANSCRIPTION_AVAILABLE else ("missing" if local_runtime else "not_required"),
     }
 
 
@@ -510,7 +513,7 @@ async def _stream_upload_to_temp(file: UploadFile) -> tuple[str, Path]:
 def _cache_lookup_by_resolved_input(resolved) -> Any | None:
     if resolved.platform != "generic_web" and resolved.normalized_url:
         cached = repository.find_by_url(resolved.normalized_url)
-        if cached and _capture_is_reusable(cached):
+        if cached and cached.source_platform == resolved.platform and _capture_is_reusable(cached):
             return cached
     return None
 
@@ -886,13 +889,6 @@ async def create_v1_capture(request: Request, file: UploadFile | None = File(def
             "input_warning": resolved.input_warning,
         }
 
-    capture = repository.create(
-        input_type="url",
-        source_platform=resolved.platform,
-        content_type=resolved.content_type,
-        url=resolved.normalized_url,
-        client_ip=client_ip,
-    )
     source = SourceMetaModel(
         platform=resolved.platform,
         content_type=resolved.content_type,
@@ -920,6 +916,13 @@ async def create_v1_capture(request: Request, file: UploadFile | None = File(def
             "input_warning": resolved.input_warning,
         }
 
+    capture = repository.create(
+        input_type="url",
+        source_platform=resolved.platform,
+        content_type=resolved.content_type,
+        url=resolved.normalized_url,
+        client_ip=client_ip,
+    )
     repository.update(capture.id, title=resolved.normalized_url, source=source)
     _queue_if_needed(capture.id)
     return {

@@ -1,3 +1,4 @@
+import { LogIn, RotateCcw } from "lucide-react";
 import { motion } from "motion/react";
 
 type ProcessingPhase = "bootstrapping" | "processing" | "failed";
@@ -11,6 +12,8 @@ type ProcessingStageProps = {
   progressPercent?: number;
   progressDetail?: string;
   onReset?: () => void;
+  onRetry?: () => void;
+  onRefreshSession?: () => void;
 };
 
 export function safeProgressDetail(raw: string | undefined): string {
@@ -31,6 +34,8 @@ export function ProcessingStage({
   progressPercent,
   progressDetail,
   onReset,
+  onRetry,
+  onRefreshSession,
 }: ProcessingStageProps) {
   const normalizedProgress = Math.min(
     100,
@@ -80,10 +85,26 @@ export function ProcessingStage({
           </div>
         ) : null}
 
-        {phase === "failed" && onReset ? (
-          <button className="retry-button" onClick={onReset} type="button">
-            返回首页
-          </button>
+        {phase === "failed" ? (
+          <div className="processing-actions">
+            {onRefreshSession ? (
+              <button className="retry-button" onClick={onRefreshSession} type="button">
+                <LogIn size={16} aria-hidden="true" />
+                打开平台完成验证
+              </button>
+            ) : null}
+            {onRetry ? (
+              <button className="retry-button" onClick={onRetry} type="button">
+                <RotateCcw size={16} aria-hidden="true" />
+                重新处理
+              </button>
+            ) : null}
+            {onReset ? (
+              <button className="retry-button is-secondary" onClick={onReset} type="button">
+                返回首页
+              </button>
+            ) : null}
+          </div>
         ) : null}
 
         {phase === "bootstrapping" && onReset ? (

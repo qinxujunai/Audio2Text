@@ -39,6 +39,7 @@ BrowserFailureCode = Literal[
     "browser_runtime_missing",
     "browser_timeout",
     "browser_challenge_required",
+    "browser_network_risk",
     "browser_session_expired",
     "source_not_found",
     "source_access_restricted",
@@ -101,6 +102,11 @@ def _structured_browser_error(
 
 def _page_state_error(final_url: str, title: str, body_text: str) -> BrowserProviderError | None:
     combined = "\n".join(item for item in (final_url, title, body_text) if item).lower()
+    network_risk_markers = (
+        "ip存在风险",
+        "安全限制",
+        "error_code=300012",
+    )
     challenge_markers = (
         "captcha",
         "verify",
@@ -141,6 +147,12 @@ def _page_state_error(final_url: str, title: str, body_text: str) -> BrowserProv
         "已失效",
     )
 
+    if any(marker in combined for marker in network_risk_markers):
+        return _structured_browser_error(
+            "当前网络被平台判定为高风险，请切换到可靠网络后重试。",
+            reason_code="browser_network_risk",
+            retryable=True,
+        )
     if any(marker in combined for marker in challenge_markers):
         return _structured_browser_error(
             "当前页面触发了平台验证，请刷新项目级浏览器会话后再试。",
@@ -1181,6 +1193,15 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
 
             page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_GOTO_TIMEOUT_MS)
             _settle_page(page)
+
+            early_body_text = ""
+            try:
+                early_body_text = page.locator("body").inner_text(timeout=2000)
+            except Exception:
+                pass
+            early_state_error = _page_state_error(page.url, page.title(), early_body_text)
+            if early_state_error is not None:
+                raise early_state_error
 
             # Wait for SPA to populate note data in __INITIAL_STATE__
             try:
