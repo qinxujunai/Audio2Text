@@ -84,7 +84,7 @@ Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 ## 发布后仍应关注的边界
 
 - 抖音、小红书仍属于高波动平台，成功率依赖公开链路与项目级浏览器会话
-- Windows CPU 默认使用 SenseVoice int8；CUDA 机器可继续使用项目级 Faster-Whisper medium 精准档
+- Windows 默认使用 SenseVoice int8；运行时会检测 GPU、模型和平台语言，仅在有实测收益时选择项目级 Faster-Whisper，失败自动回落 CPU
 - 小红书视频发布样本需要新鲜分享链接与有效项目级浏览器会话
 - `Assets/Models/...` 当前仍是 legacy fallback，不应在未迁移前直接删除
 

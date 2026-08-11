@@ -89,6 +89,7 @@ fn spawn_backend(app: &AppHandle) -> Result<(Child, DesktopRuntimeInfo), String>
             std::process::id().to_string(),
         )
         .env("AUDIO2TEXT_TRANSCRIPTION_PROVIDER", "auto")
+        .env("AUDIO2TEXT_DEVICE", "auto")
         .env("AUDIO2TEXT_DESKTOP_TOKEN", &token)
         .env("AUDIO2TEXT_WORKSPACE_DIR", workspace_dir)
         .env(
@@ -149,6 +150,40 @@ fn diagnostics_folder(app: AppHandle) -> Result<String, String> {
         .map_err(|error| format!("无法定位诊断目录：{error}"))
 }
 
+fn find_edge_executable() -> Option<PathBuf> {
+    ["PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .map(|root| root.join("Microsoft").join("Edge").join("Application").join("msedge.exe"))
+        .find(|candidate| candidate.is_file())
+}
+
+#[tauri::command]
+fn open_platform_session(app: AppHandle, platform: String) -> Result<(), String> {
+    let url = match platform.as_str() {
+        "xiaohongshu" => "https://www.xiaohongshu.com/",
+        "douyin" => "https://www.douyin.com/",
+        _ => return Err("当前平台不支持会话更新。".into()),
+    };
+    let executable = find_edge_executable().ok_or_else(|| "未找到 Microsoft Edge，请先完成系统更新。".to_string())?;
+    let profile_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?
+        .join("workspace")
+        .join("runtime")
+        .join("browser-profile");
+    std::fs::create_dir_all(&profile_dir).map_err(|error| format!("无法准备平台会话目录：{error}"))?;
+    Command::new(executable)
+        .arg(format!("--user-data-dir={}", profile_dir.display()))
+        .arg("--no-first-run")
+        .arg(url)
+        .spawn()
+        .map_err(|error| format!("无法打开平台页面：{error}"))?;
+    Ok(())
+}
+
 fn stop_backend(state: &DesktopState) {
     if let Ok(mut guard) = state.child.lock() {
         if let Some(child) = guard.as_mut() {
@@ -188,6 +223,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             desktop_runtime_info,
             diagnostics_folder,
+            open_platform_session,
             restart_backend,
             set_background_task_active
         ])

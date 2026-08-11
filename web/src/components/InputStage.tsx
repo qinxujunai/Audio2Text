@@ -10,7 +10,6 @@ type InputStageProps = {
   submitting: boolean;
   supportedExtensions: string[];
   maxUploadSizeMb: number;
-  freeDurationMinutes: number;
   captures: CaptureListItem[];
   currentCaptureId?: string | null;
   onInputChange: (value: string) => void;
@@ -115,7 +114,6 @@ export function InputStage({
   submitting,
   supportedExtensions,
   maxUploadSizeMb,
-  freeDurationMinutes,
   captures,
   currentCaptureId,
   onInputChange,
@@ -265,7 +263,7 @@ export function InputStage({
                   ? `${fileSizeLabel(selectedFile.size)} · ${extensionLabel}`
                   : fileSizeLabel(selectedFile.size)}
               </span>
-              <small>{`${maxUploadSizeMb} MB 以内可直接处理，音视频建议控制在 ${freeDurationMinutes} 分钟内。`}</small>
+              <small>{`${maxUploadSizeMb} MB 以内可直接处理。`}</small>
             </div>
             <div className="selected-file-actions">
               <button

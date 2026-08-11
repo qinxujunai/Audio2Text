@@ -20,6 +20,7 @@ from app.extractors import (
     ExtractionOutcome,
     _bilibili_best_dash_pair,
     _bilibili_progressive_media_url,
+    _select_bilibili_page,
     _bilibili_subtitle_url,
     _classify_external_error,
     _extract_bilibili_video_id,
@@ -31,7 +32,7 @@ from app.extractors import (
 )
 from app.settings import BROWSER_PROFILE_DIR
 from app.main import _to_capture_envelope
-from app.resolver import resolve_url
+from app.resolver import infer_source_item_id, resolve_url
 from app.schemas import ProcessingStateModel, ResultDocumentModel, SourceMetaModel
 from scripts.run_transcribe import _normalize_requested_language, _should_convert_to_simplified
 
@@ -79,6 +80,19 @@ class _BrowserFailureAdapter(source_adapters.BaseSourceAdapter):
 
 
 class PlatformContractsTestCase(unittest.TestCase):
+    def test_browser_network_risk_is_actionable(self) -> None:
+        from app.browser_provider import _page_state_error
+
+        error = _page_state_error(
+            "https://www.xiaohongshu.com/website-login/error?error_code=300012",
+            "安全限制",
+            "IP存在风险，请切换可靠网络环境后重试",
+        )
+
+        self.assertIsNotNone(error)
+        self.assertEqual(error.reason_code, "browser_network_risk")
+        self.assertTrue(error.retryable)
+
     def _xiaoyuzhou_episode_html(
         self,
         *,
@@ -126,6 +140,7 @@ class PlatformContractsTestCase(unittest.TestCase):
             "https://www.bilibili.com/video/BV1xx411c7mD": "bilibili",
             "https://www.xiaoyuzhoufm.com/episode/67f0146e64f12bfc04dca0d1": "xiaoyuzhou",
             "https://www.douyin.com/video/7482735026417366324": "douyin",
+            "https://jingxuan.douyin.com/m/video/7618980634866534834": "douyin",
             "https://www.xiaohongshu.com/explore/66b1e4b0000000001d00beef": "xiaohongshu",
             "https://mp.weixin.qq.com/s/example": "wechat_article",
         }
@@ -187,6 +202,36 @@ class PlatformContractsTestCase(unittest.TestCase):
         )
         self.assertEqual(video_url, "https://media.example.com/720p.m4s")
         self.assertEqual(audio_url, "https://media.example.com/audio-high.m4s")
+
+    def test_bilibili_multi_page_link_selects_requested_page(self) -> None:
+        pages = [
+            {"cid": 101, "page": 1, "part": "第一集", "duration": 3600},
+            {"cid": 202, "page": 2, "part": "第二集", "duration": 989},
+        ]
+
+        selected, page_number = _select_bilibili_page(
+            "https://www.bilibili.com/video/BV1sHU9BmEne/?p=2&share_source=copy_web",
+            pages,
+        )
+
+        self.assertEqual(page_number, 2)
+        self.assertEqual(selected["cid"], 202)
+        self.assertEqual(selected["duration"], 989)
+        self.assertEqual(
+            infer_source_item_id("bilibili", "https://www.bilibili.com/video/BV1sHU9BmEne/?p=2"),
+            "BV1sHU9BmEne:p2",
+        )
+
+    def test_bilibili_multi_page_link_falls_back_to_first_page(self) -> None:
+        pages = [{"cid": 101, "page": 1, "part": "第一集", "duration": 120}]
+
+        selected, page_number = _select_bilibili_page(
+            "https://www.bilibili.com/video/BV1sHU9BmEne/?p=999",
+            pages,
+        )
+
+        self.assertEqual(page_number, 1)
+        self.assertEqual(selected["cid"], 101)
 
     def test_douyin_provider_order_prefers_browser_before_open_source(self) -> None:
         resolved = SimpleNamespace(normalized_url="https://www.douyin.com/video/1234567890")
@@ -654,6 +699,27 @@ class PlatformContractsTestCase(unittest.TestCase):
         self.assertEqual(primary_text, "")
         self.assertEqual(result_type, "")
         self.assertEqual(text_source, "none")
+
+    def test_bilibili_empty_transcript_cannot_be_replaced_by_description(self) -> None:
+        source = SourceMetaModel(platform="bilibili", content_type="video")
+        result = pipeline._merge_result(
+            SimpleNamespace(title="sample"),
+            source,
+            ExtractionOutcome(
+                platform="bilibili",
+                content_type="video",
+                title="sample",
+                notes_text="这是视频简介，不是真实口播正文。" * 4,
+                description="这是视频简介，不是真实口播正文。" * 4,
+                needs_transcription=True,
+            ),
+            SimpleNamespace(transcript_text="", timeline_text="", provider="mock", segment_count=0),
+        )
+
+        self.assertEqual(result.primary_text, "")
+        self.assertEqual(result.text_source, "none")
+        with self.assertRaises(extractors.ExtractionError):
+            pipeline._ensure_final_result(source, result)
 
     def test_silent_video_allows_page_copy_fallback(self) -> None:
         result = pipeline._merge_result(

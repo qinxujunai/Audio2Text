@@ -52,7 +52,7 @@ PRODUCT_SLOGAN = "\u4E07\u8C61\u5165\u9875\uFF0C\u843D\u5B57\u6210\u6587\u3002"
 
 APP_DISPLAY_NAME = f"{PRODUCT_NAME} API"
 CODE_NAME = os.environ.get("RELAY_ENGINE_NAME", "capture_text")
-APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.0.1-dev").strip() or "2.0.1-dev"
+APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.0.2").strip() or "2.0.2"
 APP_COMMIT = os.environ.get("AUDIO2TEXT_COMMIT", "unknown").strip()[:40] or "unknown"
 DESKTOP_TOKEN = os.environ.get("AUDIO2TEXT_DESKTOP_TOKEN", "").strip()
 RUNTIME_TARGET = os.environ.get(
@@ -104,6 +104,7 @@ FREE_DURATION_MINUTES = int(os.environ.get("FREE_DURATION_MINUTES", "30"))
 DAILY_CAPTURE_LIMIT = int(os.environ.get("DAILY_CAPTURE_LIMIT", "12"))
 MAX_VIDEO_DURATION_MINUTES = int(os.environ.get("MAX_VIDEO_DURATION_MINUTES", "30"))
 MAX_UPLOAD_SIZE_MB = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "200"))
+PENDING_RECOVERY_MAX_AGE_SECONDS = int(os.environ.get("PENDING_RECOVERY_MAX_AGE_SECONDS", "21600"))
 ADMIN_IPS = {ip.strip() for ip in os.environ.get("ADMIN_IPS", "").split(",") if ip.strip()}
 FREE_DURATION_SECONDS = FREE_DURATION_MINUTES * 60
 TRANSCRIPTION_AVAILABLE = (
@@ -172,6 +173,7 @@ def runtime_summary() -> dict:
         "max_upload_size_mb": MAX_UPLOAD_SIZE_MB,
         "capture_history_limit": CAPTURE_HISTORY_LIMIT,
         "free_duration_minutes": FREE_DURATION_MINUTES,
+        "pending_recovery_max_age_seconds": PENDING_RECOVERY_MAX_AGE_SECONDS,
         "cn_platform_proxy": bool(CN_PLATFORM_PROXY),
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
         "supported_platforms": URL_INPUT_PLATFORM_HINTS,

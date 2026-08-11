@@ -49,14 +49,15 @@ def _free_port() -> int:
 def _wait_for_http(url: str, *, timeout: float = 45.0) -> None:
     deadline = time.time() + timeout
     last_error: Exception | None = None
-    while time.time() < deadline:
-        try:
-            response = httpx.get(url, timeout=5.0)
-            response.raise_for_status()
-            return
-        except Exception as exc:  # pragma: no cover - only used on startup failures
-            last_error = exc
-            time.sleep(0.5)
+    with httpx.Client(trust_env=False, timeout=5.0) as client:
+        while time.time() < deadline:
+            try:
+                response = client.get(url)
+                response.raise_for_status()
+                return
+            except Exception as exc:  # pragma: no cover - only used on startup failures
+                last_error = exc
+                time.sleep(0.5)
     raise RuntimeError(f"Timed out waiting for {url}: {last_error}")
 
 

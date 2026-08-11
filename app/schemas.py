@@ -212,6 +212,7 @@ class CaptureStatePayloadModel(BaseModel):
     error_message: str | None = None
     retry_count: int = 0
     retryable: bool = False
+    failure_reason_code: str | None = None
     asset_preparation_pending: bool = False
 
 

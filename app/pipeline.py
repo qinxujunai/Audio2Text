@@ -36,8 +36,10 @@ from app.settings import (
     DEFAULT_USER_AGENT,
     FFMPEG_PATH,
     FREE_DURATION_SECONDS,
+    PENDING_RECOVERY_MAX_AGE_SECONDS,
     RELAY_AUTO_START_WORKER,
     RELAY_RUN_MODE,
+    RUNTIME_TARGET,
 )
 from app.source_adapters import LocalFileAdapter, get_url_adapter
 from app.storage import get_capture_repository
@@ -47,7 +49,6 @@ from scripts.logger import get_logger
 logger = get_logger("capture_pipeline", "capture_pipeline.log")
 
 repository = get_capture_repository()
-transcription_provider = get_transcription_provider()
 capture_queue: queue.Queue[str] = queue.Queue()
 worker_started = False
 worker_thread: threading.Thread | None = None
@@ -956,11 +957,6 @@ def _select_silent_video_fallback(
         if _is_substantial_text(social_copy, minimum_length=24, minimum_lines=1):
             source = "article" if article else "notes"
             return social_copy, source or "notes", source or "notes"
-
-    if article and _is_substantial_text(article, minimum_length=24, minimum_lines=1):
-        return article, "article", "article"
-    if notes and _is_substantial_text(notes, minimum_length=24, minimum_lines=1):
-        return notes, "notes", "notes"
     return "", "", "none"
 
 
@@ -1405,6 +1401,8 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
         return "当前内容需要有效的项目级浏览器会话后才能继续处理。请刷新会话后再试。"
     if reason_code == "browser_challenge_required":
         return "当前页面触发了平台验证，暂时需要刷新项目级浏览器会话后再试。"
+    if reason_code == "browser_network_risk":
+        return "当前网络被平台判定为高风险。请切换到可靠网络后重新处理。"
     if reason_code == "browser_timeout":
         return "浏览器会话在规定时间内没有稳定拿到页面结果。请稍后重试，或换一条更稳定的公开内容。"
     if reason_code == "browser_request_failed":
@@ -1445,6 +1443,8 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
 
 
 def _enforce_free_duration_limit(source: SourceMetaModel) -> None:
+    if RUNTIME_TARGET != "cloud_demo":
+        return
     if not _is_media_content(source.content_type):
         return
     if not source.duration_seconds:
@@ -1452,6 +1452,23 @@ def _enforce_free_duration_limit(source: SourceMetaModel) -> None:
     if source.duration_seconds <= FREE_DURATION_SECONDS:
         return
     raise ExtractionError("limit", PUBLIC_ERROR_MESSAGES["limit"])
+
+
+def _pending_capture_age_seconds(capture) -> float | None:
+    timestamp = str(getattr(capture, "updated_at", "") or getattr(capture, "created_at", "") or "").strip()
+    if not timestamp:
+        return None
+    try:
+        updated_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    now = datetime.now(updated_at.tzinfo) if updated_at.tzinfo else datetime.now()
+    return max(0.0, (now - updated_at).total_seconds())
+
+
+def _pending_capture_is_stale(capture) -> bool:
+    age_seconds = _pending_capture_age_seconds(capture)
+    return age_seconds is not None and age_seconds > PENDING_RECOVERY_MAX_AGE_SECONDS
 
 
 def enqueue_capture(capture_id: str) -> None:
@@ -1470,6 +1487,26 @@ def recover_pending_captures() -> None:
     for capture_id in repository.list_pending_ids():
         capture = repository.get(capture_id)
         if capture is None:
+            continue
+        if _pending_capture_is_stale(capture):
+            repository.update(
+                capture_id,
+                status="failed",
+                result_state="failed",
+                finished_at=now_iso(),
+                error_stage="internal",
+                error_message="上次任务已中断，请重新提交这条内容。",
+                processing=_update_processing(
+                    capture,
+                    current_stage="failed",
+                    progress_percent=0,
+                    progress_detail="上次任务距离现在过久，已停止自动恢复。",
+                    trace=[_make_trace("internal", "陈旧任务已停止自动恢复。", level="warning")],
+                    failure_reason_code="stale_recovery_expired",
+                    retryable=True,
+                ),
+            )
+            write_capture_event(capture_id, "capture_recovery_expired", stage="failed")
             continue
         if capture.input_type == "file" and capture.storage_path and not Path(capture.storage_path).exists():
             repository.update(
@@ -1742,6 +1779,7 @@ def process_capture(capture_id: str) -> None:
                 percent = 60 + int(round(32 * bounded_ratio))
                 update_live_progress("transcribe", percent, detail)
 
+            transcription_provider = get_transcription_provider(platform=source.platform)
             transcription = transcription_provider.transcribe(
                 extraction.media_file_path,
                 capture_id=capture.id,
@@ -1963,8 +2001,3 @@ def ensure_worker_started() -> None:
         thread.start()
         worker_thread = thread
         worker_started = True
-        for capture_id in repository.list_pending_ids():
-            if capture_id in active_capture_ids or capture_id in queued_capture_ids:
-                continue
-            queued_capture_ids.add(capture_id)
-            capture_queue.put(capture_id)

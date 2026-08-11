@@ -11,7 +11,7 @@
     {
       "platform": "bilibili",
       "variant": "user_reported_video",
-      "url": "https://www.bilibili.com/video/BV1xBjW6pEym/",
+      "url": "https://www.bilibili.com/video/BV1sHU9BmEne/?p=114",
       "expected_media_kind": "video",
       "require_text": true,
       "require_source_media": true,
@@ -28,7 +28,7 @@
     {
       "platform": "douyin",
       "variant": "public_video",
-      "url": "https://www.douyin.com/video/7618917735157806321",
+      "url": "https://jingxuan.douyin.com/m/video/7618980634866534834",
       "expected_media_kind": "video",
       "require_text": true,
       "require_source_media": true

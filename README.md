@@ -12,7 +12,7 @@ app_port: 8000
 
 ![万象成文桌面端首页](docs/assets/home-desktop.png)
 
-Windows 桌面端是完整主产品：安装包自带处理服务，不要求目标电脑安装 Python。首次使用下载约 222 MB 的 SenseVoice int8 与 FFmpeg 运行组件，不额外下载多套模型；浏览器提取复用 Windows 自带 Edge，文件在本机处理。云端版本用于限额体验。
+Windows 桌面端是完整主产品：安装包自带处理服务，不要求目标电脑安装 Python。首次使用下载约 222 MB 的 SenseVoice int8 与 FFmpeg 运行组件，不额外下载多套模型；浏览器提取复用 Windows 自带 Edge，文件在本机处理。运行时会自动选择兼容的 CPU/GPU 路径，加速引擎不可用时回落到轻量 CPU 模式。云端版本用于限额体验。
 
 当前只做三件事：
 

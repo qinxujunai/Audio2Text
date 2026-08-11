@@ -66,7 +66,8 @@ class RuntimePreflightTestCase(unittest.TestCase):
             runtime_preflight, "FFMPEG_PATH", ffmpeg_path
         ), patch.object(runtime_preflight, "FFMPEG_PATH_SOURCE", "workspace_default"), patch.object(
             runtime_preflight, "PLAYWRIGHT_BROWSERS_DIR", browsers_dir
-        ), patch.object(runtime_preflight, "BROWSER_PROFILE_DIR", browser_profile_dir
+        ), patch.object(runtime_preflight, "BROWSER_PROFILE_DIR", browser_profile_dir), patch.object(
+            runtime_preflight, "_has_system_chromium", return_value=False
         ):
             result = runtime_preflight.run_runtime_preflight()
 

@@ -12,11 +12,26 @@ from uuid import uuid4
 import app.pipeline as pipeline
 import app.store_fs as store_fs
 from app.capture_diagnostics import CaptureDiagnostics, read_trace_records
-from app.extractors import ExtractionOutcome
+from app.extractors import ExtractionError, ExtractionOutcome
 from app.schemas import ArtifactModel, ResultDocumentModel, SourceMetaModel
 
 
 class PipelineAndStoreTestCase(unittest.TestCase):
+    def test_desktop_runtime_does_not_apply_cloud_duration_limit(self) -> None:
+        source = SourceMetaModel(platform="bilibili", content_type="video", duration_seconds=4 * 60 * 60)
+
+        with patch.object(pipeline, "RUNTIME_TARGET", "windows_desktop"):
+            pipeline._enforce_free_duration_limit(source)
+
+    def test_cloud_demo_still_applies_duration_limit(self) -> None:
+        source = SourceMetaModel(platform="bilibili", content_type="video", duration_seconds=31 * 60)
+
+        with patch.object(pipeline, "RUNTIME_TARGET", "cloud_demo"):
+            with self.assertRaises(ExtractionError) as raised:
+                pipeline._enforce_free_duration_limit(source)
+
+        self.assertEqual(raised.exception.stage, "limit")
+
     def test_capture_diagnostics_writes_stage_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             diagnostics = CaptureDiagnostics("cap-trace")
