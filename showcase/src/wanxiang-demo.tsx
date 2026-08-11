@@ -20,18 +20,14 @@ function sceneOpacity(frame: number, start: number, end: number) {
 
 const Brand = () => (
   <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
-    <div
+    <Img
+      src={staticFile("brand-mark.svg")}
       style={{
         width: 54,
         height: 54,
-        borderRadius: 15,
-        background: "#111111",
-        display: "grid",
-        placeItems: "center",
+        filter: "drop-shadow(0 12px 18px rgba(17,17,17,0.14))",
       }}
-    >
-      <div style={{ width: 18, height: 18, borderRadius: 999, background: "#ffffff" }} />
-    </div>
+    />
     <div style={{ fontSize: 28, fontWeight: 650 }}>Praxis AI / 万象成文</div>
   </div>
 );

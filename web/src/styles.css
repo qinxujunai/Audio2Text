@@ -136,29 +136,26 @@ img {
   transform: translateY(-1px);
 }
 
-.brand-lockup:hover .brand-mark,
-.brand-lockup:focus-visible .brand-mark {
-  box-shadow:
-    0 14px 26px rgba(17, 17, 17, 0.16),
-    0 4px 10px rgba(17, 17, 17, 0.08);
+.brand-lockup:hover .brand-mark img,
+.brand-lockup:focus-visible .brand-mark img {
+  filter:
+    drop-shadow(0 14px 13px rgba(17, 17, 17, 0.16))
+    drop-shadow(0 4px 5px rgba(17, 17, 17, 0.08));
 }
 
 .brand-mark {
   width: 28px;
   height: 28px;
-  border-radius: 8px;
-  background: #111111;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 10px 20px rgba(17, 17, 17, 0.12);
 }
 
-.brand-mark span {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 10px 10px rgba(17, 17, 17, 0.12));
 }
 
 .brand-copy {

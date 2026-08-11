@@ -650,6 +650,14 @@ async def serve_root():
     return HTMLResponse("<h1>Capture API</h1><p>Frontend build not found.</p>", status_code=200)
 
 
+@app.get("/brand-mark.svg", include_in_schema=False, response_model=None)
+async def serve_brand_mark():
+    brand_mark = WEB_DIST_DIR / "brand-mark.svg"
+    if not brand_mark.is_file():
+        raise HTTPException(status_code=404, detail="Brand asset not found.")
+    return FileResponse(brand_mark, media_type="image/svg+xml")
+
+
 @app.get("/capture.html", response_model=None)
 async def serve_legacy_capture():
     if _dist_available():
