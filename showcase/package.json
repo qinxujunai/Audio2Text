@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "studio": "remotion studio src/index.ts --no-open",
-    "render": "remotion render src/index.ts WanxiangDemo ../docs/assets/wanxiang-demo.mp4 --codec h264 --crf 20"
+    "render": "remotion render src/index.ts WanxiangDemo ../docs/assets/wanxiang-demo.raw.mp4 --codec h264 --crf 20 --muted --pixel-format yuv420p && node scripts/finalize-video.mjs && remotion still src/index.ts WanxiangDemo ../docs/assets/wanxiang-demo-poster.jpg --frame 255 && remotion still src/index.ts WanxiangSocial ../docs/assets/wanxiang-social.png && node scripts/sync-assets.mjs"
   },
   "dependencies": {
     "@remotion/cli": "4.0.507",

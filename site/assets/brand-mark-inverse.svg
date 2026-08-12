@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">Wanxiang Chengwen</title>
+  <rect x="48" y="48" width="928" height="928" rx="224" fill="#FFFFFF"/>
+  <circle cx="250" cy="300" r="44" fill="#0A84FF"/>
+  <circle cx="250" cy="512" r="44" fill="#30B38C"/>
+  <path d="M206 758 250 682 294 758Z" fill="#F2B84B"/>
+  <path d="M318 300C430 300 414 438 536 438H590M318 512H590M318 724C430 724 414 586 536 586H590M650 382H792M650 512H792M650 642H792" fill="none" stroke="#111113" stroke-width="64" stroke-linecap="round"/>
+</svg>

@@ -15,14 +15,14 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
           cache: npm
@@ -33,11 +33,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip uv
           python -m pip install -r requirements.txt
+          python -m playwright install chromium
           python -m unittest discover -s tests -p "test_*.py"
           node --test scripts/cf_worker_security.test.mjs
           Push-Location web
           npm ci
-          npm audit --omit=dev --audit-level=high
+          npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
           npm exec tsc -- --noEmit
           npm run build
           Pop-Location
@@ -63,8 +64,20 @@ jobs:
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content release\SHA256SUMS.txt -Encoding ascii
 
+      - name: Verify installer version and signature state
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $config = Get-Content web\src-tauri\tauri.conf.json | ConvertFrom-Json
+          if ($config.version -ne $version) {
+            throw "Tag version $version does not match Tauri version $($config.version)"
+          }
+          $installer = Get-Item release\Wanxiang-Windows-x64-Setup.exe
+          $signature = Get-AuthenticodeSignature -LiteralPath $installer.FullName
+          "SIGNATURE_STATUS=$($signature.Status)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: .
           format: spdx-json
@@ -72,19 +85,19 @@ jobs:
           upload-artifact: false
 
       - name: Attest installers
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
             release/*.exe
 
       - name: Attest SBOM
-        uses: actions/attest@v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-path: |
             release/*.exe
           sbom-path: release/sbom.spdx.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: wanxiang-windows-${{ github.sha }}
           path: release/*
@@ -95,4 +108,17 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" release/* --verify-tag --generate-notes --title "万象成文 ${{ github.ref_name }}"
+        run: |
+          @"
+          ## 万象成文 ${{ github.ref_name }}
+
+          把视频、播客和图文，直接变成可用的文字与媒体。
+
+          - 全新品牌标志、Windows 图标与双语产品官网
+          - 12 秒代码生成的真实工作流演示
+          - 本地优先，自动检测 CPU 与 GPU
+          - 安装包、SHA-256、SBOM 与 provenance 同步发布
+
+          当前安装包签名状态：``$env:SIGNATURE_STATUS``。若为 ``NotSigned``，Windows 可能显示安全提示。
+          "@ | Set-Content release-notes.md -Encoding utf8
+          gh release create "${{ github.ref_name }}" release/* --verify-tag --title "万象成文 ${{ github.ref_name }}" --notes-file release-notes.md

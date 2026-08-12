@@ -18,22 +18,32 @@ New-Item -ItemType Directory -Force -Path $outputRootPath, $workPath, $specPath 
 
 Push-Location $projectRoot
 try {
-    uvx --from pyinstaller --with-requirements requirements.txt pyinstaller `
-        --noconfirm `
-        --clean `
-        --onedir `
-        --name wanxiang-api `
-        --distpath $outputRootPath `
-        --workpath $workPath `
-        --specpath $specPath `
-        --collect-submodules app `
-        --collect-submodules scripts `
-        --collect-all faster_whisper `
-        --collect-all av `
-        --collect-all sherpa_onnx `
-        --collect-all playwright `
-        --collect-all yt_dlp `
-        scripts\desktop_sidecar.py
+    $pyInstallerArguments = @(
+        "--from", "pyinstaller",
+        "--with-requirements", "requirements.txt",
+        "pyinstaller",
+        "--noconfirm",
+        "--clean",
+        "--onedir",
+        "--name", "wanxiang-api",
+        "--distpath", $outputRootPath,
+        "--workpath", $workPath,
+        "--specpath", $specPath,
+        "--collect-submodules", "app",
+        "--collect-submodules", "scripts",
+        "--collect-all", "faster_whisper",
+        "--collect-all", "av",
+        "--collect-all", "sherpa_onnx",
+        "--collect-all", "playwright",
+        "--collect-all", "yt_dlp",
+        "scripts\desktop_sidecar.py"
+    )
+    Write-Host "Resolving the sidecar build from the local uv cache..."
+    & uvx --offline @pyInstallerArguments
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "The local cache is incomplete; retrying with the package index..."
+        & uvx @pyInstallerArguments
+    }
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller sidecar build failed." }
 } finally {
     Pop-Location

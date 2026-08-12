@@ -63,7 +63,6 @@ PUBLIC_ERROR_MESSAGES = {
     "extract": "来源识别成功，但没有稳定拿到正文、字幕、媒体或图片结果。建议换一条内容再试。",
     "download": "资源下载没有成功，请稍后重试，或换一条内容再试。",
     "transcribe": "媒体已经拿到了，但转写没有成功。建议稍后重试，或换一个更清晰的音视频文件。",
-    "limit": "当前免费版仅支持 30 分钟以内的音频或视频，请换一条更短的内容再试。",
     "internal": "处理过程中发生了内部问题。请返回首页，换一条内容重新试试。",
 }
 
@@ -1451,7 +1450,11 @@ def _enforce_free_duration_limit(source: SourceMetaModel) -> None:
         return
     if source.duration_seconds <= FREE_DURATION_SECONDS:
         return
-    raise ExtractionError("limit", PUBLIC_ERROR_MESSAGES["limit"])
+    minutes = max(1, FREE_DURATION_SECONDS // 60)
+    raise ExtractionError(
+        "limit",
+        f"在线体验单次最多处理 {minutes} 分钟的音频或视频，请换一条更短的内容再试。",
+    )
 
 
 def _pending_capture_age_seconds(capture) -> float | None:
