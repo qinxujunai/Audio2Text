@@ -4,15 +4,31 @@ sdk: docker
 app_port: 8000
 ---
 
-# Praxis AI｜无界笃行 / 万象成文
+# 万象成文
 
-把公开视频、播客、图文链接或本地音视频，整理成可阅读、可复制、可下载的文字与媒体。
+> 把视频、播客和图文，直接变成可用的文字与媒体。
 
-[在线体验](https://wanxiang.praxisai.online) · [下载 Windows 版](https://github.com/qinxujunai/Audio2Text/releases/latest/download/Wanxiang-Windows-x64-Setup.exe) · [观看 12 秒演示](docs/assets/wanxiang-demo.mp4)
+[产品官网](https://qinxujunai.github.io/Audio2Text/) · [下载 Windows 版](https://github.com/qinxujunai/Audio2Text/releases/latest/download/Wanxiang-Windows-x64-Setup.exe) · [Latest Release](https://github.com/qinxujunai/Audio2Text/releases/latest)
 
-![万象成文桌面端首页](docs/assets/home-desktop.png)
+[![观看万象成文 12 秒产品演示](docs/assets/wanxiang-demo-poster.jpg)](docs/assets/wanxiang-demo.mp4)
 
-Windows 桌面端是完整主产品：安装包自带处理服务，不要求目标电脑安装 Python。首次使用下载约 222 MB 的 SenseVoice int8 与 FFmpeg 运行组件，不额外下载多套模型；浏览器提取复用 Windows 自带 Edge，文件在本机处理。运行时会自动选择兼容的 CPU/GPU 路径，加速引擎不可用时回落到轻量 CPU 模式。云端版本用于限额体验。
+万象成文把公开视频、播客、图文链接和本地音视频，整理成可阅读、可复制、可下载的文字与媒体。Windows 桌面端是完整主产品：不要求目标电脑安装 Python，首次使用只准备必要的轻量运行组件，并自动检测 CPU、NVIDIA GPU 与显存，选择已经验证的兼容路径。
+
+| 输入 | 交付 |
+| --- | --- |
+| 视频 / 播客 | 正文、TXT / Markdown、原视频、原音频 |
+| 图文链接 | 正文、原图、Live 片段、图片包 |
+| 本地音视频 | 本地转写与可下载文字 |
+
+当前平台状态来自真实样本与自动化检查：哔哩哔哩、小宇宙、微信公众号已验证；抖音和小红书属于高波动平台，会在会话或网络受限时给出明确恢复路径；YouTube 取决于当前网络。
+
+## 下载
+
+从 [GitHub Latest Release](https://github.com/qinxujunai/Audio2Text/releases/latest) 下载 `Wanxiang-Windows-x64-Setup.exe`。发布页同时提供 SHA-256、SBOM 和构建 provenance。当前安装包未代码签名，Windows 可能显示安全提示。
+
+系统要求：Windows 10 / 11 x64。标准安装首次运行约准备 222 MB 的 SenseVoice int8 与 FFmpeg；浏览器提取复用系统 Edge，不下载第二套浏览器。
+
+## 产品边界
 
 当前只做三件事：
 

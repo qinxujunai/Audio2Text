@@ -31,6 +31,20 @@ class PipelineAndStoreTestCase(unittest.TestCase):
                 pipeline._enforce_free_duration_limit(source)
 
         self.assertEqual(raised.exception.stage, "limit")
+        self.assertIn("在线体验", str(raised.exception))
+        self.assertNotIn("免费版", str(raised.exception))
+
+    def test_cloud_duration_message_uses_configured_limit(self) -> None:
+        source = SourceMetaModel(platform="bilibili", content_type="video", duration_seconds=16 * 60)
+
+        with patch.object(pipeline, "RUNTIME_TARGET", "cloud_demo"), patch.object(
+            pipeline, "FREE_DURATION_SECONDS", 15 * 60
+        ):
+            with self.assertRaises(ExtractionError) as raised:
+                pipeline._enforce_free_duration_limit(source)
+
+        self.assertIn("15 分钟", str(raised.exception))
+        self.assertNotIn("30 分钟", str(raised.exception))
 
     def test_capture_diagnostics_writes_stage_jsonl(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -28,6 +28,7 @@ SVG_IMAGE_BYTES = b"""<svg xmlns="http://www.w3.org/2000/svg" width="1600" heigh
   <path d="M700 740 C860 380 1040 560 1240 260" fill="none" stroke="#3f4d44" stroke-width="52" stroke-linecap="round"/>
   <text x="140" y="910" font-family="serif" font-size="72" fill="#222">Praxis fixture image</text>
 </svg>"""
+VIDEO_FIXTURE_BYTES = (Path(__file__).resolve().parent / "fixtures" / "ui-preview.mp4").read_bytes()
 
 
 def _project_root() -> Path:
@@ -147,7 +148,7 @@ def _video_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
             "preview_media",
             "preview_media.mp4",
             mime_type="video/mp4",
-            content=b"fake-preview-video",
+            content=VIDEO_FIXTURE_BYTES,
         ),
         _artifact(
             workspace_dir,
@@ -155,7 +156,7 @@ def _video_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
             "source_media",
             "source_media.mp4",
             mime_type="video/mp4",
-            content=b"fake-source-video",
+            content=VIDEO_FIXTURE_BYTES,
         ),
         _artifact(
             workspace_dir,
@@ -731,6 +732,10 @@ class UISmokeTestCase(unittest.TestCase):
         self.assertEqual(source_link.get_attribute("target"), "_blank")
         self.assertTrue(self.page.get_by_role("link", name="下载音频").is_visible())
         self.assertTrue(self.page.get_by_role("link", name="下载视频").is_visible())
+        video = self.page.locator(".media-panel video")
+        video.wait_for()
+        self.page.wait_for_function("video => video.readyState >= 2", arg=video.element_handle())
+        self.assertGreaterEqual(video.evaluate("element => element.readyState"), 2)
 
         button = self.page.locator(".result-actions .copy-action").first
         before_hover = button.evaluate(

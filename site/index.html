@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="万象成文把视频、播客和图文，直接变成可用的文字与媒体。Windows 本地优先。">
+  <meta name="theme-color" content="#ffffff">
+  <meta property="og:title" content="万象成文 — 视频、播客与图文，一处整理">
+  <meta property="og:description" content="把视频、播客和图文，直接变成可用的文字与媒体。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://qinxujunai.github.io/Audio2Text/">
+  <meta property="og:image" content="https://qinxujunai.github.io/Audio2Text/assets/social-preview.png">
+  <title>万象成文 — 视频、播客与图文，一处整理</title>
+  <link rel="icon" href="assets/favicon.png">
+  <link rel="preload" href="assets/demo-poster.jpg" as="image" fetchpriority="high">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main" data-i18n="skip">跳到主要内容</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="万象成文首页" data-i18n-aria="brandHome">
+        <img src="assets/brand-mark.svg" width="32" height="32" alt="">
+        <span>万象成文</span>
+      </a>
+      <nav aria-label="主要导航" data-i18n-aria="primaryNav">
+        <a href="#workflow" data-i18n="navWorkflow">产品</a>
+        <a href="#proof" data-i18n="navProof">验证</a>
+        <a href="https://github.com/qinxujunai/Audio2Text">GitHub</a>
+      </nav>
+      <div class="language-switch" role="group" aria-label="语言" data-i18n-aria="languageSwitch">
+        <button type="button" data-language="zh" aria-pressed="true">中文</button>
+        <button type="button" data-language="en" aria-pressed="false">EN</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top">
+      <p class="eyebrow" data-i18n="eyebrow">Windows 本地优先的内容整理工具</p>
+      <h1>万象成文</h1>
+      <p class="hero-lede" data-i18n="heroLede">把视频、播客和图文，直接变成可用的文字与媒体。</p>
+      <div class="hero-actions">
+        <a class="button primary" href="__WANXIANG_INSTALLER_URL__" data-download data-i18n="download">下载 Windows 版</a>
+        __WANXIANG_TRIAL_LINK__
+        <a class="text-link" href="https://github.com/qinxujunai/Audio2Text" data-i18n="github">查看 GitHub</a>
+      </div>
+      <p class="compatibility">Windows 10 / 11 · x64 · v__WANXIANG_VERSION__</p>
+      <figure class="product-film">
+        <video muted loop playsinline preload="none" poster="assets/demo-poster.jpg" aria-label="万象成文从链接输入到文字与媒体交付的十二秒演示" data-i18n-aria="demoLabel">
+          <source src="assets/wanxiang-demo.mp4" type="video/mp4">
+        </video>
+        <button class="film-control" type="button" aria-pressed="false" data-i18n-aria="playDemo" aria-label="播放演示">
+          <span class="play-icon" aria-hidden="true"></span>
+          <span data-i18n="play">播放演示</span>
+        </button>
+      </figure>
+    </section>
+
+    <section class="workflow section" id="workflow">
+      <div class="section-heading">
+        <p class="section-kicker" data-i18n="workflowKicker">一个入口，四类交付</p>
+        <h2 data-i18n="workflowTitle">内容进来，结果留下。</h2>
+        <p data-i18n="workflowBody">粘贴公开链接或选择本地文件。能直接取得正文或字幕时立即交付；需要识别时，再自动选择当前电脑适合的路径。</p>
+      </div>
+      <div class="flow-line" aria-label="万象成文处理流程" data-i18n-aria="flowLabel">
+        <div><span class="source-dot blue"></span><strong data-i18n="flowInput">视频、播客、图文</strong></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div><span class="source-dot green"></span><strong data-i18n="flowProcess">提取与识别</strong></div>
+        <span class="flow-arrow" aria-hidden="true">→</span>
+        <div><span class="source-dot amber"></span><strong data-i18n="flowOutput">文字与媒体</strong></div>
+      </div>
+      <div class="deliverables">
+        <article><span>01</span><h3 data-i18n="textTitle">可用的正文</h3><p data-i18n="textBody">复制全文，或下载 TXT 与 Markdown。</p></article>
+        <article><span>02</span><h3 data-i18n="mediaTitle">原始媒体</h3><p data-i18n="mediaBody">视频、音频和图片分别交付，不混在一起。</p></article>
+        <article><span>03</span><h3 data-i18n="localTitle">本地优先</h3><p data-i18n="localBody">Windows 版在本机处理，自动检测 CPU 与 GPU。</p></article>
+      </div>
+    </section>
+
+    <section class="platforms section" id="platforms">
+      <div class="section-heading compact">
+        <p class="section-kicker" data-i18n="platformKicker">真实平台，明确状态</p>
+        <h2 data-i18n="platformTitle">不是一张“支持全部”的海报。</h2>
+      </div>
+      <div class="platform-list">
+        <div><strong>哔哩哔哩</strong><span class="status stable" data-i18n="stable">已验证</span></div>
+        <div><strong>小宇宙</strong><span class="status stable" data-i18n="stable">已验证</span></div>
+        <div><strong>抖音</strong><span class="status variable" data-i18n="variable">高波动</span></div>
+        <div><strong>小红书</strong><span class="status variable" data-i18n="variable">高波动</span></div>
+        <div><strong>微信公众号</strong><span class="status stable" data-i18n="stable">已验证</span></div>
+        <div><strong>YouTube</strong><span class="status network" data-i18n="network">视网络而定</span></div>
+      </div>
+      <p class="platform-note" data-i18n="platformNote">最近验证：2026-08-11。平台页面会变化；失败时产品会说明原因和恢复方式。</p>
+    </section>
+
+    <section class="proof section" id="proof">
+      <div class="proof-copy">
+        <p class="section-kicker" data-i18n="proofKicker">发布证据</p>
+        <h2 data-i18n="proofTitle">安装包与页面，来自同一个版本。</h2>
+        <p data-i18n="proofBody">网站只从已发布的 GitHub Release 读取下载地址与校验值。安装包尚未代码签名，Windows 可能显示安全提示。</p>
+      </div>
+      <dl class="release-facts">
+        <div><dt data-i18n="version">版本</dt><dd>v__WANXIANG_VERSION__</dd></div>
+        <div><dt data-i18n="size">安装包</dt><dd>__WANXIANG_INSTALLER_SIZE__</dd></div>
+        <div class="hash"><dt>SHA-256</dt><dd>__WANXIANG_SHA256__</dd></div>
+      </dl>
+    </section>
+
+    <section class="closing section">
+      <img src="assets/brand-mark.svg" width="72" height="72" alt="">
+      <h2 data-i18n="closingTitle">把内容带回来。</h2>
+      <p data-i18n="closingBody">在自己的电脑上，整理成真正能继续使用的结果。</p>
+      <div class="hero-actions">
+        <a class="button primary" href="__WANXIANG_INSTALLER_URL__" data-download data-i18n="download">下载 Windows 版</a>
+        __WANXIANG_TRIAL_LINK__
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="brand"><img src="assets/brand-mark.svg" width="28" height="28" alt=""><span>万象成文</span></div>
+    <p>Praxis AI · Apache-2.0</p>
+    <div><a href="https://github.com/qinxujunai/Audio2Text/blob/clean-main/SECURITY.md" data-i18n="security">安全</a><a href="https://github.com/qinxujunai/Audio2Text/issues" data-i18n="feedback">反馈</a></div>
+  </footer>
+  <script src="app.js" defer></script>
+</body>
+</html>

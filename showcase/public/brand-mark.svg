@@ -1,7 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect x="48" y="48" width="928" height="928" rx="224" fill="#111111"/>
-  <path d="M512 214 574 276 512 338 450 276Z" fill="#ffffff"/>
-  <path d="M286 356q0-30 34-30h396q34 0 34 30v32q0 30-34 30H320q-34 0-34-30Z" fill="#ffffff"/>
-  <path d="M304 510c102 42 178 106 244 194 50 66 100 106 170 140l-60 64c-78-46-136-100-192-176-54-72-116-122-190-162Z" fill="#ffffff"/>
-  <path d="M686 486c-60 98-116 174-180 238-58 58-124 100-206 134l-36-76c70-36 124-74 174-124 56-56 106-122 154-206Z" fill="#ffffff"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title">
+  <title id="title">万象成文</title>
+  <rect x="48" y="48" width="928" height="928" rx="224" fill="#111113"/>
+  <circle cx="250" cy="300" r="44" fill="#0A84FF"/>
+  <circle cx="250" cy="512" r="44" fill="#30B38C"/>
+  <path d="M206 758 250 682 294 758Z" fill="#F2B84B"/>
+  <path d="M318 300C430 300 414 438 536 438H590" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round"/>
+  <path d="M318 512H590" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round"/>
+  <path d="M318 724C430 724 414 586 536 586H590" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round"/>
+  <path d="M650 382H792" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round"/>
+  <path d="M650 512H792" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round"/>
+  <path d="M650 642H792" fill="none" stroke="#FFFFFF" stroke-width="64" stroke-linecap="round"/>
 </svg>

@@ -1,6 +1,6 @@
 [package]
 name = "wanxiang-chengwen"
-version = "2.0.2"
+version = "2.1.0"
 description = "Wanxiang Chengwen Windows desktop application"
 authors = ["Praxis AI"]
 license = "Apache-2.0"
