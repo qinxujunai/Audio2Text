@@ -114,7 +114,15 @@ def main() -> int:
                             report["checks"]["cdp_network_error"] = type(network_error).__name__
                         raise RuntimeError("Installed native window did not start.")
                     time.sleep(.25)
-            page = next(p for c in browser.contexts for p in c.pages if "tauri.localhost" in p.url)
+            # CDP can be ready while the first target is still about:blank.
+            deadline = time.monotonic() + 30
+            page = None
+            while page is None:
+                page = next((p for c in browser.contexts for p in c.pages if "tauri.localhost" in p.url), None)
+                if page is None:
+                    if process.poll() is not None or time.monotonic() > deadline:
+                        raise RuntimeError("Native application page did not become ready.")
+                    time.sleep(.1)
             page.set_default_timeout(30000)
             errors = []
             page.on("pageerror", lambda error: errors.append(type(error).__name__))
