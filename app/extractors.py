@@ -15,6 +15,7 @@ from typing import Callable
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import urllib.parse
+import urllib.request
 
 import av
 import httpx
@@ -433,7 +434,10 @@ RELAY_PLATFORMS = CN_PLATFORMS | {"youtube"}
 
 
 def _proxy_for_platform(platform: str | None = None) -> str | None:
-    """Return the configured proxy URL when the target platform is known to need a mainland-China exit IP."""
+    """Use explicit China routing, or existing local YouTube system routing."""
+    if platform == "youtube" and DEPLOYMENT_MODE == "local":
+        proxies = urllib.request.getproxies()
+        return proxies.get("https") or proxies.get("http")
     if not CN_PLATFORM_PROXY:
         return None
     if platform and platform in CN_PLATFORMS:
@@ -606,10 +610,13 @@ def _recover_downloaded_media(capture_dir: Path, *, content_type: str) -> Path |
     return video_files[0] if video_files else None
 
 
-def _requests_session_without_env() -> requests.Session:
+def _requests_session_without_env(*, platform: str | None = None) -> requests.Session:
     session = requests.Session()
     session.trust_env = False
     session.headers.update(_request_headers())
+    proxy = _proxy_for_platform(platform)
+    if proxy:
+        session.proxies.update(http=proxy, https=proxy)
     return session
 
 
@@ -1238,7 +1245,7 @@ def _ytdlp_metadata(url: str, capture_dir: Path, cookie_text: str = "", platform
         "noplaylist": False,
         "socket_timeout": 12,
         "retries": 1,
-        "proxy": "",
+        "proxy": _proxy_for_platform(platform) or "",
         "ffmpeg_location": _ffmpeg_location(),
         "cookiefile": str(cookie_file) if cookie_file else None,
         "http_headers": {"User-Agent": DEFAULT_USER_AGENT},
@@ -1511,7 +1518,7 @@ def _download_media_selection_with_ytdlp(
         "extractor_retries": 1,
         "concurrent_fragment_downloads": 4,
         "format": primary_selector,
-        "proxy": "",
+        "proxy": _proxy_for_platform(platform) or "",
         "ffmpeg_location": _ffmpeg_location(),
         "outtmpl": output_template,
         "cookiefile": str(cookie_file) if cookie_file else None,
@@ -1684,7 +1691,7 @@ def extract_youtube_transcript(
     transcript = None
 
     # Always try direct transcript API first (works if HF Space IP not blocked by Google)
-    session = _requests_session_without_env()
+    session = _requests_session_without_env(platform="youtube")
     try:
         if progress_callback is not None:
             progress_callback(24, "正在检查可用字幕轨。")

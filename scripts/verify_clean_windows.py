@@ -71,6 +71,16 @@ def main() -> int:
                         report["checks"]["webview_processes"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", "@(Get-Process -Name msedgewebview2 -ErrorAction SilentlyContinue).Count"], text=True).strip()
                         report["checks"]["webview_runtime_folders"] = [str(p) for p in (Path(os.environ["PROGRAMFILES(X86)"]) / "Microsoft/EdgeWebView/Application").glob("*/msedgewebview2.exe")]
                         report["checks"]["cdp_error_type"] = type(connection_error).__name__
+                        # Only a fresh CI profile is allowed here. This error
+                        # contains the fixed CDP endpoint, not application data.
+                        report["checks"]["cdp_error"] = str(connection_error)[:1200]
+                        report["checks"]["debug_flag_process_count"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", "@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -match 'remote-debugging-port=9222' }).Count"], text=True).strip()
+                        try:
+                            with httpx.Client(trust_env=False, timeout=3) as diagnostic:
+                                response = diagnostic.get("http://127.0.0.1:9222/json/version")
+                                report["checks"]["cdp_http_status"] = response.status_code
+                        except httpx.HTTPError as network_error:
+                            report["checks"]["cdp_network_error"] = type(network_error).__name__
                         raise RuntimeError("Installed native window did not start.")
                     time.sleep(.25)
             page = next(p for c in browser.contexts for p in c.pages if "tauri.localhost" in p.url)
