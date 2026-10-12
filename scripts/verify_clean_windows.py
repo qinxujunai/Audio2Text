@@ -121,6 +121,11 @@ def main() -> int:
                 page = next((p for c in browser.contexts for p in c.pages if "tauri.localhost" in p.url), None)
                 if page is None:
                     if process.poll() is not None or time.monotonic() > deadline:
+                        from urllib.parse import urlsplit
+                        report["checks"]["native_page_origins"] = [urlsplit(p.url).scheme + "://" + urlsplit(p.url).netloc for c in browser.contexts for p in c.pages]
+                        with httpx.Client(trust_env=False, timeout=3) as diagnostic:
+                            targets = diagnostic.get("http://127.0.0.1:9222/json/list").json()
+                        report["checks"]["native_debug_targets"] = [{"type": t.get("type"), "origin": urlsplit(t.get("url", "")).scheme + "://" + urlsplit(t.get("url", "")).netloc} for t in targets]
                         raise RuntimeError("Native application page did not become ready.")
                     time.sleep(.1)
             page.set_default_timeout(30000)
