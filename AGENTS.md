@@ -37,6 +37,7 @@
 - 取消校对必须携带目标 `job_id`，锁内检查当前任务身份；旧任务返回 409，重复取消同一任务幂等。完整 sidecar 相对路径与 SHA-256 树摘要同时绑定 sidecar manifest、delivery manifest 和打包验收报告；仅核对 exe 不允许复用资源或安装。提取验收率必须从逐条记录重新计算，矛盾摘要拒绝，失败和风控保留在分母；每个平台每轮至少有一个完整成功样本才允许发布。
 - 本地 YouTube 的页面、字幕和真实下载 worker 沿用已配置的系统 HTTP/HTTPS 代理；通过 stdin 传递 worker 参数，不写代理凭证日志、不改系统代理，云端不继承本机路由。Windows hosted CI 常以管理员运行，WebView2 会忽略环境变量/HKCU 的调试参数；仅在受限的全新 CI runner 上临时设置并恢复 `wanxiang-chengwen.exe` 专用 HKLM 调试策略，不修改正式应用或本机策略。
 - 原生退出验收只对目标子进程的唯一 `Tauri Window` 发送关闭请求，随后确认退出码。`Tao Thread Event Target` 即使被 Win32 标为可见，也不是产品窗口；不得按 PID 遍历关闭所有可见窗口。DPI 与视口分别从真实窗口和 WebView 读取，不能用浏览器模拟 DPI 宣称系统 DPI 验收。
+- 后端构建指纹以 ordinal 顺序排列路径并规范化分隔符，不能依赖 `Sort-Object` 的区域/PowerShell 版本排序。父脚本与 Windows PowerShell sidecar 子脚本必须给出相同指纹；单文件变化必须使指纹失效。
 - YouTube 返回登录/身份验证要求时，明确提示来源限制与上传本地音视频的回退方式；不循环重试、不把读取用户 Cookie 或要求用户登录作为默认前提。用户未登录的实测失败继续计入平台验收。
 
 - 修改前先读相关代码、配置、文档和测试，理解现状后再动手。

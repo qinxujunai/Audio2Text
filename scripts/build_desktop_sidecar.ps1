@@ -19,9 +19,11 @@ if ($LASTEXITCODE -ne 0 -or $buildPythonVersion -ne "3.11") {
 function Get-BackendSourceFingerprint {
     $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'app'), (Join-Path $projectRoot 'scripts') -Filter '*.py' -Recurse -File)
     $sourceFiles += Get-Item -LiteralPath (Join-Path $projectRoot 'requirements.txt')
-    $lines = foreach ($sourceFile in $sourceFiles | Sort-Object FullName) {
-        $relative = $sourceFile.FullName.Substring($projectRoot.Length).Replace('\', '/')
-        $relative + ':' + (Get-FileHash -LiteralPath $sourceFile.FullName -Algorithm SHA256).Hash
+    [string[]]$sourcePaths = @($sourceFiles | ForEach-Object { $_.FullName })
+    [Array]::Sort($sourcePaths, [StringComparer]::Ordinal)
+    $lines = foreach ($sourcePath in $sourcePaths) {
+        $relative = $sourcePath.Substring($projectRoot.Length).Replace('\', '/')
+        $relative + ':' + (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
     }
     $algorithm = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))))).Replace('-', '').ToLowerInvariant() }
