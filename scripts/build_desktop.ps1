@@ -123,6 +123,8 @@ if ($Debug) {
     $tauriArguments += "--debug"
 }
 Invoke-Checked "Tauri $configuration package" $node $tauriArguments $webRoot
+$manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+if ($manifest.source_fingerprint -ne $expectedFingerprint) { throw 'Tauri frontend rebuild changed source identity; refusing the package.' }
 
 $targetRoot = Join-Path $webRoot "src-tauri\target\$configuration"
 $executable = Join-Path $targetRoot "wanxiang-chengwen.exe"
