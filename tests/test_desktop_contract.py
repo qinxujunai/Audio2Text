@@ -3,7 +3,9 @@ from __future__ import annotations
 import re
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -131,6 +133,36 @@ class DesktopContractTests(unittest.TestCase):
         self.assertIn("0x5431", build_script)
         self.assertIn("0x7248", build_script)
         self.assertIn("refusing to package stale UI", build_script)
+
+    @unittest.skipUnless(os.name == "nt" and shutil.which("pwsh"), "Requires both PowerShell versions")
+    def test_backend_fingerprint_is_stable_across_powershell_versions(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="wanxiang-fingerprint-") as directory:
+            root = Path(directory)
+            (root / "app").mkdir()
+            (root / "scripts").mkdir()
+            for name in ("verify.py", "verify_native_ui.py", "verify_clean_windows.py"):
+                (root / "scripts" / name).write_text("fixture = 1\n", encoding="utf-8")
+            (root / "app" / "main.py").write_text("fixture = 2\n", encoding="utf-8")
+            (root / "requirements.txt").write_text("fixture==1\n", encoding="utf-8")
+            commands = []
+            for relative in ("scripts/build_desktop.ps1", "scripts/build_desktop_sidecar.ps1"):
+                source = (ROOT / relative).read_text(encoding="utf-8")
+                function = re.search(r"function Get-BackendSourceFingerprint \{.*?\n\}", source, re.S).group(0)
+                command = "$ErrorActionPreference='Stop'; $env:PSModulePath=Join-Path $PSHOME 'Modules'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; $projectRoot='" + str(root).replace("'", "''") + "';\n" + function + "\nGet-BackendSourceFingerprint"
+                commands.extend((shell, command) for shell in ("powershell.exe", "pwsh"))
+            environment = dict(os.environ)
+            # A Python child must not pass pwsh-only module discovery paths into Windows PowerShell.
+            environment.pop("PSModulePath", None)
+            def fingerprints():
+                return [subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                                       capture_output=True, check=True, encoding="utf-8", timeout=30, env=environment).stdout.strip()
+                        for shell, command in commands]
+            before = fingerprints()
+            self.assertEqual(len(set(before)), 1, "Parent and child shells must agree on source identity")
+            (root / "scripts" / "verify.py").write_text("fixture = 3\n", encoding="utf-8")
+            after = fingerprints()
+            self.assertEqual(len(set(after)), 1)
+            self.assertNotEqual(before[0], after[0], "Changing one source file must invalidate the manifest")
 
 
 if __name__ == "__main__":
