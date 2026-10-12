@@ -75,6 +75,8 @@ def main() -> int:
                         # contains the fixed CDP endpoint, not application data.
                         report["checks"]["cdp_error"] = str(connection_error)[:1200]
                         report["checks"]["debug_flag_process_count"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", "@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedgewebview2.exe' -and $_.CommandLine -match 'remote-debugging-port=9222' }).Count"], text=True).strip()
+                        report["checks"]["webview_arguments"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'msedgewebview2.exe' } | ForEach-Object { [regex]::Matches($_.CommandLine, '--(?:remote-debugging|webview-exe-name|user-data-dir|embedded-browser-webview)[^ ]*').Value }"], text=True).splitlines()
+                        report["checks"]["application_process_count"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", "@(Get-Process -Name wanxiang-chengwen -ErrorAction SilentlyContinue).Count"], text=True).strip()
                         try:
                             with httpx.Client(trust_env=False, timeout=3) as diagnostic:
                                 response = diagnostic.get("http://127.0.0.1:9222/json/version")
