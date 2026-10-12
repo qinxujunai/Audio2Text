@@ -1212,6 +1212,8 @@ class PipelineAndStoreTestCase(unittest.TestCase):
             pipeline, "_audio_codec_for_path", return_value="opus"
         ), patch.object(pipeline.subprocess, "run", side_effect=fake_run), patch.object(
             pipeline, "_source_media_needs_preview", return_value=False
+        ), patch.object(
+            pipeline, "FFMPEG_PATH", media_path
         ):
             persisted = pipeline._persist_result_artifacts(capture, result, media_file_path=str(media_path))
 
