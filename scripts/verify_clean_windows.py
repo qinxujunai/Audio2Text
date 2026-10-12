@@ -191,12 +191,18 @@ def main() -> int:
     except Exception as error:
         report.update(failed_stage=stage, error_type=type(error).__name__)
     finally:
-        if process and process.poll() is None:
-            process.terminate(); process.wait(timeout=20)
-        if native_log:
-            native_log.close()
-        overrides.close()
-        args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            if process and process.poll() is None:
+                process.terminate(); process.wait(timeout=20)
+        finally:
+            try:
+                if native_log:
+                    native_log.close()
+            finally:
+                try:
+                    overrides.close()
+                finally:
+                    args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Clean Windows acceptance: {'passed' if report['passed'] else 'failed at '+stage}; installer={digest}")
     return 0 if report["passed"] else 1
 

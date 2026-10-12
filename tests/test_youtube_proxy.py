@@ -9,6 +9,24 @@ from scripts import ytdlp_media_worker
 
 
 class YouTubeProxyTests(unittest.TestCase):
+    def test_invalid_proxy_is_rejected_without_credentials_or_exception_chain(self):
+        with patch.object(extractors, 'DEPLOYMENT_MODE', 'local'), patch('urllib.request.getproxies', return_value={'https':'http:/fixture-user:private%21password@127.0.0.1:7890'}):
+            with self.assertRaises(extractors.ExtractionError) as caught:
+                extractors._proxy_for_platform('youtube')
+        self.assertEqual(caught.exception.reason_code, 'proxy_configuration_invalid')
+        self.assertNotIn('private', str(caught.exception))
+        self.assertTrue(caught.exception.__suppress_context__)
+    def test_worker_errors_and_library_logger_do_not_expose_proxy_credentials(self):
+        request={'capture_dir':'.','format':'best','output_template':'fixture.%(ext)s','user_agent':'fixture','proxy':'http:/fixture-user:private%21password@127.0.0.1:7890','url':'https://www.youtube.com/watch?v=doSR9Mq_taw'}
+        output, errors = io.StringIO(), io.StringIO()
+        def reject(options):
+            options['logger'].error(request['proxy'])
+            raise ValueError('Unsupported proxy '+request['proxy']+' private!password')
+        with patch.object(ytdlp_media_worker, 'YoutubeDL', side_effect=reject), patch.object(ytdlp_media_worker.sys, 'stdin', io.StringIO(json.dumps(request))), patch.object(ytdlp_media_worker.sys, 'stdout', output), patch.object(ytdlp_media_worker.sys, 'stderr', errors):
+            self.assertEqual(ytdlp_media_worker.main(), 1)
+        for secret in ('fixture-user','private%21password','private!password'):
+            self.assertNotIn(secret,output.getvalue()+errors.getvalue())
+        self.assertEqual(errors.getvalue(),'')
     def test_media_proxy_crosses_real_worker_serialization_boundary(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(extractors.subprocess, 'Popen') as popen:
             process = popen.return_value

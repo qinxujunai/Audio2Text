@@ -12,6 +12,10 @@ import sys
 from pathlib import Path
 
 from yt_dlp import YoutubeDL
+if __package__:
+    from .download_error_safety import safe_download_error, SilentDownloadLogger
+else:
+    from download_error_safety import safe_download_error, SilentDownloadLogger
 
 
 def _compact_info(info: dict) -> dict:
@@ -35,6 +39,7 @@ def _compact_info(info: dict) -> dict:
 
 
 def main() -> int:
+    request = {}
     try:
         request = json.load(sys.stdin)
         capture_dir = Path(str(request["capture_dir"])).resolve()
@@ -49,6 +54,7 @@ def main() -> int:
             "concurrent_fragment_downloads": int(request.get("concurrent_fragment_downloads", 4)),
             "format": str(request["format"]),
             "proxy": request.get("proxy") or "",
+            "logger": SilentDownloadLogger(),
             "ffmpeg_location": request.get("ffmpeg_location") or None,
             "outtmpl": str(request["output_template"]),
             "cookiefile": request.get("cookie_file") or None,
@@ -68,7 +74,7 @@ def main() -> int:
         print(json.dumps({"ok": True, "info": _compact_info(info or {})}, ensure_ascii=False))
         return 0
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"ok": False, "error": str(exc)[:1200]}, ensure_ascii=False))
+        print(json.dumps({"ok": False, "error": safe_download_error(exc, request.get("proxy") or "")}, ensure_ascii=False))
         return 1
 
 

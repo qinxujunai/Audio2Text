@@ -18,7 +18,7 @@
 
 | 项目 | 结果 / 证据 |
 | --- | --- |
-| 后端检查 | 322 tests，1 skipped；`backend-final.log` |
+| 最新后端检查 | 347 tests，1 skipped；`safety-backend-final.log` |
 | 配置/协议/恢复回归 | 32 passed；包含密钥脱敏、旧任务拒绝与取消幂等 |
 | 应用网页回归 | 25 passed；`web-ui-final.log` |
 | 官网及本地设置 | 12 passed；`site-ui-final.log` |
@@ -61,3 +61,5 @@ $digest = (Get-FileHash -LiteralPath $setup.FullName).Hash
 2026-10-11 已安装候选来自 SHA-256 为 `96f015a6fb3ffa26243fdeffda9675096144e3589ba13d3a0c5162ef58b269ac` 的安装包，回滚目录为 `workspace/temp/product-rollback-20261011-220810/`。该哈希只标识当时安装来源，后续构建已覆盖原构建输出路径，不能将该路径下的新文件称为此候选。它不是最终公开冻结包；2026-10-12 交互与安装安全修复需重新构建、安装、验收，详见 `interaction-refinement-20261012.md`。
 
 统一构建输出 `delivery-build-manifest.json`，绑定冻结源码、版本、主程序、后端与安装包哈希。升级脚本拒绝源码变化或资产不匹配，并执行保留的已验证安装包副本。NSIS 会保留旧运行组件和主程序到安装目录下的 `sidecar/wanxiang-api.rollback-<版本>-<时间>/`，路径记录于 `last-runtime-backup.txt`；该备份不自动删除。手动恢复应先退出程序，保留当前目录，再用备份中的 `wanxiang-chengwen.previous.exe` 恢复主程序、其余原运行组件恢复 runtime。使用本机升级入口时，优先按完整 `product-rollback` 备份恢复。
+
+2026-10-12 后续独立审查与同包干净 Windows 验收见 `release-review-20261012.md`。完整 sidecar 文件清单和树摘要同时绑定构建、打包验收与安装；取消绑定 job_id；提取统计从原始记录推导并拒绝矛盾摘要。347 项最新后端回归与 15 项官网/品牌回归已通过。正式发布仍等待最终文件复验及六平台三轮，不将旧候选的验收移用到新文件。
