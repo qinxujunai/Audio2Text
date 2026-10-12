@@ -27,6 +27,7 @@ from yt_dlp.utils import DownloadError
 from app.resolver import ResolvedSource
 from app.settings import BROWSER_PROFILE_DIR, CN_PLATFORM_PROXY, CN_PLATFORM_RELAY_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, DEPLOYMENT_MODE, FFMPEG_PATH, read_cookie_payload
 from app.url_safety import UnsafeExternalUrlError, assert_public_http_url
+from scripts.download_error_safety import safe_download_error
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -437,12 +438,25 @@ def _proxy_for_platform(platform: str | None = None) -> str | None:
     """Use explicit China routing, or existing local YouTube system routing."""
     if platform == "youtube" and DEPLOYMENT_MODE == "local":
         proxies = urllib.request.getproxies()
-        return proxies.get("https") or proxies.get("http")
+        return _validated_proxy(proxies.get("https") or proxies.get("http"))
     if not CN_PLATFORM_PROXY:
         return None
     if platform and platform in CN_PLATFORMS:
-        return CN_PLATFORM_PROXY
+        return _validated_proxy(CN_PLATFORM_PROXY)
     return None
+
+
+def _validated_proxy(proxy: str | None) -> str | None:
+    if not proxy:
+        return None
+    try:
+        parsed = urlparse(proxy)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+            raise ValueError("invalid proxy")
+        parsed.port  # Validate without echoing a malformed credential/address.
+    except ValueError:
+        raise ExtractionError("extract", "当前 HTTP/HTTPS 代理地址格式不正确，请检查代理设置后重试。", reason_code="proxy_configuration_invalid", retryable=False) from None
+    return proxy
 
 
 def _platform_needs_relay(platform: str | None = None) -> bool:
@@ -476,30 +490,30 @@ def _relay_fetch(url: str, *, timeout_seconds: float | None = None) -> tuple[str
         if status_code in {404, 410}:
             raise ExtractionError(
                 "extract",
-                f"无法连接来源站点：{exc}",
+                "来源内容不存在或已移除。",
                 reason_code="source_not_found",
                 retryable=False,
-            ) from exc
+            ) from None
         if status_code in {401, 403}:
             raise ExtractionError(
                 "extract",
-                f"无法连接来源站点：{exc}",
+                "来源站点暂时限制了访问。",
                 reason_code="source_access_restricted",
                 retryable=False,
-            ) from exc
+            ) from None
         raise ExtractionError(
             "extract",
-            f"无法连接来源站点：{exc}",
+            "暂时无法连接来源站点，请检查网络后重试。",
             reason_code="source_fetch_failed",
             retryable=True,
-        ) from exc
+        ) from None
     except httpx.HTTPError as exc:
         raise ExtractionError(
             "extract",
-            f"无法连接来源站点：{exc}",
+            "暂时无法连接来源站点，请检查网络后重试。",
             reason_code="source_fetch_failed",
             retryable=True,
-        ) from exc
+        ) from None
 
 
 def _relay_fetch_json(url: str, *, timeout_seconds: float | None = None) -> dict:
@@ -697,10 +711,10 @@ def _download_file(
         target_path.unlink(missing_ok=True)
         raise ExtractionError(
             "download",
-            f"下载资源失败：{last_error}",
+            "暂时无法下载来源资源，请检查网络后重试。",
             reason_code="resource_download_failed",
             retryable=True,
-        ) from last_error
+        ) from None
     return target_path
 
 
@@ -1276,10 +1290,10 @@ def _ytdlp_metadata(url: str, capture_dir: Path, cookie_text: str = "", platform
     reason_code, retryable = _classify_external_error(str(last_exc), platform=platform, stage="extract")
     raise ExtractionError(
         "extract",
-        f"无法读取来源元信息：{_strip_ansi(str(last_exc))}",
+        "暂时无法读取来源内容，请检查网络或平台访问状态。",
         reason_code=reason_code,
         retryable=retryable,
-    ) from last_exc
+    ) from None
 
 
 def _download_subtitle(track: dict, capture_dir: Path, *, platform: str = "") -> tuple[str, str]:
@@ -1489,7 +1503,7 @@ def _run_ytdlp_media_download(
             payload = candidate
             break
     if process.returncode != 0 or not payload.get("ok"):
-        detail = str(payload.get("error") or (stderr or "").strip() or "媒体下载失败")
+        detail = safe_download_error(payload.get("error") or (stderr or "").strip() or "媒体下载失败", options.get("proxy") or "")
         raise DownloadError(_strip_ansi(detail)[:1200])
     return payload.get("info") if isinstance(payload.get("info"), dict) else {}
 
@@ -1582,7 +1596,7 @@ def _download_media_selection_with_ytdlp(
         recovered = _recover_downloaded_media(capture_dir, content_type=content_type)
         if recovered is not None:
             return _download_selection(recovered, recovered=True)
-        raise DownloadError(_strip_ansi(str(last_exc))) from last_exc
+        raise DownloadError(safe_download_error(_strip_ansi(str(last_exc)), base_options.get("proxy") or "")) from None
 
     # Keep the explicit path when an inline/test runner returns it.  The
     # isolated worker deliberately omits paths from its JSON response, so the

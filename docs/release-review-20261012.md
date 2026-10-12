@@ -9,3 +9,11 @@
 当前修正属于源码，尚未进入本机已安装候选。已安装候选仍是 SHA-256 为 `d3df68fddb8054c99e9262f3674a41e04c630abb3a95398b9ee51f89e634fe56` 的保存文件。最终包必须重新构建、验收、备份安装再验证。
 
 云端 Quality Gate 在 `a4564d1` 已通过。同一份安装包的干净 Windows runner 验收停在首次原生窗口连接，尚未通过；诊断正在补齐。公开 Release 与 Pages 仍为 2.1.0，未发布候选。平台 60 链接三轮实测正在执行，结果以逐条原始记录为准。
+
+## 后续复验
+
+`588289e` 的同包干净 Windows runner 验收已通过（run `38268543523`）：首次下载 FFmpeg 与 SenseVoice CPU 组件、实际 CPU 转写、原生视频播放以及文字/音频/视频文件下载均通过。此前失败属于验收工具：管理员 WebView2 忽略环境变量调试参数，以及同步 SDK 的纯属性轮询没有分发新页面事件。修正仅影响受限 CI 验收，不把调试参数放入正式应用。依据 [Microsoft 的管理员 WebView2 规则](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/security#for-an-elevated-host-app-use-appropriate-override-flags)。此结果只绑定保存的 `d3df68fd...` 文件，新最终包仍需再次走同文件验收。
+
+本机已有系统代理，而旧 YouTube 路径强制直连。页面、字幕、真实下载 worker 均已传递现有 HTTP/HTTPS 路由，不修改系统设置。无效地址返回安全提示，代理认证信息不进入下载诊断或异常链；worker 使用静默日志。复核也修正进程结束失败时临时 CI 策略仍必须恢复的清理路径。相关回归与全后端检查通过：347 tests，1 skipped。
+
+60 条公开链接的初步实测发现 YouTube 登录限制、一个哔哩哔哩超时和一个失效播客链接，均保留失败记录。部分哔哩哔哩和小宇宙媒体交付已实际成功；这些局部记录不证明三轮门槛通过。旧的中途集成记录保留为诊断，正式三轮采用固定源码快照，不能混合不同源码补成通过。
