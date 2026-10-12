@@ -1510,6 +1510,27 @@ class UISmokeTestCase(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="打开平台完成验证").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="完成后重新检查").is_visible())
 
+    def test_youtube_login_failure_explains_file_fallback_without_retry_loop(self) -> None:
+        from app.pipeline import _public_error_message_with_reason
+        capture = _failed_capture("youtubelogin001", created_at="2026-04-11 10:01:00")
+        capture.status = "failed"
+        capture.result_state = "failed"
+        capture.processing.current_stage = "failed"
+        capture.processing.failure_reason_code = "youtube_login_required"
+        capture.processing.retryable = False
+        capture.error_message = _public_error_message_with_reason("extract", "youtube_login_required")
+        _seed_capture(self.workspace_dir, capture)
+        self.page.goto(f"{self.base_url}/c/{capture.id}", wait_until="domcontentloaded")
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        copy = self.page.locator(".processing-copy").inner_text()
+        self.assertIn("YouTube 当前要求登录", copy)
+        self.assertIn("本地音视频文件", copy)
+        self.assertEqual(self.page.get_by_role("button", name="重新处理", exact=True).count(), 0)
+        self.assertEqual(self.page.get_by_role("button", name="打开平台完成验证", exact=True).count(), 0)
+        self.page.get_by_role("button", name="返回首页", exact=True).click()
+        self.page.locator(".input-stage").wait_for()
+        self.assertEqual(self.page.locator('input[type="file"]').count(), 1)
+
     def test_legacy_platform_failure_is_rendered_as_recoverable_attention(self) -> None:
         self.page.set_viewport_size({"width": 1440, "height": 900})
         self.page.goto(
