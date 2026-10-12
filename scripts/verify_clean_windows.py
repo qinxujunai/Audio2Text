@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+from contextlib import contextmanager, ExitStack
 
 import httpx
 from playwright.sync_api import sync_playwright
@@ -26,6 +27,31 @@ def assert_clean_runner(environment: dict[str, str], data_root: Path) -> Path:
     if data_root.exists():
         raise RuntimeError("Application data already exists; this is not a clean first-run acceptance.")
     return temporary
+
+
+@contextmanager
+def ci_debug_policy(environment: dict[str, str], data_root: Path):
+    """Temporary application-only HKLM override for elevated hosted runners.
+
+    WebView2 ignores env/HKCU flags for elevated hosts. Never put debug flags
+    into the distributed app or change policy on the user's machine.
+    """
+    assert_clean_runner(environment, data_root)
+    import winreg
+    path = r"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
+    with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, path, 0, winreg.KEY_SET_VALUE | winreg.KEY_QUERY_VALUE | winreg.KEY_WOW64_64KEY) as key:
+        try:
+            previous = winreg.QueryValueEx(key, "wanxiang-chengwen.exe")
+        except FileNotFoundError:
+            previous = None
+        try:
+            winreg.SetValueEx(key, "wanxiang-chengwen.exe", 0, winreg.REG_SZ, "--remote-debugging-port=9222 --remote-debugging-address=127.0.0.1")
+            yield
+        finally:
+            if previous is None:
+                winreg.DeleteValue(key, "wanxiang-chengwen.exe")
+            else:
+                winreg.SetValueEx(key, "wanxiang-chengwen.exe", 0, previous[1], previous[0])
 
 
 def main() -> int:
@@ -47,8 +73,11 @@ def main() -> int:
     report = {"installer_sha256": digest, "clean_profile_before_install": True, "checks": {}, "passed": False}
     process = None
     native_log = None
+    overrides = ExitStack()
     stage = "install"
     try:
+        overrides.enter_context(ci_debug_policy(dict(os.environ), data_root))
+        report["checks"]["ci_only_elevated_debug_override"] = True
         subprocess.run([str(args.installer.resolve()), "/S", f"/D={install}"], check=True, timeout=180)
         app = install / "wanxiang-chengwen.exe"
         assert app.is_file()
@@ -143,6 +172,7 @@ def main() -> int:
             process.terminate(); process.wait(timeout=20)
         if native_log:
             native_log.close()
+        overrides.close()
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Clean Windows acceptance: {'passed' if report['passed'] else 'failed at '+stage}; installer={digest}")
     return 0 if report["passed"] else 1

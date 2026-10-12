@@ -1282,13 +1282,13 @@ def _ytdlp_metadata(url: str, capture_dir: Path, cookie_text: str = "", platform
     ) from last_exc
 
 
-def _download_subtitle(track: dict, capture_dir: Path) -> tuple[str, str]:
+def _download_subtitle(track: dict, capture_dir: Path, *, platform: str = "") -> tuple[str, str]:
     subtitle_url = track.get("url")
     if not subtitle_url:
         return "", ""
     ext = track.get("ext") or "vtt"
     subtitle_path = capture_dir / f"subtitle_source.{ext}"
-    _download_file(subtitle_url, subtitle_path)
+    _download_file(subtitle_url, subtitle_path, platform=platform)
     raw_text = subtitle_path.read_text(encoding="utf-8", errors="ignore")
     return _parse_web_subtitle(raw_text)
 
@@ -1451,6 +1451,7 @@ def _run_ytdlp_media_download(
         "merge_output_format": options.get("merge_output_format"),
         "browser_cookie_source": list(browser_cookie_source) if browser_cookie_source else None,
         "js_runtimes": options.get("js_runtimes"),
+        "proxy": options.get("proxy") or "",
     }
     process = subprocess.Popen(
         worker_command,
@@ -2551,7 +2552,7 @@ def extract_with_ytdlp(
         try:
             if progress_callback is not None:
                 progress_callback(30, "已找到字幕轨，正在下载字幕。")
-            subtitle_text, subtitle_timeline = _download_subtitle(track, capture_dir)
+            subtitle_text, subtitle_timeline = _download_subtitle(track, capture_dir, platform=resolved.platform)
             if subtitle_text:
                 strategy.append("subtitle")
                 if progress_callback is not None:

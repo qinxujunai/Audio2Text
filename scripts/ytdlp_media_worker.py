@@ -48,7 +48,7 @@ def main() -> int:
             "extractor_retries": int(request.get("extractor_retries", 1)),
             "concurrent_fragment_downloads": int(request.get("concurrent_fragment_downloads", 4)),
             "format": str(request["format"]),
-            "proxy": "",
+            "proxy": request.get("proxy") or "",
             "ffmpeg_location": request.get("ffmpeg_location") or None,
             "outtmpl": str(request["output_template"]),
             "cookiefile": request.get("cookie_file") or None,
