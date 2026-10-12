@@ -34,6 +34,21 @@ class _FakeRecognizer:
 
 
 class SenseVoiceProviderTestCase(unittest.TestCase):
+    def test_streaming_decode_preserves_every_sample_and_boundaries(self):
+        import numpy as np
+        import wave
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "long.wav"
+            samples = (np.sin(np.arange(16000 * 67) / 50) * 12000).astype("int16")
+            with wave.open(str(path), "wb") as handle:
+                handle.setnchannels(1); handle.setsampwidth(2); handle.setframerate(16000)
+                handle.writeframes(samples.tobytes())
+            full = transcription.LocalSenseVoiceProvider._decode_audio(path)
+            pieces = list(transcription.LocalSenseVoiceProvider._iter_audio_chunks(path))
+            self.assertTrue(np.array_equal(np.concatenate(pieces), full))
+            self.assertEqual([len(x) for x in pieces], [len(x) for x in transcription.LocalSenseVoiceProvider._split_audio(full)])
+            self.assertTrue(all(len(x) <= 28 * 16000 for x in pieces))
+
     def test_provider_returns_normalized_result(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             media = Path(raw_root) / "sample.wav"
@@ -79,6 +94,12 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
         self.assertTrue(all(len(stream.accepted[1]) <= 28 * 16000 for stream in recognizer.streams))
         self.assertEqual(result.segment_count, len(recognizer.streams))
         self.assertEqual(result.transcript_text.count("轻量模型转写成功"), len(recognizer.streams))
+        timeline_lines = result.timeline_text.splitlines()
+        self.assertEqual(len(timeline_lines), len(recognizer.streams))
+        self.assertTrue(timeline_lines[0].startswith("0.000s -> "))
+        self.assertIn("轻量模型转写成功", timeline_lines[0])
+        starts = [float(line.split("s ->", 1)[0]) for line in timeline_lines]
+        self.assertEqual(starts, sorted(starts))
 
     def test_auto_prefers_sensevoice_on_cpu_without_whisper_model(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -96,7 +117,7 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
         self.assertIsInstance(provider, transcription.LocalSenseVoiceProvider)
         self.assertEqual(provider.model_dir, model_dir)
 
-    def test_auto_prefers_sensevoice_for_chinese_platform_even_with_gpu(self) -> None:
+    def test_auto_prefers_gpu_for_chinese_platform_with_gpu_model(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             model_dir = Path(raw_root)
             (model_dir / "model.int8.onnx").write_bytes(b"model")
@@ -112,7 +133,8 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
             ):
                 provider = transcription.get_transcription_provider(platform="bilibili")
 
-        self.assertIsInstance(provider, transcription.LocalSenseVoiceProvider)
+        self.assertIsInstance(provider, transcription.FallbackTranscriptionProvider)
+        self.assertIsInstance(provider.primary, transcription.LocalFasterWhisperProvider)
 
     def test_auto_uses_gpu_whisper_with_cpu_fallback_for_unknown_language(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

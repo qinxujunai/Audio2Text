@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from html import unescape
@@ -22,6 +25,7 @@ from yt_dlp.utils import DownloadError
 
 from app.resolver import ResolvedSource
 from app.settings import BROWSER_PROFILE_DIR, CN_PLATFORM_PROXY, CN_PLATFORM_RELAY_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, DEPLOYMENT_MODE, FFMPEG_PATH, read_cookie_payload
+from app.url_safety import UnsafeExternalUrlError, assert_public_http_url
 
 
 ProgressCallback = Callable[[int, str], None]
@@ -110,6 +114,14 @@ class ExtractionOutcome:
 
 
 VIDEO_DELIVERY_TARGET_MAX_HEIGHT = 1080
+VIDEO_DELIVERY_PREFERRED_HEIGHT = 720
+try:
+    YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = max(
+        45.0,
+        float(os.environ.get("AUDIO2TEXT_YTDLP_MEDIA_TIMEOUT_SECONDS", "120")),
+    )
+except (TypeError, ValueError):
+    YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 120.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,7 +351,11 @@ def _strip_ansi(value: str) -> str:
 def _classify_external_error(message: str, *, platform: str = "", stage: str = "extract") -> tuple[str, bool]:
     cleaned = _strip_ansi(message).lower()
 
-    if "video unavailable" in cleaned:
+    # yt-dlp emits both "Video unavailable" and the more common
+    # "This video is unavailable".  Match the semantic phrase rather than
+    # one exact word order so invalid/private YouTube links do not surface as
+    # an opaque generic extraction failure.
+    if "video unavailable" in cleaned or "video is unavailable" in cleaned:
         return "youtube_video_unavailable", False
     if "no transcripts were found" in cleaned or "transcript is disabled" in cleaned:
         return "youtube_transcript_unavailable", False
@@ -355,9 +371,53 @@ def _classify_external_error(message: str, *, platform: str = "", stage: str = "
         return "source_access_restricted", False
     if "http error 412" in cleaned or "precondition failed" in cleaned:
         return f"{platform or 'source'}_{stage}_precondition_failed", True
+    if (
+        "http error 429" in cleaned
+        or "too many requests" in cleaned
+        or "rate limit" in cleaned
+        or "rate-limit" in cleaned
+    ):
+        return f"{platform or 'source'}_{stage}_rate_limited", True
+    if any(
+        marker in cleaned
+        for marker in (
+            "http error 500",
+            "http error 502",
+            "http error 503",
+            "http error 504",
+            "internal server error",
+            "bad gateway",
+            "service unavailable",
+            "gateway timeout",
+        )
+    ):
+        return f"{platform or 'source'}_{stage}_server_unavailable", True
     if "timed out" in cleaned or "timeout" in cleaned:
         return f"{platform or 'source'}_{stage}_timeout", True
-    if "connection" in cleaned or "temporarily unavailable" in cleaned:
+    if any(
+        marker in cleaned
+        for marker in (
+            "connection",
+            "temporarily unavailable",
+            "ssl:",
+            "unexpected_eof",
+            "eof occurred",
+            "connection reset",
+            "connection aborted",
+            "remote end closed",
+            "network is unreachable",
+            "connection refused",
+            "connection timed out",
+            "reset by peer",
+            "broken pipe",
+            "certificate verify failed",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "getaddrinfo failed",
+            "proxy error",
+            "remote protocol error",
+        )
+    ):
         return f"{platform or 'source'}_{stage}_network_failed", True
     if "keyerror('bvid')" in cleaned or "keyerror(\"bvid\")" in cleaned:
         return "bilibili_video_invalid", False
@@ -471,6 +531,21 @@ def _ffmpeg_location() -> str:
     return str(FFMPEG_PATH)
 
 
+def _ytdlp_js_runtime_options(platform: str) -> dict:
+    """Enable yt-dlp's official YouTube EJS path when Node is available.
+
+    yt-dlp keeps the runtime optional so other platform adapters remain
+    unchanged.  Passing the resolved executable path also makes the worker
+    process deterministic on Windows, where PATH can differ between shells.
+    """
+    if platform != "youtube":
+        return {}
+    node_path = shutil.which("node")
+    if not node_path:
+        return {}
+    return {"js_runtimes": {"node": {"path": node_path}}}
+
+
 def _looks_like_video_asset(path: Path) -> bool:
     return path.suffix.lower() in {".mp4", ".m4v", ".mov", ".webm", ".mkv"}
 
@@ -539,6 +614,10 @@ def _requests_session_without_env() -> requests.Session:
 
 
 def _fetch_text(url: str, *, timeout_seconds: float | None = None, platform: str | None = None) -> tuple[str, str]:
+    try:
+        assert_public_http_url(url)
+    except UnsafeExternalUrlError as exc:
+        raise ExtractionError("extract", str(exc), reason_code="unsafe_url", retryable=False) from exc
     if _platform_needs_relay(platform):
         return _relay_fetch(url, timeout_seconds=timeout_seconds)
     request_timeout = timeout_seconds or DEFAULT_TIMEOUT_SECONDS
@@ -585,6 +664,10 @@ def _download_file(
     platform: str | None = None,
     headers: dict[str, str] | None = None,
 ) -> Path:
+    try:
+        assert_public_http_url(url)
+    except UnsafeExternalUrlError as exc:
+        raise ExtractionError("download", str(exc), reason_code="unsafe_url", retryable=False) from exc
     target_path.parent.mkdir(parents=True, exist_ok=True)
     last_error: httpx.HTTPError | None = None
     for _ in range(3):
@@ -1161,6 +1244,7 @@ def _ytdlp_metadata(url: str, capture_dir: Path, cookie_text: str = "", platform
         "http_headers": {"User-Agent": DEFAULT_USER_AGENT},
         "logger": SilentYtdlpLogger(),
     }
+    base_options.update(_ytdlp_js_runtime_options(platform))
     if platform == "youtube":
         base_options.update(
             {
@@ -1212,6 +1296,33 @@ def _download_format_selector(content_type: str) -> str:
         f"bestvideo*[height<={VIDEO_DELIVERY_TARGET_MAX_HEIGHT}]+bestaudio/"
         "best[ext=mp4]/best"
     )
+
+
+def _download_format_selector_for_platform(content_type: str, platform: str = "") -> str:
+    """Prefer a smaller stable YouTube delivery profile before 1080p."""
+    if content_type != "video" or platform != "youtube":
+        return _download_format_selector(content_type)
+
+    preferred_height = min(VIDEO_DELIVERY_PREFERRED_HEIGHT, VIDEO_DELIVERY_TARGET_MAX_HEIGHT)
+    return (
+        f"bestvideo[vcodec^=avc1][ext=mp4][height<={preferred_height}]+bestaudio[ext=m4a]/"
+        f"bestvideo[ext=mp4][height<={preferred_height}]+bestaudio[ext=m4a]/"
+        f"bestvideo[vcodec^=avc1][ext=mp4][height<={VIDEO_DELIVERY_TARGET_MAX_HEIGHT}]+bestaudio[ext=m4a]/"
+        f"bestvideo[ext=mp4][height<={VIDEO_DELIVERY_TARGET_MAX_HEIGHT}]+bestaudio[ext=m4a]/"
+        f"bestvideo[vcodec^=avc1][height<={VIDEO_DELIVERY_TARGET_MAX_HEIGHT}]+bestaudio/"
+        f"bestvideo*[height<={VIDEO_DELIVERY_TARGET_MAX_HEIGHT}]+bestaudio/"
+        "best[ext=mp4]/best"
+    )
+
+
+def _download_format_fallback_for_platform(content_type: str, platform: str = "") -> str | None:
+    """Return a lower-complexity delivery profile for transient DASH stalls."""
+    if content_type != "video" or platform != "youtube":
+        return None
+    preferred_height = min(VIDEO_DELIVERY_PREFERRED_HEIGHT, VIDEO_DELIVERY_TARGET_MAX_HEIGHT)
+    # A muxed MP4 avoids a second DASH fragment pipeline. Keep it as a
+    # fallback so the primary path still prefers the higher-quality 720p pair.
+    return f"best[ext=mp4][height<={preferred_height}]/best[height<={preferred_height}]/best[ext=mp4]/best"
 
 
 def _probe_downloaded_media_profile(path: Path) -> tuple[str, str, str, str]:
@@ -1275,6 +1386,106 @@ def _download_selection(path: Path, info: dict | None = None, *, recovered: bool
     )
 
 
+def _terminate_ytdlp_worker(process: subprocess.Popen[str]) -> None:
+    """Stop the worker and any ffmpeg child it may have spawned."""
+    if sys.platform.startswith("win"):
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        process.kill()
+    except OSError:
+        pass
+
+
+def _run_ytdlp_media_download(
+    *,
+    url: str,
+    capture_dir: Path,
+    options: dict,
+    browser_cookie_source: tuple[str, ...] | None,
+    timeout_seconds: float,
+) -> dict:
+    """Run media download behind a hard process boundary."""
+    # Keep the inline path for the existing test seam; production imports the
+    # real yt-dlp class and always receives an independently killable worker.
+    if getattr(YoutubeDL, "__module__", "") != "yt_dlp.YoutubeDL":
+        with YoutubeDL(options) as ydl:
+            return ydl.extract_info(url, download=True) or {}
+
+    project_root = Path(__file__).resolve().parents[1]
+    if getattr(sys, "frozen", False):
+        worker_command = [sys.executable, "--ytdlp-worker"]
+        worker_cwd = Path(sys.executable).resolve().parent
+    else:
+        worker_command = [sys.executable, str(project_root / "scripts" / "ytdlp_media_worker.py")]
+        worker_cwd = project_root
+    request = {
+        "url": url,
+        "capture_dir": str(capture_dir),
+        "format": options["format"],
+        "socket_timeout": options.get("socket_timeout", 12),
+        "retries": options.get("retries", 1),
+        "fragment_retries": options.get("fragment_retries", 1),
+        "extractor_retries": options.get("extractor_retries", 1),
+        "concurrent_fragment_downloads": options.get("concurrent_fragment_downloads", 4),
+        "ffmpeg_location": options.get("ffmpeg_location"),
+        "output_template": options["outtmpl"],
+        "cookie_file": options.get("cookiefile"),
+        "user_agent": (options.get("http_headers") or {}).get("User-Agent", DEFAULT_USER_AGENT),
+        "merge_output_format": options.get("merge_output_format"),
+        "browser_cookie_source": list(browser_cookie_source) if browser_cookie_source else None,
+        "js_runtimes": options.get("js_runtimes"),
+    }
+    process = subprocess.Popen(
+        worker_command,
+        cwd=str(worker_cwd),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+    try:
+        stdout, stderr = process.communicate(
+            json.dumps(request, ensure_ascii=False),
+            timeout=max(1.0, timeout_seconds),
+        )
+    except subprocess.TimeoutExpired as exc:
+        _terminate_ytdlp_worker(process)
+        try:
+            process.communicate(timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        for partial in capture_dir.glob("*.part"):
+            partial.unlink(missing_ok=True)
+        raise DownloadError("媒体下载超时，已自动停止本次下载。") from exc
+
+    payload: dict = {}
+    for line in reversed((stdout or "").splitlines()):
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            payload = candidate
+            break
+    if process.returncode != 0 or not payload.get("ok"):
+        detail = str(payload.get("error") or (stderr or "").strip() or "媒体下载失败")
+        raise DownloadError(_strip_ansi(detail)[:1200])
+    return payload.get("info") if isinstance(payload.get("info"), dict) else {}
+
+
 def _download_media_selection_with_ytdlp(
     url: str,
     capture_dir: Path,
@@ -1285,6 +1496,11 @@ def _download_media_selection_with_ytdlp(
     cookie_file = _cookie_file(cookie_text, capture_dir)
     output_template = str(capture_dir / "%(id)s.%(ext)s")
     is_video = content_type == "video"
+    primary_selector = _download_format_selector_for_platform(content_type, platform)
+    fallback_selector = _download_format_fallback_for_platform(content_type, platform)
+    format_selectors = [primary_selector]
+    if fallback_selector and fallback_selector != primary_selector:
+        format_selectors.append(fallback_selector)
     base_options = {
         "quiet": True,
         "no_warnings": True,
@@ -1293,7 +1509,8 @@ def _download_media_selection_with_ytdlp(
         "retries": 1,
         "fragment_retries": 1,
         "extractor_retries": 1,
-        "format": _download_format_selector(content_type),
+        "concurrent_fragment_downloads": 4,
+        "format": primary_selector,
         "proxy": "",
         "ffmpeg_location": _ffmpeg_location(),
         "outtmpl": output_template,
@@ -1301,33 +1518,57 @@ def _download_media_selection_with_ytdlp(
         "http_headers": {"User-Agent": DEFAULT_USER_AGENT},
         "logger": SilentYtdlpLogger(),
     }
+    base_options.update(_ytdlp_js_runtime_options(platform))
     if is_video:
         base_options["merge_output_format"] = "mp4"
     if platform == "youtube":
         base_options.update(
             {
                 "socket_timeout": 8,
-                "retries": 0,
-                "fragment_retries": 1,
-                "extractor_retries": 0,
+                # YouTube's player API can return a format list that is
+                # briefly inconsistent with the media URLs. One bounded
+                # extractor retry is cheaper and safer than reporting a
+                # subtitle-only success with no promised source video.
+                "retries": 1,
+                "fragment_retries": 2,
+                "extractor_retries": 1,
             }
         )
     last_exc: Exception | None = None
     info = None
+    deadline = time.monotonic() + YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
     for browser_cookie_source in _browser_cookie_sources(cookie_file, platform):
-        options = dict(base_options)
-        if browser_cookie_source:
-            options["cookiesfrombrowser"] = browser_cookie_source
-        try:
-            with YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
+        for selector_index, selector in enumerate(format_selectors):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            options = dict(base_options)
+            options["format"] = selector
+            if browser_cookie_source:
+                options["cookiesfrombrowser"] = browser_cookie_source
+            # Reserve a bounded window for the muxed fallback. Without this,
+            # one stalled DASH worker consumes the whole deadline and leaves a
+            # subtitle-first result without its promised video file.
+            timeout_seconds = remaining
+            if selector_index == 0 and len(format_selectors) > 1:
+                timeout_seconds = min(remaining, max(30.0, remaining - 30.0))
+            try:
+                info = _run_ytdlp_media_download(
+                    url=url,
+                    capture_dir=capture_dir,
+                    options=options,
+                    browser_cookie_source=browser_cookie_source,
+                    timeout_seconds=timeout_seconds,
+                )
+                break
+            except Exception as exc:  # noqa: BLE001
+                recovered = _recover_downloaded_media(capture_dir, content_type=content_type)
+                if recovered is not None:
+                    return _download_selection(recovered, recovered=True)
+                last_exc = exc
+                continue
+        if info is not None:
             break
-        except Exception as exc:  # noqa: BLE001
-            recovered = _recover_downloaded_media(capture_dir, content_type=content_type)
-            if recovered is not None:
-                return _download_selection(recovered, recovered=True)
-            last_exc = exc
-            continue
 
     if info is None:
         recovered = _recover_downloaded_media(capture_dir, content_type=content_type)
@@ -1335,19 +1576,16 @@ def _download_media_selection_with_ytdlp(
             return _download_selection(recovered, recovered=True)
         raise DownloadError(_strip_ansi(str(last_exc))) from last_exc
 
-    requested = info.get("requested_downloads") or []
-    for item in requested:
-        filepath = item.get("filepath")
-        if filepath:
-            candidate = Path(filepath)
-            if candidate.exists():
-                return _download_selection(candidate, info)
+    # Keep the explicit path when an inline/test runner returns it.  The
+    # isolated worker deliberately omits paths from its JSON response, so the
+    # normal production path below uses the capture-directory recovery scan.
+    for item in info.get("requested_downloads") or []:
+        filepath = item.get("filepath") if isinstance(item, dict) else None
+        if filepath and Path(filepath).exists():
+            return _download_selection(Path(filepath), info)
     recovered = _recover_downloaded_media(capture_dir, content_type=content_type)
     if recovered is not None:
         return _download_selection(recovered, info, recovered=True)
-    candidate = Path(ydl.prepare_filename(info))
-    if candidate.exists():
-        return _download_selection(candidate, info)
     raise DownloadError("downloaded media file is missing")
 
 
@@ -2268,6 +2506,22 @@ def extract_bilibili_direct(
     )
 
 
+def _infer_media_content_type_from_ytdlp(info: dict, fallback: str) -> str:
+    if fallback in {"audio", "video"}:
+        return fallback
+    candidates = [info]
+    formats = info.get("formats")
+    if isinstance(formats, list):
+        candidates.extend(item for item in formats if isinstance(item, dict))
+    has_video = any(str(item.get("vcodec") or "none").lower() not in {"", "none"} for item in candidates)
+    has_audio = any(str(item.get("acodec") or "none").lower() not in {"", "none"} for item in candidates)
+    if has_video:
+        return "video"
+    if has_audio:
+        return "audio"
+    return fallback
+
+
 def extract_with_ytdlp(
     resolved: ResolvedSource,
     capture_dir: Path,
@@ -2300,7 +2554,7 @@ def extract_with_ytdlp(
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"字幕下载失败，已回退到媒体处理：{exc}")
 
-    content_type = resolved.content_type
+    content_type = _infer_media_content_type_from_ytdlp(info, resolved.content_type)
     article_text = ""
     notes_text = (info.get("description") or "").strip()
 
@@ -2375,6 +2629,14 @@ def extract_with_ytdlp(
             if progress_callback is not None:
                 progress_callback(50, "媒体文件已就绪，正在准备后续处理。")
         except DownloadError as exc:
+            if content_type in {"video", "audio"}:
+                raise ExtractionError(
+                    "download",
+                    f"媒体下载失败：{exc}",
+                    warnings=outcome.warnings,
+                    reason_code="download_failed",
+                    retryable=True,
+                ) from exc
             if subtitle_text or article_text or result_notes_text:
                 outcome.warnings.append(f"媒体下载失败，当前仅保留页面可得文本：{exc}")
                 outcome.needs_transcription = False

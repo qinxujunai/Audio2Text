@@ -8,6 +8,21 @@ import {
   validateRelayUrl,
   verifyServiceSignature,
 } from "./cf_worker_security.mjs";
+import { applyProductCachePolicy } from "./cf_worker_proxy.js";
+
+test("product pages never revive stale SPA HTML while hashed assets stay immutable", () => {
+  const entry = new Headers({ "Cache-Control": "public, max-age=3600" });
+  applyProductCachePolicy(entry, "/");
+  assert.equal(entry.get("Cache-Control"), "no-store, max-age=0");
+
+  const deepLink = new Headers({ "Cache-Control": "public, max-age=3600" });
+  applyProductCachePolicy(deepLink, "/c/example");
+  assert.equal(deepLink.get("Cache-Control"), "no-store, max-age=0");
+
+  const asset = new Headers();
+  applyProductCachePolicy(asset, "/assets/index-abc.js");
+  assert.equal(asset.get("Cache-Control"), "public, max-age=31536000, immutable");
+});
 
 test("relay accepts only HTTPS platform hosts", () => {
   assert.equal(validateRelayUrl("https://www.bilibili.com/video/BV1xx").hostname, "www.bilibili.com");

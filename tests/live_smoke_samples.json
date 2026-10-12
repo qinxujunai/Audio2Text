@@ -31,33 +31,40 @@
       "url": "https://jingxuan.douyin.com/m/video/7618980634866534834",
       "expected_media_kind": "video",
       "require_text": true,
-      "require_source_media": true
-    },
-    {
-      "platform": "xiaohongshu",
-      "variant": "image",
-      "url": "https://www.xiaohongshu.com/discovery/item/69e6cc20000000001d01becd",
-      "require_image_urls": true
-    },
-    {
-      "platform": "xiaohongshu",
-      "variant": "video",
-      "url": "https://www.xiaohongshu.com/discovery/item/6956513d000000001e022eda",
-      "expected_media_kind": "video",
-      "require_source_media": true
-    },
-    {
-      "platform": "xiaohongshu",
-      "variant": "live",
-      "url": "https://www.xiaohongshu.com/discovery/item/6a2e9f630000000017009d6a",
-      "require_image_urls": true,
-      "require_live_artifact": true
+      "require_source_media": true,
+      "allow_user_action": true,
+      "allowed_user_action_reason_codes": [
+        "browser_challenge_required",
+        "browser_session_expired",
+        "source_fetch_failed",
+        "retry_exhausted"
+      ]
     },
     {
       "platform": "wechat_article",
       "variant": "article",
       "url": "https://mp.weixin.qq.com/s/_PuKS_OmS5Z7u5nSinMsnA",
       "require_image_urls": true
+    }
+  ],
+  "session_required": [
+    {
+      "platform": "xiaohongshu",
+      "variant": "image",
+      "url": "https://www.xiaohongshu.com/discovery/item/69e6cc20000000001d01becd",
+      "expected_reason_code": "source_not_found"
+    },
+    {
+      "platform": "xiaohongshu",
+      "variant": "video",
+      "url": "https://www.xiaohongshu.com/discovery/item/6956513d000000001e022eda",
+      "expected_reason_code": "source_not_found"
+    },
+    {
+      "platform": "xiaohongshu",
+      "variant": "live",
+      "url": "https://www.xiaohongshu.com/discovery/item/6a2e9f630000000017009d6a",
+      "expected_reason_code": "source_not_found"
     }
   ],
   "failure": [
@@ -75,11 +82,15 @@
     },
     {
       "platform": "douyin",
-      "url": "https://www.douyin.com/video/1234567890123456789"
+      "url": "https://www.douyin.com/video/1234567890123456789",
+      "allow_user_action": true,
+      "expected_reason_code": "douyin_fresh_cookies_required"
     },
     {
       "platform": "xiaohongshu",
-      "url": "http://xhslink.com/a/HFNEzlEk7tP3"
+      "url": "http://xhslink.com/a/HFNEzlEk7tP3",
+      "allow_user_action": true,
+      "expected_reason_code": "xiaohongshu_full_url_required"
     }
   ]
 }

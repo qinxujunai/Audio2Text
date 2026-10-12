@@ -5,6 +5,8 @@ $VenvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $VenvActivate = Join-Path $ProjectRoot ".venv\Scripts\Activate.ps1"
 $Requirements = Join-Path $ProjectRoot "requirements.txt"
 $FrontendIndex = Join-Path $ProjectRoot "frontend\dist\index.html"
+$FrontendManifest = Join-Path $ProjectRoot "frontend\dist\build-manifest.json"
+$FrontendFingerprintScript = Join-Path $ProjectRoot "web\scripts\frontend_fingerprint.mjs"
 $PlaywrightBrowsers = Join-Path $ProjectRoot "workspace\runtime\playwright-browsers"
 $DefaultCudaRuntime = "D:\Apps\NVIDIA\CUDA\v12-runtime"
 
@@ -110,13 +112,38 @@ function Ensure-Venv {
 }
 
 function Ensure-FrontendDist {
-    if (Test-Path $FrontendIndex) {
-        Write-Info "Frontend dist is ready."
-        return
+    $needsBuild = $true
+    if ((Test-Path $FrontendIndex) -and (Test-Path $FrontendManifest) -and (Test-CommandExists "node")) {
+        try {
+            $current = (& node $FrontendFingerprintScript --json | ConvertFrom-Json)
+            $built = Get-Content -LiteralPath $FrontendManifest -Raw | ConvertFrom-Json
+            $missingOutputs = @($built.output_files | Where-Object {
+                [string]::IsNullOrWhiteSpace([string]$_) -or
+                [System.IO.Path]::IsPathRooted([string]$_) -or
+                ([string]$_ -match '(^|[\\/])\.\.([\\/]|$)') -or
+                -not (Test-Path -LiteralPath (Join-Path (Split-Path $FrontendManifest) ([string]$_)) -PathType Leaf)
+            })
+            if ($built.schema_version -eq 1 -and
+                $built.build_id -and
+                $built.output_files.Count -gt 0 -and
+                $missingOutputs.Count -eq 0 -and
+                $current.source_fingerprint -eq $built.source_fingerprint) {
+                $needsBuild = $false
+                Write-Info "Frontend dist is current: $($built.build_id)."
+            } else {
+                Write-Warn "Frontend dist is stale: source fingerprint differs from build manifest."
+            }
+        } catch {
+            Write-Warn "Frontend build manifest is invalid or cannot be checked; rebuilding."
+        }
+    } elseif ((Test-Path $FrontendIndex) -and -not (Test-CommandExists "node")) {
+        throw "frontend/dist exists but its build fingerprint cannot be verified because node was not found. Install Node.js before starting to prevent stale UI from being served."
     }
 
+    if (-not $needsBuild) { return }
+
     if (-not (Test-CommandExists "npm")) {
-        throw "frontend/dist is missing and npm was not found. Install Node.js, then run start_api.bat again."
+        throw "frontend/dist is missing or stale and npm was not found. Install Node.js, then run start_api.bat again."
     }
 
     Push-Location (Join-Path $ProjectRoot "web")

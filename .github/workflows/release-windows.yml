@@ -2,6 +2,15 @@ name: Release Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: "Existing draft candidate tag: test the accepted installer without rebuilding it"
+        required: false
+        type: string
+      expected_sha256:
+        description: "SHA-256 of the exact locally accepted candidate installer"
+        required: false
+        type: string
   push:
     tags: ["v*"]
 
@@ -12,6 +21,7 @@ permissions:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.candidate_tag == ''
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -31,35 +41,33 @@ jobs:
       - name: Install and test
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip uv
-          python -m pip install -r requirements.txt
-          python -m playwright install chromium
-          python -m unittest discover -s tests -p "test_*.py"
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install uv==0.12.22
+          .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+          .\.venv\Scripts\python.exe -m playwright install chromium
+          .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"
+          Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\.venv\Scripts"
           node --test scripts/cf_worker_security.test.mjs
           Push-Location web
           npm ci
           npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
-          npm exec tsc -- --noEmit
+          node node_modules/typescript/bin/tsc --noEmit
           npm run build
           Pop-Location
 
-      - name: Build Python sidecar
-        shell: pwsh
-        run: .\scripts\build_desktop_sidecar.ps1 -Clean
-
       - name: Build Windows installers
-        working-directory: web
         shell: pwsh
-        run: npm run desktop:build
+        run: .\scripts\build_desktop.ps1
 
       - name: Collect release assets and hashes
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
-          $installer = Get-ChildItem web\src-tauri\target\release\bundle\nsis -File -Filter *.exe |
-            Select-Object -First 1
-          if (-not $installer) { throw "NSIS installer was not generated" }
-          Copy-Item $installer.FullName release\Wanxiang-Windows-x64-Setup.exe
+          $installers = @(Get-ChildItem web\src-tauri\target\release\bundle\nsis -File -Filter *.exe)
+          if ($installers.Count -ne 1 -or $installers[0].Length -le 0) { throw "Exactly one non-empty NSIS installer is required" }
+          Copy-Item $installers[0].FullName release\Wanxiang-Windows-x64-Setup.exe
           Get-ChildItem release -File | Get-FileHash -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path $_.Path -Leaf)" } |
             Set-Content release\SHA256SUMS.txt -Encoding ascii
@@ -67,8 +75,8 @@ jobs:
       - name: Verify installer version and signature state
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
           $config = Get-Content web\src-tauri\tauri.conf.json | ConvertFrom-Json
+          $version = if ("${{ github.ref_type }}" -eq 'tag') { "${{ github.ref_name }}".TrimStart('v') } else { $config.version }
           if ($config.version -ne $version) {
             throw "Tag version $version does not match Tauri version $($config.version)"
           }
@@ -103,22 +111,46 @@ jobs:
           path: release/*
           if-no-files-found: error
 
-      - name: Upload tagged release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Keep CI package as a candidate
+        shell: pwsh
+        run: |
+          Write-Output 'CI artifacts are candidates. Publish only the exact installer that passed installed-app acceptance and the release evidence gate. Do not replace it with this rebuild.'
+
+  accept-existing:
+    if: github.event_name == 'workflow_dispatch' && inputs.candidate_tag != ''
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Download the exact accepted candidate
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
         run: |
-          @"
-          ## 万象成文 ${{ github.ref_name }}
-
-          把视频、播客和图文，直接变成可用的文字与媒体。
-
-          - 全新品牌标志、Windows 图标与双语产品官网
-          - 12 秒代码生成的真实工作流演示
-          - 本地优先，自动检测 CPU 与 GPU
-          - 安装包、SHA-256、SBOM 与 provenance 同步发布
-
-          当前安装包签名状态：``$env:SIGNATURE_STATUS``。若为 ``NotSigned``，Windows 可能显示安全提示。
-          "@ | Set-Content release-notes.md -Encoding utf8
-          gh release create "${{ github.ref_name }}" release/* --verify-tag --title "万象成文 ${{ github.ref_name }}" --notes-file release-notes.md
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ($env:EXPECTED_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'An exact candidate digest is required.' }
+          gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern Wanxiang-Windows-x64-Setup.exe --dir acceptance-inputs
+          if ((Get-FileHash -LiteralPath acceptance-inputs/Wanxiang-Windows-x64-Setup.exe).Hash -ne $env:EXPECTED_SHA256) { throw 'Candidate digest mismatch.' }
+      - name: Install and verify first-run CPU and native media
+        shell: pwsh
+        env:
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install -r requirements.txt
+          python -m scripts.verify_clean_windows --installer acceptance-inputs/Wanxiang-Windows-x64-Setup.exe --sha256 $env:EXPECTED_SHA256 --output acceptance-output/clean-windows.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: clean-windows-acceptance-${{ github.sha }}
+          path: acceptance-output/*
+          if-no-files-found: error

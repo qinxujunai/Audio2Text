@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 import threading
 import time
 
-from scripts.start_api import main
 
 
 def _windows_process_is_alive(pid: int) -> bool:
@@ -31,12 +31,20 @@ def _watch_desktop_parent() -> None:
 
     def watch() -> None:
         while _windows_process_is_alive(parent_pid):
-            time.sleep(1)
+            time.sleep(0.1)
         os._exit(0)
 
     threading.Thread(target=watch, name="desktop-parent-watch", daemon=True).start()
 
 
 if __name__ == "__main__":
+    if "--sensevoice-gpu-worker" in sys.argv:
+        from scripts.sensevoice_gpu_worker import main as gpu_worker_main
+        raise SystemExit(gpu_worker_main())
+    if "--ytdlp-worker" in sys.argv:
+        from scripts.ytdlp_media_worker import main as ytdlp_worker_main
+
+        raise SystemExit(ytdlp_worker_main())
     _watch_desktop_parent()
+    from scripts.start_api import main
     raise SystemExit(main())
