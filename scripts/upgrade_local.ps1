@@ -45,6 +45,10 @@ if ($deliveryManifest.version -ne $version -or $deliveryManifest.installer_sha25
 if ($ExpectedSha256 -notmatch '^[a-fA-F0-9]{64}$' -or (Get-FileHash -LiteralPath $setupPath).Hash -ne $ExpectedSha256) { throw 'Installer digest mismatch.' }
 if ($report.health.version -ne $version -or $report.cuda_check.device -ne 'cuda' -or -not $report.proofreading.original_unchanged) { throw 'Packaged acceptance is missing or failed.' }
 if ((Get-FileHash -LiteralPath $candidateBackend).Hash -ne $report.sha256) { throw 'Backend changed after packaged acceptance.' }
+$resourceJson = & (Join-Path $projectRoot '.venv\Scripts\python.exe') (Join-Path $PSScriptRoot 'build_fingerprint.py') --resources (Split-Path -Parent $candidateBackend)
+if ($LASTEXITCODE -ne 0) { throw 'Could not validate complete candidate resources.' }
+$resourceDigest = ($resourceJson | ConvertFrom-Json).resource_tree_sha256
+if (-not $report.resource_tree_sha256 -or $resourceDigest -ne $report.resource_tree_sha256 -or $resourceDigest -ne $deliveryManifest.resource_tree_sha256) { throw 'Complete sidecar resource tree does not match frozen build and packaged acceptance.' }
 if (-not (Test-Path -LiteralPath $appPath)) { throw 'Original installed app was not found; refusing to relocate or make a new installation.' }
 if (Get-NetTCPConnection -LocalPort 9222 -State Listen -ErrorAction SilentlyContinue) { throw 'Native verification port is occupied.' }
 function Assert-Idle {

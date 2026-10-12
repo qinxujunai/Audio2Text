@@ -92,6 +92,11 @@ class AcceptRequest(BaseModel):
     job_id: str | None = Field(default=None, max_length=64)
 
 
+class CancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str | None = Field(default=None, max_length=64)
+
+
 def _check_idle():
     if repository.list_pending_ids():
         raise HTTPException(409, "请等待当前处理任务完成，再更改本地设置。")
@@ -232,8 +237,11 @@ def start_proofreading(capture_id: str):
 
 
 @router.post("/captures/{capture_id}/proofreading/cancel")
-def cancel_proofreading(capture_id: str):
-    service.cancel(capture_id)
+def cancel_proofreading(capture_id: str, payload: CancelRequest):
+    try:
+        service.cancel(capture_id, job_id=payload.job_id)
+    except StaleProofreadingError as exc:
+        raise HTTPException(409, {"code": "stale_job", "message": str(exc)}) from None
     return {"cancelled": True}
 
 

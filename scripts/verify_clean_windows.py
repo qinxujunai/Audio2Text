@@ -46,6 +46,7 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     report = {"installer_sha256": digest, "clean_profile_before_install": True, "checks": {}, "passed": False}
     process = None
+    native_log = None
     stage = "install"
     try:
         subprocess.run([str(args.installer.resolve()), "/S", f"/D={install}"], check=True, timeout=180)
@@ -54,7 +55,8 @@ def main() -> int:
         report["checks"]["installed_main_sha256"] = hashlib.file_digest(app.open("rb"), "sha256").hexdigest()
         environment = dict(os.environ)
         environment["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--remote-debugging-port=9222 --remote-debugging-address=127.0.0.1"
-        process = subprocess.Popen([str(app)], env=environment, creationflags=subprocess.CREATE_NO_WINDOW)
+        native_log = (args.output.parent / "clean-native-process.log").open("w", encoding="utf-8")
+        process = subprocess.Popen([str(app)], env=environment, stdout=native_log, stderr=native_log, creationflags=subprocess.CREATE_NO_WINDOW)
         stage = "native_first_run"
         with sync_playwright() as playwright:
             deadline = time.monotonic() + 60
@@ -62,8 +64,13 @@ def main() -> int:
                 try:
                     browser = playwright.chromium.connect_over_cdp("http://127.0.0.1:9222", timeout=2000)
                     break
-                except Exception:
+                except Exception as connection_error:
                     if process.poll() is not None or time.monotonic() > deadline:
+                        report["checks"]["native_exit_code"] = process.poll()
+                        report["checks"]["native_wait_seconds"] = 60
+                        report["checks"]["webview_processes"] = subprocess.check_output(["powershell.exe", "-NoProfile", "-Command", "@(Get-Process -Name msedgewebview2 -ErrorAction SilentlyContinue).Count"], text=True).strip()
+                        report["checks"]["webview_runtime_folders"] = [str(p) for p in (Path(os.environ["PROGRAMFILES(X86)"]) / "Microsoft/EdgeWebView/Application").glob("*/msedgewebview2.exe")]
+                        report["checks"]["cdp_error_type"] = type(connection_error).__name__
                         raise RuntimeError("Installed native window did not start.")
                     time.sleep(.25)
             page = next(p for c in browser.contexts for p in c.pages if "tauri.localhost" in p.url)
@@ -122,6 +129,8 @@ def main() -> int:
     finally:
         if process and process.poll() is None:
             process.terminate(); process.wait(timeout=20)
+        if native_log:
+            native_log.close()
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Clean Windows acceptance: {'passed' if report['passed'] else 'failed at '+stage}; installer={digest}")
     return 0 if report["passed"] else 1

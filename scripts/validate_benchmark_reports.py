@@ -92,17 +92,35 @@ def validate_extraction_report(path: str | Path) -> dict[str, Any]:
     summary = payload.get("summary") or {}
     ready = bool(summary.get("release_dataset_ready"))
     evidence = _sample_evidence(payload.get("samples"), transcription=False)
-    timeout_rate = float(summary.get("timeout_rate") or 0)
+    rows = [row for row in payload.get("samples", []) if isinstance(row, dict)]
+    count = len(rows)
+    rates = {
+        "success_rate": round(sum(r.get("success") is True and not r.get("error_code") for r in rows) / count, 4) if count else 0.0,
+        "content_complete_rate": round(sum(r.get("complete") is True and r.get("success") is True and not r.get("error_code") for r in rows) / count, 4) if count else 0.0,
+        "failure_rate": round(sum(r.get("success") is not True or bool(r.get("error_code")) for r in rows) / count, 4) if count else 0.0,
+        "timeout_rate": round(sum(r.get("error_code") == "benchmark_timeout" for r in rows) / count, 4) if count else 0.0,
+    }
+    reasons = list(evidence["reasons"])
+    for key, value in rates.items():
+        if key in summary and (not isinstance(summary[key], (int, float)) or isinstance(summary[key], bool) or not math.isfinite(summary[key]) or abs(summary[key] - value) > 0.0001):
+            reasons.append("summary_contradicts_raw_samples")
+    # Failures remain in the denominator. A platform with no working complete
+    # example in any round cannot satisfy a usable six-platform release.
+    for repeat in (1, 2, 3):
+        successful = {r.get("platform") for r in rows if r.get("repeat") == repeat and r.get("success") is True and r.get("complete") is True and not r.get("error_code")}
+        if not REQUIRED_PLATFORMS.issubset(successful):
+            reasons.append("platform_without_complete_success")
+    timeout_rate = rates["timeout_rate"]
     result = {
         "kind": "extraction",
         "path": str(path),
-        "ready": ready and timeout_rate == 0 and evidence["valid"],
+        "ready": ready and timeout_rate == 0 and not reasons,
         "sample_count": evidence["sample_count"],
         "run_count": evidence["run_count"],
-        "success_rate": float(summary.get("success_rate") or 0),
+        **rates,
         "p95_seconds": summary.get("p95_seconds"),
         "timeout_rate": timeout_rate,
-        "reasons": evidence["reasons"],
+        "reasons": sorted(set(reasons)),
     }
     if not ready:
         result["reasons"].append("release_dataset_ready=false")

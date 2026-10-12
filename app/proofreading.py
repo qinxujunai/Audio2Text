@@ -395,9 +395,13 @@ class ProofreadingService:
                     except OSError:
                         logger.warning("checkpoint_write_failed capture=%s", capture_id)
 
-    def cancel(self, capture_id):
+    def cancel(self, capture_id, *, job_id: str | None = None):
         with self.lock:
             if capture_id in self.cancel_events and capture_id in self.jobs:
+                if job_id != self.jobs[capture_id]["id"]:
+                    raise StaleProofreadingError("校对任务已更新，请刷新后再取消。")
+                if self.jobs[capture_id]["status"] != "running":
+                    return
                 self.cancel_events[capture_id].set()
                 self.jobs[capture_id]["status"] = "cancelled"
                 self._persist(capture_id)

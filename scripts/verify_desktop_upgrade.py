@@ -17,6 +17,7 @@ from app.local_preferences import _credential
 from tests.ui_local_tools_suite import ModelFixture
 from tests.ui_smoke_suite import _video_capture, _seed_capture
 from http.server import ThreadingHTTPServer
+from scripts.build_fingerprint import resource_fingerprint
 
 
 class VerificationDirectory(tempfile.TemporaryDirectory):
@@ -42,6 +43,8 @@ def main():
     model_server = ThreadingHTTPServer(("127.0.0.1", 0), ModelFixture)
     threading.Thread(target=model_server.serve_forever, daemon=True).start()
     report = {"executable": str(args.executable.resolve()), "sha256": hashlib.sha256(args.executable.read_bytes()).hexdigest()}
+    resources = resource_fingerprint(args.executable.parent)
+    report.update(resources)
     with VerificationDirectory(prefix="wanxiang-native-verify-", dir=root / "tests_runtime") as directory:
         workspace = Path(directory) / "workspace"
         capture = _video_capture(workspace, "proofing0001", created_at="2026-10-11T01:00:00", title="本地校对验收")
@@ -142,6 +145,8 @@ def main():
         finally:
             process.terminate(); process.wait(timeout=10); log.close()
             model_server.shutdown(); model_server.server_close()
+    if resource_fingerprint(args.executable.parent) != resources:
+        raise RuntimeError("Packaged resources changed during acceptance; report discarded.")
     args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Packaged CUDA upload, model discovery, conservative proofreading and both downloads: passed.")
 

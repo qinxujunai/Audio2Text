@@ -165,7 +165,7 @@ class ProofreadingDeliveryTests(unittest.TestCase):
             service = proof.ProofreadingService(repo); entered = threading.Event(); release = threading.Event()
             def late(*args): entered.set(); release.wait(3); return []
             with patch.object(proof, 'proofreading_config', return_value=dict(self.config)), patch.object(proof, 'request_edits', side_effect=late):
-                old = service.start('cap'); self.assertTrue(entered.wait(2)); service.cancel('cap')
+                old = service.start('cap'); self.assertTrue(entered.wait(2)); service.cancel('cap', job_id=old['id'])
                 new = service.start('cap'); self.assertNotEqual(old['id'], new['id']); release.set(); service.executor.shutdown(wait=True)
             self.assertEqual(service.status('cap')['job']['id'], new['id'])
             self.assertEqual(service.status('cap')['job']['status'], 'ready')
