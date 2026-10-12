@@ -15,7 +15,7 @@ import time
 from contextlib import contextmanager, ExitStack
 
 import httpx
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 
 def assert_clean_runner(environment: dict[str, str], data_root: Path) -> Path:
@@ -127,7 +127,17 @@ def main() -> int:
                             targets = diagnostic.get("http://127.0.0.1:9222/json/list").json()
                         report["checks"]["native_debug_targets"] = [{"type": t.get("type"), "origin": urlsplit(t.get("url", "")).scheme + "://" + urlsplit(t.get("url", "")).netloc} for t in targets]
                         raise RuntimeError("Native application page did not become ready.")
-                    time.sleep(.1)
+                    # Property polling plus time.sleep never pumps the sync
+                    # Playwright transport. Wait on SDK events so the newly
+                    # created WebView target reaches the local page cache.
+                    try:
+                        pages = [p for c in browser.contexts for p in c.pages]
+                        if pages:
+                            pages[0].wait_for_url("**://tauri.localhost/**", timeout=1000)
+                        elif browser.contexts:
+                            browser.contexts[0].wait_for_event("page", timeout=1000)
+                    except PlaywrightTimeoutError:
+                        pass
             page.set_default_timeout(30000)
             errors = []
             page.on("pageerror", lambda error: errors.append(type(error).__name__))
