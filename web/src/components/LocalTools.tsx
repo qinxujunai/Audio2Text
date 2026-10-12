@@ -166,7 +166,7 @@ function ProofreadingDialog({ captureId, onClose }: { captureId: string; onClose
       <button disabled={Boolean(busy) || running} type="button" className="is-primary" onClick={() => void run("start", async () => {
         const job = await localRequest<Job>(`/captures/${captureId}/proofreading`, {}); setData(d => ({ ...d, job })); setSelected(new Set()); setPage(0); setShowSaved(false);
       })}><PendingLabel pending={busy === "start" || running} label={resumable ? "继续校对" : "开始校对"} waiting="正在校对…" /></button>
-      {running && <button disabled={Boolean(busy)} type="button" onClick={() => void run("cancel", async () => { await localRequest(`/captures/${captureId}/proofreading/cancel`, {}); await load(); })}><PendingLabel pending={busy === "cancel"} label="取消校对" waiting="正在取消…" /></button>}
+      {running && <button disabled={Boolean(busy)} type="button" onClick={() => void run("cancel", async () => { await localRequest(`/captures/${captureId}/proofreading/cancel`, { job_id: data.job?.id }); await load(); })}><PendingLabel pending={busy === "cancel"} label="取消校对" waiting="正在取消…" /></button>}
     </div>
     {running && <div role="status"><progress value={data.job?.progress || 0} max={100} /><p>正在检查 · {data.job?.progress}%{data.job?.total_chunks ? ` · ${data.job.completed_chunks || 0}/${data.job.total_chunks} 段` : ""}</p><p className="local-tools-note">可以关闭窗口，完成部分会保存在本机。</p></div>}
     {data.job?.status === "failed" && <p role="alert">{data.job.message}</p>}

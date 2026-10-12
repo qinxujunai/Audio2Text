@@ -108,6 +108,12 @@ if (-not $SkipSidecar) {
 }
 $sidecarRoot = Join-Path $webRoot 'src-tauri\sidecar\wanxiang-api'
 $sidecarManifest = Get-Content -LiteralPath (Join-Path $sidecarRoot 'sidecar-build-manifest.json') -Raw -Encoding utf8 | ConvertFrom-Json
+$resourceJson = & $snapshotPython (Join-Path $PSScriptRoot 'build_fingerprint.py') --resources $sidecarRoot
+if ($LASTEXITCODE -ne 0) { throw 'Could not fingerprint the complete sidecar resource tree.' }
+$resourceSnapshot = $resourceJson | ConvertFrom-Json
+if (-not $sidecarManifest.resource_tree_sha256 -or $resourceSnapshot.resource_tree_sha256 -ne $sidecarManifest.resource_tree_sha256) {
+    throw 'Sidecar DLL/resource tree changed or lacks a complete manifest. Rebuild and validate it before packaging.'
+}
 if ($sidecarManifest.python_version -ne '3.11' -or $sidecarManifest.source_fingerprint -ne (Get-BackendSourceFingerprint) -or $sidecarManifest.executable_sha256 -ne (Get-FileHash -LiteralPath (Join-Path $sidecarRoot 'wanxiang-api.exe')).Hash.ToLowerInvariant()) {
     throw 'Sidecar manifest does not match the current backend sources and executable. Rebuild the sidecar before packaging.'
 }
@@ -137,11 +143,14 @@ if ($freshInstaller.Count -ne 1) {
 if ((Get-SourceSnapshot).source_fingerprint -ne $sourceSnapshot.source_fingerprint) {
     throw 'Repository files changed during packaging; this installer is not a frozen delivery. Rebuild after integration stops.'
 }
+$finalResources = & $snapshotPython (Join-Path $PSScriptRoot 'build_fingerprint.py') --resources $sidecarRoot
+if ($LASTEXITCODE -ne 0 -or ($finalResources | ConvertFrom-Json).resource_tree_sha256 -ne $resourceSnapshot.resource_tree_sha256) { throw 'Sidecar resources changed during packaging; refusing a mixed installer.' }
 $sourceSnapshot | Add-Member -NotePropertyName frontend_build_id -NotePropertyValue $manifest.build_id
 $sourceSnapshot | Add-Member -NotePropertyName installer_sha256 -NotePropertyValue (Get-FileHash -LiteralPath $freshInstaller[0].FullName).Hash.ToLowerInvariant()
 $sourceSnapshot | Add-Member -NotePropertyName version -NotePropertyValue ((Get-Content (Join-Path $webRoot 'src-tauri\tauri.conf.json') -Raw -Encoding utf8 | ConvertFrom-Json).version)
 $sourceSnapshot | Add-Member -NotePropertyName main_sha256 -NotePropertyValue (Get-FileHash -LiteralPath $executable).Hash.ToLowerInvariant()
 $sourceSnapshot | Add-Member -NotePropertyName backend_sha256 -NotePropertyValue (Get-FileHash -LiteralPath (Join-Path $webRoot 'src-tauri\sidecar\wanxiang-api\wanxiang-api.exe')).Hash.ToLowerInvariant()
+$sourceSnapshot | Add-Member -NotePropertyName resource_tree_sha256 -NotePropertyValue $resourceSnapshot.resource_tree_sha256
 $sourceSnapshot | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $targetRoot 'delivery-build-manifest.json') -Encoding utf8
 
 Write-Host "`nDesktop package verified."

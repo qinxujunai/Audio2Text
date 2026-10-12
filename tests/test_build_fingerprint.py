@@ -3,10 +3,26 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts.build_fingerprint import source_fingerprint
+from scripts.build_fingerprint import source_fingerprint, resource_fingerprint
 
 
 class BuildFingerprintTests(unittest.TestCase):
+    def test_resource_tree_detects_changed_added_and_removed_dlls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/"_internal").mkdir()
+            dll = root/"_internal/runtime.dll"
+            dll.write_bytes(b"original")
+            baseline = resource_fingerprint(root)
+            (root/"sidecar-build-manifest.json").write_text("metadata", encoding="utf-8")
+            self.assertEqual(baseline, resource_fingerprint(root))
+            dll.write_bytes(b"changed")
+            self.assertNotEqual(baseline["resource_tree_sha256"], resource_fingerprint(root)["resource_tree_sha256"])
+            dll.write_bytes(b"original")
+            extra = root/"_internal/extra.dll"; extra.write_bytes(b"extra")
+            self.assertNotEqual(baseline, resource_fingerprint(root))
+            extra.unlink(); dll.unlink()
+            self.assertNotEqual(baseline, resource_fingerprint(root))
     def test_snapshot_detects_untracked_changes_and_excludes_ignored_runtime(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

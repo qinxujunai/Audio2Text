@@ -138,5 +138,8 @@ Write-Host "Sidecar ready: $executable"
 if ((Get-BackendSourceFingerprint) -ne $backendFingerprint) {
     throw 'Backend sources changed during packaging; refusing to label the sidecar current. Rebuild after edits stop.'
 }
-@{source_fingerprint=$backendFingerprint; python_version=$buildPythonVersion; generated_at=(Get-Date).ToUniversalTime().ToString('o'); executable_sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()} |
-    ConvertTo-Json | Set-Content -LiteralPath (Join-Path $distPath 'sidecar-build-manifest.json') -Encoding utf8
+$resourceJson = & $buildPython (Join-Path $PSScriptRoot 'build_fingerprint.py') --resources $distPath
+if ($LASTEXITCODE -ne 0) { throw 'Could not fingerprint complete sidecar resources.' }
+$resources = $resourceJson | ConvertFrom-Json
+@{source_fingerprint=$backendFingerprint; python_version=$buildPythonVersion; generated_at=(Get-Date).ToUniversalTime().ToString('o'); executable_sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant(); resource_tree_sha256=$resources.resource_tree_sha256; resource_files=$resources.resource_files} |
+    ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $distPath 'sidecar-build-manifest.json') -Encoding utf8

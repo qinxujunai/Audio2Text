@@ -114,9 +114,25 @@ class LocalToolsTests(unittest.TestCase):
             with patch("app.proofreading.proofreading_config", return_value={"model": "mock"}), patch("app.proofreading.request_edits", side_effect=request):
                 service.start("cap")
                 self.assertTrue(entered.wait(1))
-                service.cancel("cap"); release.set(); service.executor.shutdown()
+                service.cancel("cap", job_id=service.jobs["cap"]["id"]); release.set(); service.executor.shutdown()
             self.assertEqual(service.status("cap")["job"]["status"], "cancelled")
             self.assertIsNone(service.saved("cap"))
+
+    def test_late_cancel_cannot_cancel_a_new_job(self):
+        from app.proofreading import StaleProofreadingError
+        with tempfile.TemporaryDirectory() as root:
+            service = ProofreadingService(SimpleNamespace(capture_workspace=lambda _: Path(root)))
+            event = threading.Event()
+            service.cancel_events["cap"] = event
+            service.jobs["cap"] = {"id": "new", "status": "running"}
+            with self.assertRaises(StaleProofreadingError):
+                service.cancel("cap", job_id="old")
+            self.assertFalse(event.is_set())
+            self.assertEqual(service.jobs["cap"]["status"], "running")
+            service.cancel("cap", job_id="new")
+            service.cancel("cap", job_id="new")
+            self.assertTrue(event.is_set())
+            service.executor.shutdown()
 
     def test_cuda_does_not_fallback_after_load_error(self):
         options = {"device": "cuda", "compute_type": "int8_float16", "model_path": Path.cwd()}

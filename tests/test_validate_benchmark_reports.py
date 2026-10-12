@@ -6,11 +6,21 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 
-from scripts.validate_benchmark_reports import validate_reports
+from scripts.validate_benchmark_reports import validate_reports, validate_extraction_report
 from scripts.validate_benchmark_reports import _sample_evidence, REQUIRED_SLICES, REQUIRED_PLATFORMS
 
 
 class ValidateBenchmarkReportsTestCase(unittest.TestCase):
+    def test_failed_raw_records_cannot_be_overridden_by_success_summary(self):
+        platforms = sorted(REQUIRED_PLATFORMS)
+        rows = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i%6]}:content-{i}", "platform": platforms[i%6], "success": False, "complete": False, "error_code": "platform_challenge"} for repeat in range(1,4) for i in range(60)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"report.json"
+            path.write_text(json.dumps({"summary": {"release_dataset_ready": True, "success_rate": 1.0}, "samples": rows}), encoding="utf-8")
+            result = validate_extraction_report(path)
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["success_rate"], 0.0)
+        self.assertIn("summary_contradicts_raw_samples", result["reasons"])
     def transcription_rows(self):
         slices = sorted(REQUIRED_SLICES)
         return [{"id": f"sample-{i}", "repeat": repeat, "audio_sha256": f"{i:064x}", "reference": "人工参考文本", "reference_kind": "human", "reference_source": f"curated-corpus/annotation-{i}", "duration_seconds": 200.0, "slice": slices[i % len(slices)], "mixed_error_rate": 0.05} for repeat in range(1,4) for i in range(72)]
