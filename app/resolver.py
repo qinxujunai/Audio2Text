@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from app.settings import DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT
+from app.url_safety import UnsafeExternalUrlError, assert_public_http_url
 
 
 @dataclass(slots=True)
@@ -24,25 +25,48 @@ class ResolvedSource:
 
 
 PLATFORM_RULES = [
-    (("youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"), "youtube", "video", "YouTube"),
+    (("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"), "youtube", "video", "YouTube"),
     (("bilibili.com", "www.bilibili.com", "m.bilibili.com", "b23.tv"), "bilibili", "video", "哔哩哔哩"),
     (("xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"), "xiaoyuzhou", "audio", "小宇宙"),
-    (("douyin.com", "www.douyin.com", "v.douyin.com", "jingxuan.douyin.com"), "douyin", "video", "抖音"),
-    (("xiaohongshu.com", "www.xiaohongshu.com", "xhslink.com"), "xiaohongshu", "webpage", "小红书"),
+    (("douyin.com", "www.douyin.com", "m.douyin.com", "v.douyin.com", "jingxuan.douyin.com"), "douyin", "video", "抖音"),
+    (("xiaohongshu.com", "www.xiaohongshu.com", "m.xiaohongshu.com", "xhslink.com"), "xiaohongshu", "webpage", "小红书"),
     (("mp.weixin.qq.com",), "wechat_article", "article", "微信公众号"),
 ]
 
-AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac"}
+AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 TRAILING_NOISE = ".,;:!?)]}>\"'，。；：！？】）》」』、"
 SHORT_LINK_HOSTS = {"v.douyin.com", "b23.tv", "xhslink.com", "youtu.be"}
 
 
+def _hostname(url: str) -> str:
+    """Return a normalized hostname without ports or a trailing dot."""
+    try:
+        return (urlparse(normalize_url(url)).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
 def _is_xiaohongshu_landing(url: str) -> bool:
     parsed = urlparse(url)
-    host = (parsed.netloc or "").lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
     path = (parsed.path or "").rstrip("/")
     return host.endswith("xiaohongshu.com") and path in {"", "/explore"}
+
+
+def _infer_generic_media_type(url: str) -> str:
+    """Infer a media input from a direct public audio/video URL.
+
+    Platform URLs are resolved by ``PLATFORM_RULES`` first.  This narrow
+    extension check only applies to otherwise-generic URLs, so an article that
+    happens to contain a media query parameter is not reclassified.
+    """
+    suffix = Path(urlparse(url).path or "").suffix.lower()
+    if suffix in AUDIO_EXTENSIONS:
+        return "audio"
+    if suffix in VIDEO_EXTENSIONS:
+        return "video"
+    return "webpage"
 
 
 def clean_input_text(raw_text: str) -> str:
@@ -85,7 +109,11 @@ def normalize_url(raw_url: str) -> str:
 
 def _expand_short_url(url: str) -> str:
     normalized = normalize_url(url)
-    host = (urlparse(normalized).netloc or "").lower()
+    try:
+        assert_public_http_url(normalized)
+    except UnsafeExternalUrlError as exc:
+        raise ValueError(str(exc)) from exc
+    host = _hostname(normalized)
     if host not in SHORT_LINK_HOSTS:
         return normalized
 
@@ -100,6 +128,10 @@ def _expand_short_url(url: str) -> str:
             response = client.get(normalized)
             response.raise_for_status()
             expanded = str(response.url)
+            try:
+                assert_public_http_url(expanded)
+            except UnsafeExternalUrlError as exc:
+                raise ValueError(str(exc)) from exc
             if host == "xhslink.com" and _is_xiaohongshu_landing(expanded):
                 return normalized
             return expanded
@@ -109,7 +141,7 @@ def _expand_short_url(url: str) -> str:
 
 def _host_score(url: str) -> tuple[int, int]:
     normalized = normalize_url(url)
-    host = (urlparse(normalized).netloc or "").lower()
+    host = _hostname(normalized)
     for index, (hosts, _, _, _) in enumerate(PLATFORM_RULES):
         if host in hosts:
             return (0, index)
@@ -133,7 +165,11 @@ def _select_url(raw_text: str) -> tuple[str, list[str], str, str | None]:
 def resolve_url(raw_input: str) -> ResolvedSource:
     cleaned = clean_input_text(raw_input)
     normalized, detected_urls, selection_reason, warning = _select_url(cleaned)
-    host = (urlparse(normalized).netloc or "").lower()
+    try:
+        assert_public_http_url(normalized)
+    except UnsafeExternalUrlError as exc:
+        raise ValueError(str(exc)) from exc
+    host = _hostname(normalized)
 
     for hosts, platform, content_type, display_name in PLATFORM_RULES:
         if host in hosts:
@@ -154,7 +190,7 @@ def resolve_url(raw_input: str) -> ResolvedSource:
         cleaned_input=cleaned,
         normalized_url=normalized,
         platform="generic_web",
-        content_type="webpage",
+        content_type=_infer_generic_media_type(normalized),
         display_platform="网页",
         detected_urls=detected_urls,
         selection_reason=selection_reason,

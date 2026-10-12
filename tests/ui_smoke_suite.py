@@ -3,19 +3,28 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 from playwright.sync_api import sync_playwright
+
+# Keep direct file invocation (`python tests/ui_smoke_suite.py`) equivalent to
+# module invocation by making the repository root importable before app imports.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.schemas import (
     ArtifactModel,
     CaptureModel,
     ProcessingStateModel,
     ResultDocumentModel,
+    ResultSegmentModel,
     ResultViewsModel,
     SourceMetaModel,
 )
@@ -78,6 +87,17 @@ def _terminate_process_tree(process: subprocess.Popen[str] | None, *, timeout: f
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         process.kill()
+
+
+def _cleanup_temporary_workspace(directory):
+    for attempt in range(20):
+        try:
+            return directory.cleanup()
+        except PermissionError:
+            if attempt == 19:
+                raise
+            # Windows child process log handles can outlive the wrapper PID.
+            time.sleep(.25)
 
 
 def _seed_capture(workspace_dir: Path, capture: CaptureModel) -> None:
@@ -216,8 +236,40 @@ def _video_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
     )
 
 
+def _video_text_only_capture(
+    workspace_dir: Path,
+    capture_id: str,
+    *,
+    created_at: str,
+    title: str,
+) -> CaptureModel:
+    capture = _video_capture(
+        workspace_dir,
+        capture_id,
+        created_at=created_at,
+        title=title,
+    )
+    capture.result.artifacts = [
+        artifact
+        for artifact in capture.result.artifacts
+        if artifact.type not in {"preview_media", "source_media", "source_audio"}
+    ]
+    capture.result.result_notice = "文本已整理完成，但视频文件暂未就绪。"
+    return capture
+
+
 def _audio_capture(workspace_dir: Path, capture_id: str, *, created_at: str, title: str) -> CaptureModel:
-    primary_text = "小宇宙音频样例已经转写完成。\n\n这里保留两段正文，用于验证音频下载入口不会和视频下载混在一起。"
+    segment_texts = [
+        "小宇宙音频样例已经转写完成。",
+        "这里保留完整正文，用于验证播放器和时间跳转。",
+        "播客的价值不仅在于声音，也在于可以被检索和引用。",
+        "封面、节目名称和作者共同帮助用户确认内容来源。",
+        "播放进度应当与带时间的正文保持同步。",
+        "点击正文段落时，播放器需要准确跳到对应位置。",
+        "在移动端离开播放器区域后，紧凑控制条才应该出现。",
+        "返回播放器区域时，紧凑控制条应当自动收起。",
+    ]
+    primary_text = "\n\n".join(segment_texts)
     artifacts = [
         _artifact(
             workspace_dir,
@@ -234,6 +286,14 @@ def _audio_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
             "episode.m4a",
             mime_type="audio/mp4",
             content=b"fake-podcast-audio",
+        ),
+        _artifact(
+            workspace_dir,
+            capture_id,
+            "cover_image",
+            "cover.svg",
+            mime_type="image/svg+xml",
+            content=SVG_IMAGE_BYTES,
         ),
     ]
     return CaptureModel(
@@ -270,6 +330,16 @@ def _audio_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
             completeness="full",
             transcript_status="transcribed",
             text_source="transcript",
+            segments=[
+                ResultSegmentModel(
+                    kind="timed_text",
+                    origin="transcript",
+                    text=text,
+                    start_sec=index * 16,
+                    end_sec=(index + 1) * 16,
+                )
+                for index, text in enumerate(segment_texts)
+            ],
             views=ResultViewsModel(primary=primary_text),
             content_facts=[
                 {"key": "title", "label": "标题", "value": title},
@@ -282,7 +352,14 @@ def _audio_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
     )
 
 
-def _image_capture(workspace_dir: Path, capture_id: str, *, created_at: str, title: str) -> CaptureModel:
+def _image_capture(
+    workspace_dir: Path,
+    capture_id: str,
+    *,
+    created_at: str,
+    title: str,
+    primary_text: str = "",
+) -> CaptureModel:
     artifacts = [
         _artifact(
             workspace_dir,
@@ -345,13 +422,13 @@ def _image_capture(workspace_dir: Path, capture_id: str, *, created_at: str, tit
             completed_stages=["resolve", "extract", "compose"],
         ),
         result=ResultDocumentModel(
-            primary_text="",
+            primary_text=primary_text,
             primary_result_type="article",
             confidence="high",
             completeness="full",
             transcript_status="skipped",
             text_source="article",
-            views=ResultViewsModel(),
+            views=ResultViewsModel(primary=primary_text),
             content_facts=[
                 {"key": "title", "label": "标题", "value": title},
                 {"key": "platform", "label": "平台", "value": "小红书"},
@@ -416,7 +493,8 @@ def _failed_capture(capture_id: str, *, created_at: str) -> CaptureModel:
     return CaptureModel(
         id=capture_id,
         input_type="url",
-        status="failed",
+        status="needs_user_action",
+        result_state="awaiting_user",
         title="这条失败记录不应出现在首页最近记录里",
         source_platform="youtube",
         content_type="video",
@@ -432,7 +510,126 @@ def _failed_capture(capture_id: str, *, created_at: str) -> CaptureModel:
             content_type="video",
             canonical_url=f"https://example.com/{capture_id}",
         ),
-        processing=ProcessingStateModel(current_stage="failed", progress_percent=100),
+        processing=ProcessingStateModel(
+            current_stage="awaiting_user",
+            progress_percent=18,
+            failure_reason_code="browser_challenge_required",
+            retryable=True,
+        ),
+        result=None,
+    )
+
+
+def _legacy_platform_failure_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    capture = _failed_capture(capture_id, created_at=created_at)
+    capture.status = "failed"
+    capture.result_state = "failed"
+    return capture
+
+
+def _permanent_failure_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    capture = _failed_capture(capture_id, created_at=created_at)
+    capture.status = "failed"
+    capture.result_state = "failed"
+    capture.error_message = "这条内容当前已经失效或不可访问，请换一条公开内容再试。"
+    capture.processing.current_stage = "failed"
+    capture.processing.progress_percent = 0
+    capture.processing.failure_reason_code = "source_not_found"
+    capture.processing.retryable = False
+    return capture
+
+
+def _transient_connection_failure_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    capture = _permanent_failure_capture(capture_id, created_at=created_at)
+    capture.title = "来源连接暂时不稳定"
+    capture.error_message = "当前网络环境没有稳定连上来源站点，请稍后重试。"
+    # Exercise the platform-qualified form emitted by external extraction
+    # adapters, not only the legacy generic reason code.
+    capture.processing.failure_reason_code = "douyin_extract_network_failed"
+    capture.processing.retryable = True
+    return capture
+
+
+def _retry_exhausted_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    capture = _transient_connection_failure_capture(capture_id, created_at=created_at)
+    capture.status = "needs_user_action"
+    capture.result_state = "awaiting_user"
+    capture.error_message = "连接仍不稳定，已自动重试；你可以重新处理，或换一条公开内容。"
+    capture.processing.current_stage = "awaiting_user"
+    capture.processing.progress_percent = 18
+    capture.processing.failure_reason_code = "retry_exhausted"
+    capture.processing.retryable = True
+    return capture
+
+
+def _transcription_runtime_unavailable_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    capture = _permanent_failure_capture(capture_id, created_at=created_at)
+    capture.title = "转写组件尚未准备"
+    capture.error_stage = "transcribe"
+    capture.error_message = "转写运行时还没有准备好，媒体文件已保留。请稍后重试。"
+    capture.processing.failure_reason_code = "transcribe_runtime_unavailable"
+    capture.processing.retryable = False
+    return capture
+
+
+def _xiaohongshu_short_link_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    url = "https://xhslink.com/a/example"
+    return CaptureModel(
+        id=capture_id,
+        input_type="url",
+        status="needs_user_action",
+        result_state="awaiting_user",
+        title="小红书短链需要补充完整链接",
+        source_platform="xiaohongshu",
+        content_type="webpage",
+        url=url,
+        created_at=created_at,
+        updated_at=created_at,
+        started_at=created_at,
+        finished_at=created_at,
+        error_stage="extract",
+        error_message="这条小红书内容请从浏览器地址栏复制完整网页链接后再试。",
+        source=SourceMetaModel(
+            platform="xiaohongshu",
+            content_type="webpage",
+            canonical_url=url,
+        ),
+        processing=ProcessingStateModel(
+            current_stage="awaiting_user",
+            progress_percent=18,
+            failure_reason_code="xiaohongshu_full_url_required",
+            retryable=False,
+        ),
+        result=None,
+    )
+
+
+def _processing_capture(capture_id: str, *, created_at: str) -> CaptureModel:
+    return CaptureModel(
+        id=capture_id,
+        input_type="url",
+        status="processing",
+        result_state="processing",
+        title="正在整理的处理中样例",
+        source_platform="youtube",
+        content_type="video",
+        url=f"https://example.com/{capture_id}",
+        created_at=created_at,
+        updated_at=created_at,
+        started_at=created_at,
+        source=SourceMetaModel(
+            platform="youtube",
+            content_type="video",
+            canonical_url=f"https://example.com/{capture_id}",
+        ),
+        processing=ProcessingStateModel(
+            current_stage="transcribe",
+            progress_percent=52,
+            # A provider must never be able to leak an internal failure detail
+            # into the calm in-progress surface.
+            progress_detail="转写失败：provider timeout",
+            completed_stages=["resolve", "extract"],
+        ),
         result=None,
     )
 
@@ -451,8 +648,36 @@ def _seed_workspace(workspace_dir: Path) -> None:
 
     captures = [
         _video_capture(workspace_dir, "demovideo001", created_at="2026-04-11 10:00:00", title="你只能靠自己得到自己想要的情感共鸣 语录"),
+        _video_text_only_capture(
+            workspace_dir,
+            "demovideotextonly001",
+            created_at="2026-04-11 09:59:45",
+            title="文字已完成但视频仍在准备",
+        ),
         _audio_capture(workspace_dir, "demoaudio001", created_at="2026-04-11 09:59:30", title="蚂蚁测试 AI 版支付宝，市场监管总局约谈山姆"),
         _image_capture(workspace_dir, "demoimage001", created_at="2026-04-11 09:59:00", title="图文整理结果样例"),
+        _image_capture(
+            workspace_dir,
+            "demoimagelong001",
+            created_at="2026-04-11 09:58:30",
+            title="有人会 get 这张图片，并拍过类似的构图（小船）",
+            primary_text="\n\n".join(
+                [
+                    "船儿轻晃在粉蓝色的晚风中",
+                    "偏爱坐在这一叶扁舟里",
+                    "独享一场橘粉交织的日落盛宴",
+                    "落日揉碎余晖洒落在海面",
+                    "波光粼粼，晚风温柔",
+                    "喧嚣的世界好像瞬间慢了下来",
+                    "所有的焦虑、疲惫与烦躁",
+                    "都被傍晚的落日悄悄治愈",
+                    "原来平凡日子里的美好",
+                    "从来都藏在转瞬即逝的黄昏里",
+                    "愿每一次驻足都能看见生活的光",
+                    "也愿每一段文字都值得被好好阅读",
+                ]
+            ),
+        ),
         _simple_capture(
             workspace_dir,
             "recenttxt001",
@@ -486,6 +711,23 @@ def _seed_workspace(workspace_dir: Path) -> None:
             content_type="video",
         ),
         _failed_capture("recentbad001", created_at="2026-04-11 09:55:00"),
+        _legacy_platform_failure_capture(
+            "recentlegacybad001", created_at="2026-04-11 09:54:50"
+        ),
+        _permanent_failure_capture(
+            "recentpermanent001", created_at="2026-04-11 09:54:48"
+        ),
+        _transient_connection_failure_capture(
+            "recenttransient001", created_at="2026-04-11 09:54:42"
+        ),
+        _retry_exhausted_capture(
+            "recentretryexhausted001", created_at="2026-04-11 09:54:40"
+        ),
+        _transcription_runtime_unavailable_capture(
+            "recenttranscribefixture001", created_at="2026-04-11 09:54:35"
+        ),
+        _xiaohongshu_short_link_capture("recentshort001", created_at="2026-04-11 09:54:45"),
+        _processing_capture("demoprocessing001", created_at="2026-04-11 09:54:30"),
     ]
 
     for capture in captures:
@@ -516,6 +758,11 @@ class UISmokeTestCase(unittest.TestCase):
         env.update(
             {
                 "AUDIO2TEXT_WORKSPACE_DIR": str(cls.workspace_dir),
+                # UI fixtures intentionally exercise retry, challenge and
+                # legacy-recovery paths. Keep their diagnostics beside the
+                # disposable workspace so a direct UI-smoke run cannot make
+                # production workspace/logs look like a real user failure.
+                "AUDIO2TEXT_LOGS_DIR": str(Path(cls.tempdir.name) / "logs"),
                 "AUDIO2TEXT_API_HOST": "127.0.0.1",
                 "AUDIO2TEXT_API_PORT": str(cls.port),
                 "AUDIO2TEXT_TRANSCRIPTION_PROVIDER": "openai_compatible",
@@ -523,6 +770,10 @@ class UISmokeTestCase(unittest.TestCase):
                 "AUDIO2TEXT_OPENAI_COMPATIBLE_API_KEY": "ui-smoke-key",
                 "AUDIO2TEXT_OPENAI_COMPATIBLE_MODEL": "gpt-4o-mini-transcribe",
                 "RELAY_AUTO_START_WORKER": "0",
+                # Keep every seeded state available for deep-link assertions;
+                # the production history limit should not prune test fixtures
+                # before the browser reaches them.
+                "CAPTURE_HISTORY_LIMIT": "32",
                 "PLAYWRIGHT_BROWSERS_PATH": str(browsers_dir),
             }
         )
@@ -548,7 +799,7 @@ class UISmokeTestCase(unittest.TestCase):
                 logs = ""
             _terminate_process_tree(cls.server_process)
             cls.server_log.close()
-            cls.tempdir.cleanup()
+            _cleanup_temporary_workspace(cls.tempdir)
             raise RuntimeError(f"UI smoke server failed to start: {exc}\n{logs}") from exc
 
     @classmethod
@@ -562,7 +813,7 @@ class UISmokeTestCase(unittest.TestCase):
         if hasattr(cls, "server_log"):
             cls.server_log.close()
         if hasattr(cls, "tempdir"):
-            cls.tempdir.cleanup()
+            _cleanup_temporary_workspace(cls.tempdir)
 
     def setUp(self) -> None:
         _seed_workspace(self.workspace_dir)
@@ -602,6 +853,7 @@ class UISmokeTestCase(unittest.TestCase):
             box = self.page.locator(".recent-inline-card").nth(index).bounding_box()
             self.assertIsNotNone(box)
             heights.append(round(box["height"], 2))
+
         self.assertLessEqual(max(heights) - min(heights), 2.0)
 
         self.page.get_by_role("button", name="查看更多").click()
@@ -619,6 +871,130 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.get_by_role("button", name="撤销").click()
         self.page.wait_for_timeout(200)
         self.assertTrue(self.page.locator(".recent-inline-card").filter(has_text=first_title).first.is_visible())
+
+    def test_client_input_error_stays_on_home_surface(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+        self.page.locator("textarea").fill("http://127.0.0.1:9/nope")
+        self.page.get_by_role("button", name="开始处理").click()
+
+        self.page.get_by_text("不能处理本机或内网地址，请提供公开网页链接。", exact=True).wait_for()
+        self.page.locator(".input-stage").wait_for(state="visible")
+        self.assertTrue(self.page.locator(".input-stage").is_visible())
+        self.assertEqual(self.page.locator(".processing-stage").count(), 0)
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+
+    def test_homepage_adapts_without_scaling_the_interface(self) -> None:
+        expectations = [
+            (1512, 940, 56.0, 4),
+            (1280, 820, 53.76, 4),
+            (760, 680, 32.0, 2),
+            (390, 844, 32.0, 1),
+        ]
+
+        for width, height, expected_heading_size, expected_columns in expectations:
+            with self.subTest(viewport=f"{width}x{height}"):
+                self.page.set_viewport_size({"width": width, "height": height})
+                self.page.goto(self.base_url, wait_until="domcontentloaded", timeout=30000)
+                self.page.locator("textarea").wait_for()
+                self.page.wait_for_timeout(700)
+
+                self.assertLessEqual(
+                    self.page.evaluate("document.documentElement.scrollWidth"),
+                    width,
+                )
+                heading_size = self.page.locator(".hero-copy h1").evaluate(
+                    "element => parseFloat(getComputedStyle(element).fontSize)"
+                )
+                self.assertAlmostEqual(heading_size, expected_heading_size, delta=0.1)
+
+                cards = self.page.locator(".recent-inline-card")
+                cards.first.wait_for()
+                first_row_top = cards.first.bounding_box()["y"]
+                first_row_count = sum(
+                    1
+                    for index in range(cards.count())
+                    if abs(cards.nth(index).bounding_box()["y"] - first_row_top) < 2
+                )
+                self.assertEqual(first_row_count, expected_columns)
+
+    def test_release_viewports_have_no_web_download_or_fixed_result_panel(self) -> None:
+        for width, height in ((390, 844), (768, 1024), (1440, 900), (2560, 1600)):
+            with self.subTest(viewport=f"{width}x{height}"):
+                self.page.set_viewport_size({"width": width, "height": height})
+                self.page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
+                self.page.locator(".deliverable-workspace").wait_for()
+                self.assertEqual(self.page.get_by_text("Windows 版", exact=True).count(), 0)
+                self.assertEqual(self.page.locator(".has-fixed-media").count(), 0)
+                self.assertLessEqual(
+                    self.page.evaluate("document.documentElement.scrollWidth"),
+                    width + 2,
+                )
+                workspace = self.page.locator(".deliverable-workspace").bounding_box()
+                self.assertIsNotNone(workspace)
+                self.assertGreater(workspace["width"], min(350, width - 24))
+
+    def test_result_workspace_preserves_centered_web_canvas(self) -> None:
+        # Native IPC only supplies this disposable test server, never the installed app.
+        for native in (False, True):
+            context = self.browser.new_context()
+            if native:
+                context.add_init_script(
+                    """window.__TAURI_INTERNALS__ = {
+                        invoke: async (command) => {
+                            if (command === "desktop_runtime_info") {
+                                return {api_base: location.origin, token: ""};
+                            }
+                            throw new Error("Unexpected desktop command: " + command);
+                        }
+                    };"""
+                )
+            page = context.new_page()
+            try:
+                for width, height in ((1280, 820), (1707, 1045), (1920, 1080), (2560, 1600)):
+                    for capture_id in ("demovideo001", "demoimagelong001"):
+                        with self.subTest(native=native, viewport=f"{width}x{height}", capture=capture_id):
+                            page.set_viewport_size({"width": width, "height": height})
+                            page.goto(f"{self.base_url}/c/{capture_id}", wait_until="domcontentloaded")
+                            page.locator(".deliverable-workspace").wait_for()
+                            page.wait_for_function(
+                                "document.querySelector('.stage-shell-ready')?.style.opacity === '1'"
+                            )
+                            metrics = page.evaluate(
+                                """() => {
+                                    const box = selector => {
+                                        const r = document.querySelector(selector).getBoundingClientRect();
+                                        return {x: r.x, y: r.y, width: r.width, height: r.height, bottom: r.bottom};
+                                    };
+                                    return {
+                                        workspace: box(".deliverable-workspace"),
+                                        primary: box(".deliverable-primary"),
+                                        secondary: box(".media-panel, .image-gallery"),
+                                        facts: box(".facts-strip"),
+                                        overflow: document.documentElement.scrollWidth,
+                                        native: !!document.querySelector(".is-native-chrome-only")
+                                    };
+                                }"""
+                            )
+                            self.assertEqual(metrics["native"], native)
+                            self.assertLessEqual(metrics["overflow"], width + 2)
+                            self.assertAlmostEqual(metrics["workspace"]["width"], 980, delta=2)
+                            self.assertAlmostEqual(metrics["workspace"]["x"], (width - 980) / 2, delta=2)
+                            self.assertLessEqual(abs(metrics["primary"]["height"] - metrics["secondary"]["height"]), 2)
+                            self.assertGreater(metrics["primary"]["width"], metrics["workspace"]["width"] * 0.45)
+                            self.assertLessEqual(metrics["primary"]["height"] / metrics["primary"]["width"], 1.35)
+                            self.assertLessEqual(metrics["facts"]["bottom"], height + 1)
+                            self.assertLessEqual(
+                                metrics["facts"]["y"] - (metrics["workspace"]["y"] + metrics["workspace"]["height"]),
+                                20,
+                            )
+                            screenshots = os.environ.get("UI_LAYOUT_SCREENSHOTS")
+                            if screenshots and capture_id == "demovideo001":
+                                destination = Path(screenshots)
+                                destination.mkdir(parents=True, exist_ok=True)
+                                page.screenshot(path=str(destination / f"{'native' if native else 'web'}-{width}x{height}.png"))
+            finally:
+                context.close()
 
     def test_mobile_deep_link_uses_full_result_width(self) -> None:
         self.context.close()
@@ -721,15 +1097,42 @@ class UISmokeTestCase(unittest.TestCase):
 
         primary_box = self.page.locator(".result-surface").bounding_box()
         media_box = self.page.locator(".media-panel").bounding_box()
+        workspace = self.page.locator(".deliverable-workspace")
+        workspace_box = workspace.bounding_box()
         self.assertIsNotNone(primary_box)
         self.assertIsNotNone(media_box)
+        self.assertIsNotNone(workspace_box)
         self.assertLessEqual(abs(primary_box["height"] - media_box["height"]), 16)
+        self.assertGreater(workspace_box["height"], 460)
+        self.assertFalse(
+            self.page.locator(".deliverable-workspace-shell").evaluate(
+                "el => el.classList.contains('has-fixed-media')"
+            )
+        )
 
-        meta_footer = self.page.locator(".deliverable-meta")
-        self.assertTrue(meta_footer.is_visible())
-        source_link = self.page.get_by_role("link", name="查看来源")
-        self.assertTrue(source_link.is_visible())
-        self.assertEqual(source_link.get_attribute("target"), "_blank")
+        self.assertTrue(self.page.locator(".deliverable-hero .deliverable-meta").is_visible())
+        facts = self.page.locator(".facts-strip")
+        self.assertTrue(facts.is_visible())
+        facts_box = facts.bounding_box()
+        self.assertIsNotNone(facts_box)
+        self.assertLessEqual(
+            facts_box["y"] - (workspace_box["y"] + workspace_box["height"]),
+            16,
+        )
+        self.assertLessEqual(facts_box["y"] + facts_box["height"], 901)
+        source_action = self.page.get_by_role("button", name="查看来源")
+        self.assertTrue(source_action.is_visible())
+        source_box = source_action.bounding_box()
+        self.assertIsNotNone(source_box)
+        self.assertLessEqual(source_box["height"], 38)
+        self.page.evaluate(
+            "window.__openedSource = ''; window.open = url => { window.__openedSource = String(url); return null; }"
+        )
+        source_action.click()
+        self.assertEqual(
+            self.page.evaluate("window.__openedSource"),
+            "https://example.com/demovideo001",
+        )
         self.assertTrue(self.page.get_by_role("link", name="下载音频").is_visible())
         self.assertTrue(self.page.get_by_role("link", name="下载视频").is_visible())
         video = self.page.locator(".media-panel video")
@@ -745,7 +1148,37 @@ class UISmokeTestCase(unittest.TestCase):
         self.assertNotIn("0, 0, 0, 0", before_hover["borderColor"])
         self.assertNotEqual(before_hover["color"], "rgba(0, 0, 0, 0)")
 
+        brand_button = self.page.locator("button.brand-lockup")
+        self.assertEqual(brand_button.get_attribute("title"), "返回工作台")
+        brand_transform = brand_button.evaluate("el => getComputedStyle(el).transform")
+        brand_button.hover()
+        self.page.wait_for_timeout(220)
+        self.assertNotEqual(
+            brand_transform,
+            brand_button.evaluate("el => getComputedStyle(el).transform"),
+        )
+        brand_button.click()
+        self.page.locator("textarea").wait_for()
+        self.assertEqual(urlparse(self.page.url).path, "/")
+
+    def test_text_ready_video_has_a_recovery_action(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/c/demovideotextonly001",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
+        self.page.locator(".media-panel-empty").wait_for()
+        self.assertTrue(self.page.get_by_text("暂未拿到可预览视频", exact=True).is_visible())
+        self.assertIn(
+            "文本已整理完成，但视频文件暂未就绪",
+            self.page.locator(".media-panel-empty-card").inner_text(),
+        )
+        self.assertTrue(self.page.get_by_role("button", name="重新获取视频").is_visible())
+        self.assertFalse(self.page.get_by_text("处理失败", exact=True).is_visible())
+
     def test_audio_result_download_action_renders(self) -> None:
+        self.page.set_viewport_size({"width": 390, "height": 844})
         self.page.goto(f"{self.base_url}/c/demoaudio001", wait_until="domcontentloaded", timeout=30000)
         self.page.locator(".result-content-shell").wait_for()
 
@@ -753,19 +1186,111 @@ class UISmokeTestCase(unittest.TestCase):
         self.assertTrue(audio_action.is_visible())
         self.assertIn("/artifacts/source_audio", audio_action.get_attribute("href") or "")
         self.assertEqual(self.page.get_by_role("link", name="下载视频").count(), 0)
+        self.assertTrue(self.page.get_by_role("region", name="播客播放器").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="播放", exact=True).is_visible())
+        self.assertTrue(self.page.get_by_role("slider", name="播放进度").is_visible())
+        self.assertTrue(self.page.get_by_role("combobox", name="播放速度").is_visible())
+        self.assertEqual(self.page.locator(".transcript-segment").count(), 8)
+        self.assertEqual(self.page.get_by_role("button", name="处理新内容").count(), 0)
+        brand_button = self.page.locator("button.brand-lockup")
+        self.assertTrue(brand_button.is_visible())
+        self.assertEqual(brand_button.get_attribute("title"), "返回工作台")
+
+        self.page.get_by_role("button", name="播放", exact=True).click()
+        self.page.evaluate(
+            "window.scrollTo({top: document.documentElement.scrollHeight, behavior: 'instant'})"
+        )
+        self.page.locator(".podcast-compact-bar.is-visible").wait_for()
+        compact_control = self.page.locator(".podcast-compact-bar button")
+        self.assertTrue(compact_control.is_visible())
+        self.assertIn(
+            compact_control.get_attribute("aria-label"),
+            {"暂停播客", "继续播放播客"},
+        )
+        self.page.get_by_role("region", name="播客播放器").scroll_into_view_if_needed()
+        self.page.wait_for_function(
+            "() => !document.querySelector('.podcast-compact-bar')?.classList.contains('is-visible')"
+        )
+
+    def test_podcast_panel_hugs_its_content_on_desktop(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/demoaudio001", wait_until="domcontentloaded", timeout=30000)
+        panel = self.page.locator(".podcast-panel")
+        footer = self.page.locator(".podcast-footer")
+        panel.wait_for()
+
+        panel_box = panel.bounding_box()
+        footer_box = footer.bounding_box()
+        text_box = self.page.locator(".result-surface").bounding_box()
+        self.assertIsNotNone(panel_box)
+        self.assertIsNotNone(footer_box)
+        self.assertIsNotNone(text_box)
+        self.assertLessEqual(
+            panel_box["y"] + panel_box["height"] - (footer_box["y"] + footer_box["height"]),
+            32,
+        )
+        self.assertLess(panel_box["height"], text_box["height"])
+        self.assertEqual(self.page.locator(".facts-strip").count(), 1)
 
     def test_image_result_actions_render(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
         self.page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
         self.page.locator(".image-card").first.wait_for()
+        self.page.locator(".image-card[aria-busy='true']").first.wait_for(state="detached", timeout=5000)
 
         self.assertTrue(self.page.locator(".image-card").first.is_visible())
+        self.assertEqual(self.page.locator(".image-card[aria-busy='true']").count(), 0)
+        self.assertEqual(
+            self.page.locator(".image-card-media-image").evaluate_all(
+                "els => els.filter(el => getComputedStyle(el).opacity === '0').length"
+            ),
+            0,
+        )
+        self.assertEqual(self.page.locator(".artifact-save-more").count(), 0)
         self.assertEqual(self.page.locator(".image-card-view-overlay").count(), 0)
         self.assertGreater(self.page.locator(".image-card-view-hint").count(), 0)
+        primary_box = self.page.locator(".deliverable-primary").bounding_box()
+        gallery_box = self.page.locator(".image-gallery").bounding_box()
+        facts_box = self.page.locator(".facts-strip").bounding_box()
+        workspace_box = self.page.locator(".deliverable-workspace").bounding_box()
+        self.assertIsNotNone(primary_box)
+        self.assertIsNotNone(gallery_box)
+        self.assertIsNotNone(facts_box)
+        self.assertIsNotNone(workspace_box)
+        self.assertLessEqual(abs(primary_box["height"] - gallery_box["height"]), 2)
+        self.assertGreater(workspace_box["height"], 460)
+        self.assertGreaterEqual(
+            facts_box["y"],
+            workspace_box["y"] + workspace_box["height"] - 1,
+        )
+        source_action = self.page.get_by_role("button", name="查看来源")
+        platform_chip = self.page.locator(".fact-chip-platform")
+        self.assertTrue(source_action.is_visible())
+        self.assertTrue(platform_chip.is_visible())
+        self.assertEqual(
+            source_action.evaluate("el => getComputedStyle(el).fontSize"),
+            platform_chip.evaluate("el => getComputedStyle(el).fontSize"),
+        )
+        self.assertEqual(
+            source_action.evaluate("el => getComputedStyle(el).lineHeight"),
+            platform_chip.evaluate("el => getComputedStyle(el).lineHeight"),
+        )
         footer_text = self.page.locator(".image-card-footer").first.inner_text()
         self.assertNotIn("Live", footer_text)
         self.assertNotIn("KB", footer_text)
-        self.page.locator(".image-card .image-card-media-button").first.click()
+        first_image_trigger = self.page.locator(".image-card .image-card-media-button").first
+        first_image_trigger.click()
         self.page.locator(".image-viewer-overlay").wait_for()
+        scroll_lock = self.page.evaluate(
+            """() => ({
+              htmlOverflow: getComputedStyle(document.documentElement).overflow,
+              bodyOverflow: getComputedStyle(document.body).overflow
+            })"""
+        )
+        self.assertEqual(scroll_lock["htmlOverflow"], "hidden")
+        self.assertEqual(scroll_lock["bodyOverflow"], "hidden")
+        self.assertEqual(self.page.locator(".image-viewer-embla-viewport").count(), 0)
+        self.assertEqual(self.page.locator(".image-viewer-transition-underlay").count(), 0)
         self.assertTrue(self.page.locator(".image-viewer-close").is_visible())
         self.assertEqual(self.page.locator(".image-viewer-counter").count(), 0)
         self.assertTrue(self.page.locator(".image-viewer-toolbar").is_visible())
@@ -787,52 +1312,101 @@ class UISmokeTestCase(unittest.TestCase):
                   videoWidth: videoBox.width,
                   frameHeight: frame.height,
                   videoHeight: videoBox.height,
-                  frameBg: getComputedStyle(el).backgroundColor
+                  videoRatio: video.videoWidth && video.videoHeight
+                    ? video.videoWidth / video.videoHeight
+                    : 0,
+                  frameRatio: frame.width / frame.height,
+                  frameBg: getComputedStyle(el).backgroundColor,
+                  containerBg: getComputedStyle(el.closest('.yarl__container')).backgroundColor,
+                  rootBg: getComputedStyle(el.closest('.yarl__root')).backgroundColor,
+                  slideBg: getComputedStyle(el.closest('.yarl__slide')).backgroundColor,
+                  wrapperBg: getComputedStyle(el.closest('.yarl__slide_wrapper')).backgroundColor
                 };
               }"""
         )
         self.assertLessEqual(abs(live_metrics["frameWidth"] - live_metrics["videoWidth"]), 2)
         self.assertLessEqual(abs(live_metrics["frameHeight"] - live_metrics["videoHeight"]), 2)
-        self.assertNotIn("248, 248, 244", live_metrics["frameBg"])
+        if live_metrics["videoRatio"] > 0:
+            self.assertLessEqual(abs(live_metrics["frameRatio"] - live_metrics["videoRatio"]), 0.03)
+        else:
+            # The smoke fixture uses placeholder Live Photo bytes without video metadata;
+            # the component's stable 3:4 fallback must still avoid a forced landscape frame.
+            self.assertLessEqual(abs(live_metrics["frameRatio"] - 0.75), 0.03)
+        self.assertNotIn("5, 5, 5", live_metrics["frameBg"])
+        for background_name in ("frameBg", "containerBg", "rootBg", "slideBg", "wrapperBg"):
+            self.assertNotIn("rgb(0, 0, 0)", live_metrics[background_name])
+            self.assertNotIn("rgb(5, 5, 5)", live_metrics[background_name])
         nav_metrics = self.page.locator(".image-viewer-overlay").evaluate(
             """el => {
-                const frame = el.querySelector(".image-viewer-media-frame");
                 const prev = el.querySelector(".image-viewer-nav.is-prev");
                 const next = el.querySelector(".image-viewer-nav.is-next");
-                const frameBox = frame.getBoundingClientRect();
                 const prevBox = prev.getBoundingClientRect();
                 const nextBox = next.getBoundingClientRect();
                 return {
-                  frameLeft: frameBox.left,
-                  frameRight: frameBox.right,
                   prevCenter: prevBox.left + prevBox.width / 2,
                   nextCenter: nextBox.left + nextBox.width / 2,
+                  prevSize: Math.min(prevBox.width, prevBox.height),
+                  nextSize: Math.min(nextBox.width, nextBox.height),
                   viewportWidth: window.innerWidth
                 };
               }"""
         )
-        self.assertGreater(nav_metrics["prevCenter"], nav_metrics["frameLeft"] - 16)
-        self.assertLess(nav_metrics["prevCenter"], nav_metrics["frameLeft"] + 80)
-        self.assertGreater(nav_metrics["nextCenter"], nav_metrics["frameRight"] - 80)
-        self.assertLess(nav_metrics["nextCenter"], nav_metrics["frameRight"] + 16)
+        self.assertGreaterEqual(nav_metrics["prevSize"], 44)
+        self.assertGreaterEqual(nav_metrics["nextSize"], 44)
+        self.assertGreater(nav_metrics["prevCenter"], 0)
+        self.assertLess(nav_metrics["nextCenter"], nav_metrics["viewportWidth"])
         self.page.mouse.wheel(0, 520)
         self.page.wait_for_timeout(420)
+        self.assertIn("1/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
+        self.page.locator(".image-viewer-nav.is-next").click(force=True)
+        self.page.wait_for_timeout(180)
         self.assertIn("2/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
+        self.assertEqual(self.page.locator(".image-viewer-transition-underlay").count(), 0)
+        fade_metrics = self.page.locator(".yarl__slide_current .image-viewer-stage").evaluate(
+            "el => ({animationName: getComputedStyle(el).animationName, animationDuration: getComputedStyle(el).animationDuration})"
+        )
+        self.assertEqual(fade_metrics["animationName"], "none")
         self.page.locator(".image-viewer-nav.is-prev").click(force=True)
-        self.page.locator(".image-viewer-transition-underlay").wait_for(state="attached")
-        self.assertGreaterEqual(self.page.locator(".image-viewer-transition-underlay").count(), 1)
+        self.page.wait_for_timeout(180)
+        self.assertIn("1/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
+        self.page.get_by_role("button", name="下一张", exact=True).click(force=True)
+        self.page.wait_for_timeout(180)
+        self.assertIn("2/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
+        self.page.get_by_role("button", name="上一张", exact=True).click(force=True)
         self.page.wait_for_timeout(180)
         self.assertIn("1/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
         self.page.get_by_role("button", name="图片", exact=True).click()
         self.page.wait_for_timeout(120)
-        self.assertTrue(self.page.locator(".image-viewer-image").is_visible())
+        self.assertTrue(self.page.locator(".yarl__slide_current .image-viewer-image").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="旋转图片").is_visible())
-        image_surface = self.page.locator(".image-viewer-image-surface")
-        before_zoom_transform = image_surface.evaluate("el => getComputedStyle(el).transform")
+        unzoomed_surface = self.page.locator(".yarl__slide_current .image-viewer-stage")
+        unzoomed_box = unzoomed_surface.bounding_box()
+        self.assertIsNotNone(unzoomed_box)
+        self.page.mouse.move(
+            unzoomed_box["x"] + unzoomed_box["width"] * 0.72,
+            unzoomed_box["y"] + unzoomed_box["height"] / 2,
+        )
+        self.page.mouse.down()
+        self.page.mouse.move(
+            unzoomed_box["x"] + unzoomed_box["width"] * 0.18,
+            unzoomed_box["y"] + unzoomed_box["height"] / 2,
+            steps=12,
+        )
+        self.page.mouse.up()
+        self.page.wait_for_timeout(420)
+        self.assertIn("2/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
+        self.page.get_by_role("button", name="上一张", exact=True).click(force=True)
+        self.page.wait_for_timeout(180)
+        self.assertIn("1/2", self.page.locator(".image-viewer-toolbar-count").inner_text())
+        self.page.locator(".image-viewer-toolbar").wait_for(state="visible")
+        self.page.get_by_role("button", name="放大图片", exact=True).wait_for(state="visible")
+        image_surface = self.page.locator(".yarl__slide_current .image-viewer-image-surface")
+        zoom_surface = self.page.locator(".yarl__slide_current .yarl__slide_wrapper")
+        before_zoom_transform = zoom_surface.evaluate("el => getComputedStyle(el).transform")
         self.page.get_by_role("button", name="放大图片").click()
         self.page.get_by_role("button", name="放大图片").click()
-        self.page.wait_for_timeout(80)
-        after_zoom_transform = image_surface.evaluate("el => getComputedStyle(el).transform")
+        self.page.wait_for_timeout(420)
+        after_zoom_transform = zoom_surface.evaluate("el => getComputedStyle(el).transform")
         self.assertNotEqual(before_zoom_transform, after_zoom_transform)
         surface_box = image_surface.bounding_box()
         self.assertIsNotNone(surface_box)
@@ -841,17 +1415,18 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.mouse.move(surface_box["x"] + surface_box["width"] / 2 + 42, surface_box["y"] + surface_box["height"] / 2 + 18)
         self.page.mouse.up()
         self.page.wait_for_timeout(80)
-        after_drag_transform = image_surface.evaluate("el => getComputedStyle(el).transform")
+        after_drag_transform = zoom_surface.evaluate("el => getComputedStyle(el).transform")
         self.assertNotEqual(after_zoom_transform, after_drag_transform)
         self.page.get_by_role("button", name="旋转图片").click()
         self.page.wait_for_timeout(80)
         after_rotate_transform = image_surface.evaluate("el => getComputedStyle(el).transform")
-        self.assertNotEqual(after_drag_transform, after_rotate_transform)
-        self.page.mouse.click(24, 180)
+        self.assertNotEqual("none", after_rotate_transform)
+        self.page.get_by_role("button", name="关闭图片预览").click()
         self.page.wait_for_timeout(150)
         self.assertEqual(self.page.locator(".image-viewer-overlay").count(), 0)
+        self.assertTrue(first_image_trigger.evaluate("el => document.activeElement === el"))
 
-        self.page.locator(".image-card .image-card-media-button").first.click()
+        first_image_trigger.click()
         self.page.locator(".image-viewer-overlay").wait_for()
         self.page.get_by_role("button", name="Live", exact=True).click()
         self.page.wait_for_timeout(150)
@@ -861,6 +1436,207 @@ class UISmokeTestCase(unittest.TestCase):
         self.page.wait_for_timeout(150)
         self.assertEqual(self.page.locator(".image-viewer-overlay").count(), 0)
         self.assertGreater(self.page.locator(".image-card a[href]").count(), 0)
+
+    def test_processing_uses_one_quiet_loading_indicator(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/demoprocessing001", wait_until="domcontentloaded")
+        self.page.locator(".processing-stage").wait_for()
+        self.page.wait_for_function(
+            "() => document.querySelector('.processing-meter')?.innerText.includes('52%')",
+            timeout=30000,
+        )
+
+        self.assertEqual(self.page.locator(".processing-indicator").count(), 1)
+        self.assertEqual(self.page.locator(".icon-spin").count(), 0)
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+        meter_text = self.page.locator(".processing-meter").inner_text()
+        self.assertIn("52%", meter_text)
+        self.assertNotRegex(meter_text, r"失败|出错|异常|错误|报错|provider timeout")
+        # The removed mascot used to appear only after a delayed timer. Sample
+        # the page well past that old transition window so this regression
+        # cannot pass by checking only the first paint.
+        for delay in (1250, 3000, 5000):
+            self.page.wait_for_timeout(delay)
+            self.assertEqual(self.page.locator(".processing-indicator").count(), 1)
+            self.assertEqual(self.page.locator(".icon-spin").count(), 0)
+            self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+        animation = self.page.locator(".processing-indicator-ring").evaluate(
+            "el => getComputedStyle(el, '::after').animationName"
+        )
+        self.assertEqual(animation, "icon-spin")
+
+        reduced_context = self.browser.new_context(
+            viewport={"width": 1440, "height": 900},
+            reduced_motion="reduce",
+        )
+        reduced_page = reduced_context.new_page()
+        reduced_page.set_default_timeout(15000)
+        try:
+            reduced_page.goto(
+                f"{self.base_url}/c/demoprocessing001",
+                wait_until="domcontentloaded",
+            )
+            self.assertEqual(
+                reduced_page.locator(".processing-indicator-ring").evaluate(
+                    "el => getComputedStyle(el, '::after').animationName"
+                ),
+                "none",
+            )
+        finally:
+            reduced_context.close()
+
+    def test_missing_deep_link_leaves_loading_state_with_a_quiet_recovery(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/c/does-not-exist-for-ui-smoke",
+            wait_until="domcontentloaded",
+        )
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertFalse(
+            self.page.get_by_role("heading", name="正在恢复上一条内容").is_visible()
+        )
+        self.assertTrue(self.page.get_by_role("button", name="返回首页").is_visible())
+        self.assertFalse(self.page.get_by_role("button", name="重新处理").is_visible())
+        self.assertNotIn("Capture not found", self.page.locator(".processing-copy").inner_text())
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+
+    def test_recoverable_platform_failure_has_no_legacy_mascot(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/recentbad001", wait_until="domcontentloaded")
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertEqual(self.page.locator(".processing-indicator").count(), 0)
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+        self.assertTrue(self.page.get_by_role("heading", name="完成平台验证后继续").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="打开平台完成验证").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="完成后重新检查").is_visible())
+
+    def test_legacy_platform_failure_is_rendered_as_recoverable_attention(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/c/recentlegacybad001",
+            wait_until="domcontentloaded",
+        )
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertEqual(self.page.locator(".processing-indicator").count(), 0)
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+        self.assertTrue(self.page.get_by_role("heading", name="完成平台验证后继续").is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="打开平台完成验证").is_visible())
+
+    def test_permanent_failure_has_one_quiet_exit_without_legacy_mascot(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/c/recentpermanent001",
+            wait_until="domcontentloaded",
+        )
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertEqual(self.page.locator(".processing-indicator").count(), 0)
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+        self.assertTrue(
+            self.page.get_by_role("heading", name="这条内容暂时不可用").is_visible()
+        )
+        self.assertTrue(self.page.get_by_text("内容暂不可用", exact=True).is_visible())
+        self.assertFalse(self.page.get_by_text("处理失败", exact=True).is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="返回首页").is_visible())
+
+    def test_transient_connection_failure_has_recovery_copy(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/c/recenttransient001",
+            wait_until="domcontentloaded",
+        )
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertTrue(self.page.get_by_role("heading", name="暂时连不上来源").is_visible())
+        self.assertTrue(self.page.get_by_text("连接暂时不稳定", exact=True).is_visible())
+        self.assertIn("当前网络环境没有稳定连上来源站点", self.page.locator(".processing-copy").inner_text())
+        self.assertTrue(self.page.get_by_role("button", name="重新处理").is_visible())
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+
+    def test_transcription_runtime_unavailable_has_specific_recovery_copy(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/recenttranscribefixture001", wait_until="domcontentloaded")
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertTrue(self.page.get_by_role("heading", name="转写组件还没有准备好").is_visible())
+        self.assertTrue(self.page.get_by_text("转写组件未准备好", exact=True).is_visible())
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+
+    def test_retry_exhausted_connection_stays_recoverable(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(
+            f"{self.base_url}/c/recentretryexhausted001",
+            wait_until="domcontentloaded",
+        )
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertTrue(self.page.get_by_role("heading", name="暂时连不上来源").is_visible())
+        self.assertTrue(self.page.get_by_text("连接暂时不稳定", exact=True).is_visible())
+        self.assertTrue(self.page.get_by_role("button", name="重新处理").is_visible())
+        self.assertFalse(self.page.get_by_text("处理失败", exact=True).is_visible())
+        self.assertEqual(self.page.locator(".processing-mascot").count(), 0)
+
+    def test_xiaohongshu_short_link_uses_complete_url_guidance(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/recentshort001", wait_until="domcontentloaded")
+        self.page.locator(".processing-stage.is-attention").wait_for()
+        self.assertEqual(self.page.locator(".processing-indicator").count(), 0)
+        self.assertTrue(self.page.get_by_role("heading", name="请粘贴小红书完整链接").is_visible())
+        self.assertIn("短链接没有稳定展开", self.page.locator(".processing-copy").inner_text())
+        self.assertTrue(self.page.get_by_role("button", name="返回首页").is_visible())
+
+    def test_image_result_matches_deployed_metadata_structure(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
+        self.page.locator(".image-card").first.wait_for()
+
+        self.assertEqual(self.page.locator(".deliverable-hero .deliverable-meta").count(), 1)
+        self.assertEqual(self.page.locator(".facts-strip").count(), 1)
+        self.assertEqual(self.page.locator("footer.deliverable-meta").count(), 0)
+
+    def test_image_result_layout_does_not_depend_on_text_length(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 900})
+        self.page.goto(f"{self.base_url}/c/demoimagelong001", wait_until="domcontentloaded")
+        self.page.locator(".image-card").first.wait_for()
+
+        shell = self.page.locator(".deliverable-workspace-shell")
+        workspace = self.page.locator(".deliverable-workspace")
+        primary = self.page.locator(".deliverable-primary")
+        gallery = self.page.locator(".image-gallery")
+        metadata = self.page.locator(".facts-strip")
+        shell_box = shell.bounding_box()
+        workspace_box = workspace.bounding_box()
+        primary_box = primary.bounding_box()
+        gallery_box = gallery.bounding_box()
+        metadata_box = metadata.bounding_box()
+
+        self.assertIsNotNone(shell_box)
+        self.assertIsNotNone(workspace_box)
+        self.assertIsNotNone(primary_box)
+        self.assertIsNotNone(gallery_box)
+        self.assertIsNotNone(metadata_box)
+        self.assertFalse(shell.evaluate("el => el.classList.contains('has-long-text')"))
+        self.assertFalse(workspace.evaluate("el => el.classList.contains('has-long-text')"))
+        self.assertLessEqual(abs(primary_box["height"] - gallery_box["height"]), 2)
+        self.assertGreater(workspace_box["height"], 460)
+        self.assertLessEqual(
+            metadata_box["y"] - (workspace_box["y"] + workspace_box["height"]),
+            16,
+        )
+        self.assertLessEqual(metadata_box["y"] + metadata_box["height"], 901)
+
+    def test_tall_window_keeps_normal_result_proportions(self) -> None:
+        self.page.set_viewport_size({"width": 1440, "height": 1600})
+        self.page.goto(f"{self.base_url}/c/demoimage001", wait_until="domcontentloaded")
+        self.page.locator(".image-card").first.wait_for()
+
+        shell = self.page.locator(".deliverable-workspace-shell")
+        workspace = self.page.locator(".deliverable-workspace")
+        workspace_box = workspace.bounding_box()
+
+        self.assertIsNotNone(workspace_box)
+        self.assertFalse(shell.evaluate("el => el.classList.contains('has-fixed-media')"))
+        self.assertGreater(workspace_box["height"], 400)
+        self.assertLessEqual(workspace_box["height"], 620)
+        outer = self.page.locator('.deliverable-stage-inner').bounding_box()
+        self.assertLessEqual(outer['height'], 820)
+        self.assertAlmostEqual(outer['y'] + outer['height'] / 2, 72 + (1600 - 96) / 2, delta=3)
 
     def test_mobile_result_actions_and_viewer_are_tappable(self) -> None:
         context = self.browser.new_context(
@@ -924,16 +1700,25 @@ class UISmokeTestCase(unittest.TestCase):
             self.assertLessEqual(toolbar_metrics["right"], toolbar_metrics["width"] + 1)
             self.assertLessEqual(toolbar_metrics["height"], 190)
 
-            page.locator(".image-viewer-overlay").evaluate(
+            page.locator(".yarl__container").evaluate(
                 """el => {
-                    const makeTouch = (x) => new Touch({identifier: 1, target: el, clientX: x, clientY: 420});
-                    const start = makeTouch(330);
-                    const end = makeTouch(110);
-                    el.dispatchEvent(new TouchEvent("touchstart", {bubbles: true, cancelable: true, touches: [start], changedTouches: [start]}));
-                    el.dispatchEvent(new TouchEvent("touchend", {bubbles: true, cancelable: true, touches: [], changedTouches: [end]}));
+                    const emit = (type, x, buttons) => el.dispatchEvent(new PointerEvent(type, {
+                      bubbles: true,
+                      cancelable: true,
+                      pointerId: 7,
+                      pointerType: "touch",
+                      isPrimary: true,
+                      buttons,
+                      clientX: x,
+                      clientY: 420,
+                    }));
+                    emit("pointerdown", 330, 1);
+                    emit("pointermove", 240, 1);
+                    emit("pointermove", 110, 1);
+                    emit("pointerup", 110, 0);
                   }"""
             )
-            page.wait_for_timeout(180)
+            page.wait_for_timeout(420)
             self.assertIn("2/2", page.locator(".image-viewer-toolbar-count").inner_text())
             page.locator(".image-viewer-close").click()
             page.wait_for_timeout(150)

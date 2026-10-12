@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 import app.main as capture_main
 import app.pipeline as capture_pipeline
 import app.store_fs as store_fs
-from app.schemas import ArtifactModel, ResultDocumentModel, SourceMetaModel
+from app.schemas import ArtifactModel, ResultDocumentModel, ResultSegmentModel, SourceMetaModel
 
 
 class CaptureApiTestCase(unittest.TestCase):
@@ -52,6 +53,208 @@ class CaptureApiTestCase(unittest.TestCase):
                 elif child.is_dir():
                     child.rmdir()
             self.root.rmdir()
+
+    def test_platform_verification_waiting_state_is_not_reported_as_failed(self) -> None:
+        capture = store_fs.create_capture(
+            input_type="url",
+            source_platform="xiaohongshu",
+            content_type="image_article",
+            url="https://www.xiaohongshu.com/explore/live-note",
+        )
+        updated = store_fs.update_capture(
+            capture.id,
+            status="needs_user_action",
+            result_state="awaiting_user",
+            error_stage="extract",
+            error_message="当前页面触发了平台验证，请完成验证后继续。",
+            processing=capture.processing.model_copy(
+                update={
+                    "current_stage": "awaiting_user",
+                    "progress_percent": 18,
+                    "failure_reason_code": "browser_challenge_required",
+                    "retryable": True,
+                }
+            ),
+        )
+
+        response = self.client.get(f"/v1/captures/{capture.id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["capture"]
+        self.assertEqual(updated.status, "needs_user_action")
+        self.assertEqual(payload["status"], "needs_user_action")
+        self.assertEqual(payload["result_state"], "awaiting_user")
+        self.assertEqual(payload["failure_reason_code"], "browser_challenge_required")
+
+    def test_legacy_platform_failure_is_normalized_at_api_boundary(self) -> None:
+        capture = store_fs.create_capture(
+            input_type="url",
+            source_platform="xiaohongshu",
+            content_type="image_article",
+            url="https://www.xiaohongshu.com/explore/legacy-challenge",
+        )
+        store_fs.update_capture(
+            capture.id,
+            status="failed",
+            result_state="failed",
+            error_stage="extract",
+            error_message="当前页面触发了平台验证，请刷新项目级浏览器会话后再试。",
+            processing=capture.processing.model_copy(
+                update={
+                    "current_stage": "failed",
+                    "progress_percent": 0,
+                    "failure_reason_code": "browser_challenge_required",
+                    "retryable": True,
+                }
+            ),
+        )
+
+        response = self.client.get(f"/v1/captures/{capture.id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["capture"]
+        self.assertEqual(payload["status"], "needs_user_action")
+        self.assertEqual(payload["result_state"], "awaiting_user")
+        self.assertEqual(payload["current_stage"], "awaiting_user")
+        self.assertEqual(payload["progress_percent"], 18)
+        self.assertEqual(payload["failure_reason_code"], "browser_challenge_required")
+
+        events_response = self.client.get(f"/v1/captures/{capture.id}/events")
+        self.assertEqual(events_response.status_code, 200)
+        self.assertIn('"status": "needs_user_action"', events_response.text)
+
+    def test_public_capture_projection_never_exposes_legacy_failed_status(self) -> None:
+        capture = store_fs.create_capture(
+            input_type="url",
+            source_platform="generic_web",
+            content_type="webpage",
+            url="https://example.com/public-status-projection",
+        )
+        capture.status = "failed"
+
+        envelope = capture_main._to_capture_envelope(capture)
+        history_item = capture_main._public_capture(capture)
+
+        self.assertEqual(envelope.capture.status, "needs_user_action")
+        self.assertEqual(envelope.capture.result_state, "awaiting_user")
+        self.assertEqual(history_item.status, "needs_user_action")
+
+    def test_missing_capture_endpoints_use_calm_public_copy(self) -> None:
+        requests = [
+            ("get", "/v1/captures/missing"),
+            ("get", "/v1/captures/missing/events"),
+            ("post", "/v1/captures/missing/retry"),
+            ("get", "/v1/captures/missing/artifacts/txt"),
+            ("get", "/v1/captures/missing/artifacts/txt/preview"),
+            ("get", "/v1/captures/missing/images/1/thumbnail"),
+            ("post", "/v1/captures/missing/images/1/retry"),
+            ("post", "/v1/captures/missing/cover"),
+        ]
+
+        for method, path in requests:
+            with self.subTest(method=method, path=path):
+                response = getattr(self.client, method)(path)
+                detail = response.json()["detail"]
+                self.assertNotIn("not found", detail.lower())
+                self.assertNotIn("missing", detail.lower())
+                self.assertNotIn("failed", detail.lower())
+                self.assertRegex(detail, r"[\u4e00-\u9fff]")
+
+    def test_legacy_retryable_failure_is_normalized_to_recoverable_state(self) -> None:
+        capture = store_fs.create_capture(
+            input_type="url",
+            source_platform="generic_web",
+            content_type="webpage",
+            url="https://example.com/temporary-network-error",
+        )
+        store_fs.update_capture(
+            capture.id,
+            status="failed",
+            result_state="failed",
+            error_stage="extract",
+            error_message="当前网络环境没有稳定连上来源站点，请稍后重试。",
+            processing=capture.processing.model_copy(
+                update={
+                    "current_stage": "failed",
+                    "failure_reason_code": "source_fetch_failed",
+                    "retryable": True,
+                }
+            ),
+        )
+
+        response = self.client.get(f"/v1/captures/{capture.id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["capture"]
+        self.assertEqual(payload["status"], "needs_user_action")
+        self.assertEqual(payload["result_state"], "awaiting_user")
+        self.assertEqual(payload["current_stage"], "awaiting_user")
+        self.assertEqual(payload["failure_reason_code"], "source_fetch_failed")
+        self.assertTrue(payload["retryable"])
+
+    def test_public_capture_error_message_hides_raw_failure_details(self) -> None:
+        capture = store_fs.create_capture(
+            input_type="url",
+            source_platform="youtube",
+            content_type="video",
+            url="https://www.youtube.com/watch?v=public-error-copy",
+        )
+        store_fs.update_capture(
+            capture.id,
+            status="needs_user_action",
+            result_state="awaiting_user",
+            error_stage="download",
+            error_message="媒体下载失败：HTTP Error 500 /tmp/private-token",
+            processing=capture.processing.model_copy(
+                update={
+                    "current_stage": "awaiting_user",
+                    "progress_percent": 18,
+                    "failure_reason_code": "download_failed",
+                    "retryable": True,
+                }
+            ),
+        )
+
+        response = self.client.get(f"/v1/captures/{capture.id}")
+
+        self.assertEqual(response.status_code, 200)
+        message = response.json()["capture"]["error_message"]
+        self.assertNotIn("失败", message)
+        self.assertNotIn("HTTP Error", message)
+        self.assertNotIn("private-token", message)
+        self.assertIn("处理暂时中断", message)
+
+    def test_legacy_permanent_failure_is_exposed_as_unavailable_attention(self) -> None:
+        capture = store_fs.create_capture(
+            input_type="url",
+            source_platform="youtube",
+            content_type="video",
+            url="https://www.youtube.com/watch?v=unavailable",
+        )
+        store_fs.update_capture(
+            capture.id,
+            status="failed",
+            result_state="failed",
+            error_stage="extract",
+            error_message="这条内容当前已经不可访问，请换一条公开内容再试。",
+            processing=capture.processing.model_copy(
+                update={
+                    "current_stage": "failed",
+                    "failure_reason_code": "source_not_found",
+                    "retryable": False,
+                }
+            ),
+        )
+
+        response = self.client.get(f"/v1/captures/{capture.id}")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["capture"]
+        self.assertEqual(payload["status"], "needs_user_action")
+        self.assertEqual(payload["result_state"], "awaiting_user")
+        self.assertEqual(payload["current_stage"], "awaiting_user")
+        self.assertEqual(payload["failure_reason_code"], "source_not_found")
+        self.assertFalse(payload["retryable"])
 
     def test_desktop_runtime_requires_loopback_token_and_known_origin(self) -> None:
         with (
@@ -130,6 +333,72 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertEqual(desktop_response.status_code, 200)
         self.assertEqual(desktop_response.json()["packs"][0]["id"], "asr")
 
+    def test_browser_session_controls_are_local_only(self) -> None:
+        with patch.object(capture_main, "refresh_browser_runtime") as refresh, patch.object(
+            capture_main.subprocess, "Popen"
+        ) as popen:
+            popen.return_value.poll.return_value = None
+            refresh_response = self.client.post("/v1/runtime/browser/refresh")
+            session_response = self.client.post("/v1/runtime/browser/session")
+
+        capture_main._browser_session_process = None
+
+        self.assertEqual(refresh_response.status_code, 200)
+        self.assertEqual(session_response.status_code, 200)
+        refresh.assert_called()
+        popen.assert_called_once()
+        self.assertEqual(session_response.json()["status"], "opened")
+
+        with patch.object(capture_main, "RUNTIME_TARGET", "cloud_demo"):
+            self.assertEqual(
+                self.client.post("/v1/runtime/browser/refresh").status_code,
+                404,
+            )
+            self.assertEqual(
+                self.client.post("/v1/runtime/browser/session").status_code,
+                404,
+            )
+
+    def test_browser_session_reports_immediate_process_exit(self) -> None:
+        try:
+            with patch.object(capture_main, "refresh_browser_runtime"), patch.object(
+                capture_main.subprocess, "Popen"
+            ) as popen:
+                popen.return_value.poll.return_value = 1
+                response = self.client.post("/v1/runtime/browser/session")
+        finally:
+            capture_main._browser_session_process = None
+
+        self.assertEqual(response.status_code, 503)
+
+    def test_browser_session_passes_target_through_local_handoff_file(self) -> None:
+        target = "https://www.xiaohongshu.com/explore/demo"
+        target_file = None
+        try:
+            with patch.object(capture_main, "refresh_browser_runtime"), patch.object(
+                capture_main.subprocess, "Popen"
+            ) as popen:
+                popen.return_value.poll.return_value = None
+                response = self.client.post(
+                    "/v1/runtime/browser/session",
+                    json={"url": target},
+                )
+                command = popen.call_args.args[0]
+                target_file = Path(command[command.index("--target-file") + 1])
+                self.assertEqual(json.loads(target_file.read_text(encoding="utf-8"))["url"], target)
+        finally:
+            if target_file:
+                target_file.unlink(missing_ok=True)
+            capture_main._browser_session_process = None
+
+        self.assertEqual(response.status_code, 200)
+
+        invalid = self.client.post(
+            "/v1/runtime/browser/session",
+            json={"url": "https://example.com/private"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+
     def test_config_omits_runtime_details(self) -> None:
         response = self.client.get("/config")
 
@@ -146,6 +415,31 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertIn("capabilities", payload)
         self.assertNotIn("commit", payload)
 
+    def test_frontend_entrypoint_is_not_cached(self) -> None:
+        response = self.client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.headers.get("cache-control", ""))
+
+    def test_health_and_config_are_not_cached(self) -> None:
+        for path in ("/health", "/config"):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("no-store", response.headers.get("cache-control", ""))
+
+    def test_hashed_frontend_assets_are_immutable(self) -> None:
+        manifest = json.loads(capture_main.FRONTEND_BUILD_MANIFEST.read_text(encoding="utf-8"))
+        asset = next(item for item in manifest["output_files"] if item.startswith("assets/"))
+
+        response = self.client.get(f"/{asset}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.headers.get("cache-control"),
+            "public, max-age=31536000, immutable",
+        )
+
     def test_health_exposes_consistent_sanitized_runtime_identity(self) -> None:
         with patch.object(capture_main, "APP_VERSION", "2.0.0-test"), patch.object(
             capture_main, "APP_COMMIT", "abc1234"
@@ -160,8 +454,16 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertEqual(payload["runtime_target"], "cloud_demo")
         self.assertEqual(payload["version"], "2.0.0-test")
         self.assertEqual(payload["commit"], "abc1234")
+        self.assertTrue(payload["frontend_build_id"])
+        self.assertTrue(payload["frontend_git_sha"])
+        self.assertEqual(payload["asset_manifest_status"], "ready")
         self.assertNotIn("run_mode", payload)
         self.assertIsInstance(payload["components"], dict)
+        self.assertIn(payload["browser_runtime"]["state"], {"idle", "ready", "restarting"})
+        self.assertIn("selected_provider", payload["transcription_runtime"])
+        serialized = json.dumps(payload, ensure_ascii=False).lower()
+        self.assertNotIn("browser-profile", serialized)
+        self.assertNotIn("api_key", serialized)
 
     def test_brand_mark_is_served_from_the_built_frontend(self) -> None:
         response = self.client.get("/brand-mark.svg")
@@ -236,6 +538,7 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertIn("progress_percent", payload["capture"])
         self.assertIn("text_source", payload["quality"])
         self.assertEqual(payload["artifacts"][0]["download_url"], f"/v1/captures/{capture.id}/artifacts/txt")
+        self.assertEqual(payload["artifacts"][0]["preview_url"], f"/v1/captures/{capture.id}/artifacts/txt/preview")
         self.assertEqual(payload["capture"]["result_state"], "complete")
         self.assertEqual(payload["artifacts"][0]["status"], "ready")
         self.assertFalse(payload["artifacts"][0]["optional"])
@@ -254,7 +557,36 @@ class CaptureApiTestCase(unittest.TestCase):
             image_urls=["https://example.com/image-1.jpg", "https://example.com/image-2.jpg"],
             live_photo_video_urls=["https://example.com/live-1.mp4"],
         )
-        result = ResultDocumentModel(primary_text="图文正文", primary_result_type="article")
+        ready_path = self.artifacts_dir / capture.id / "image_01.jpg"
+        ready_path.parent.mkdir(parents=True, exist_ok=True)
+        ready_path.write_bytes(b"image")
+        thumbnail_path = ready_path.with_name("image_01.thumb.v1.jpg")
+        thumbnail_path.write_bytes(b"thumbnail")
+        result = ResultDocumentModel(
+            primary_text="图文正文",
+            primary_result_type="article",
+            artifacts=[
+                ArtifactModel(
+                    type="image_01",
+                    label="图片 1",
+                    path=str(ready_path),
+                    download_url=f"/v1/captures/{capture.id}/artifacts/image_01",
+                    mime_type="image/jpeg",
+                    width=1600,
+                    height=1000,
+                    thumbnail_path=str(thumbnail_path),
+                ),
+                ArtifactModel(
+                    type="image_02",
+                    label="图片 2",
+                    path=str(self.artifacts_dir / capture.id / "image_02.jpg"),
+                    download_url=f"/v1/captures/{capture.id}/artifacts/image_02",
+                    mime_type="image/jpeg",
+                    status="failed",
+                    optional=True,
+                ),
+            ],
+        )
         capture_main.repository.update(
             capture.id,
             status="done",
@@ -271,7 +603,61 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertEqual(payload["source"]["images"][0]["index"], 1)
         self.assertEqual(payload["source"]["images"][0]["image_url"], "https://example.com/image-1.jpg")
         self.assertEqual(payload["source"]["images"][0]["live_photo_video_url"], "https://example.com/live-1.mp4")
+        self.assertEqual(payload["source"]["images"][0]["delivery_status"], "ready")
+        self.assertEqual(
+            payload["source"]["images"][0]["preview_url"],
+            f"/v1/captures/{capture.id}/artifacts/image_01/preview",
+        )
+        self.assertEqual(payload["source"]["images"][0]["width"], 1600)
+        self.assertEqual(payload["source"]["images"][0]["height"], 1000)
+        thumbnail_url = payload["source"]["images"][0]["thumbnail_url"]
+        self.assertTrue(thumbnail_url.startswith(f"/v1/captures/{capture.id}/images/1/thumbnail?v="))
+        thumbnail_response = self.client.get(thumbnail_url)
+        self.assertEqual(thumbnail_response.status_code, 200)
+        self.assertEqual(thumbnail_response.content, b"thumbnail")
+        self.assertEqual(thumbnail_response.headers["cache-control"], "private, max-age=31536000, immutable")
         self.assertIsNone(payload["source"]["images"][1]["live_photo_video_url"])
+        self.assertEqual(payload["source"]["images"][1]["delivery_status"], "failed")
+        self.assertIsNone(payload["source"]["images"][1]["preview_url"])
+
+    def test_capture_envelope_exposes_timed_result_segments(self) -> None:
+        capture = capture_main.repository.create(
+            input_type="url",
+            source_platform="xiaoyuzhou",
+            content_type="audio",
+            url="https://www.xiaoyuzhoufm.com/episode/demo",
+        )
+        result = ResultDocumentModel(
+            primary_text="第一段",
+            transcript_text="第一段",
+            primary_result_type="transcript",
+            text_source="transcript",
+            segments=[
+                ResultSegmentModel(
+                    kind="timed_text",
+                    origin="transcript",
+                    text="第一段",
+                    start_sec=0.0,
+                    end_sec=12.5,
+                )
+            ],
+        )
+        capture_main.repository.update(capture.id, status="done", result=result)
+
+        payload = self.client.get(f"/v1/captures/{capture.id}").json()
+
+        self.assertEqual(
+            payload["result"]["segments"],
+            [
+                {
+                    "kind": "timed_text",
+                    "origin": "transcript",
+                    "text": "第一段",
+                    "start_sec": 0.0,
+                    "end_sec": 12.5,
+                }
+            ],
+        )
 
     def test_event_names_expose_text_artifact_and_runtime_transitions(self) -> None:
         capture = capture_main.repository.create(
@@ -361,7 +747,7 @@ class CaptureApiTestCase(unittest.TestCase):
         response = self.client.post(f"/v1/captures/{capture.id}/retry")
 
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()["detail"], "Capture is already queued.")
+        self.assertEqual(response.json()["detail"], "这条内容已在准备中，请稍候。")
 
     def test_download_source_media_artifact(self) -> None:
         capture = capture_main.repository.create(
@@ -403,6 +789,105 @@ class CaptureApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.content, b"video-data")
         self.assertIn("video/mp4", response.headers.get("content-type", ""))
+        self.assertIn("attachment", response.headers.get("content-disposition", ""))
+
+        preview = self.client.get(f"/v1/captures/{capture.id}/artifacts/source_media/preview")
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(preview.content, b"video-data")
+        self.assertNotIn("attachment", preview.headers.get("content-disposition", ""))
+        self.assertEqual(preview.headers.get("cache-control"), "private, max-age=3600")
+        self.assertEqual(preview.headers.get("x-content-type-options"), "nosniff")
+
+        ranged = self.client.get(
+            f"/v1/captures/{capture.id}/artifacts/source_media/preview",
+            headers={"Range": "bytes=0-4"},
+        )
+        self.assertEqual(ranged.status_code, 206)
+        self.assertEqual(ranged.content, b"video")
+        self.assertEqual(ranged.headers.get("content-range"), "bytes 0-4/10")
+
+    def test_artifact_preview_rejects_failed_file(self) -> None:
+        capture = capture_main.repository.create(
+            input_type="url",
+            source_platform="xiaohongshu",
+            content_type="image_article",
+            url="https://example.com/note",
+        )
+        failed = ArtifactModel(
+            type="image_01",
+            label="图片 1",
+            path=str(self.artifacts_dir / capture.id / "image_01.jpg"),
+            download_url=f"/v1/captures/{capture.id}/artifacts/image_01",
+            mime_type="image/jpeg",
+            status="failed",
+        )
+        capture_main.repository.update(
+            capture.id,
+            status="done",
+            result=ResultDocumentModel(primary_text="body", artifacts=[failed]),
+        )
+
+        response = self.client.get(f"/v1/captures/{capture.id}/artifacts/image_01/preview")
+
+        self.assertEqual(response.status_code, 404)
+        self.assertNotIn("not found", response.json()["detail"].lower())
+        self.assertNotIn("failed", response.json()["detail"].lower())
+
+        thumbnail = self.client.get(f"/v1/captures/{capture.id}/images/1/thumbnail")
+
+        self.assertEqual(thumbnail.status_code, 404)
+        self.assertNotIn("not found", thumbnail.json()["detail"].lower())
+        self.assertNotIn("failed", thumbnail.json()["detail"].lower())
+
+    def test_cover_endpoint_backfills_and_persists_legacy_podcast_cover(self) -> None:
+        capture = capture_main.repository.create(
+            input_type="url",
+            source_platform="xiaoyuzhou",
+            content_type="audio",
+            url="https://www.xiaoyuzhoufm.com/episode/demo",
+        )
+        source = SourceMetaModel(
+            platform="xiaoyuzhou",
+            content_type="audio",
+            canonical_url="https://www.xiaoyuzhoufm.com/episode/demo",
+            thumbnail_url="https://example.com/cover.jpg",
+        )
+        capture = capture_main.repository.update(
+            capture.id,
+            status="done",
+            source=source,
+            result=ResultDocumentModel(
+                primary_text="podcast transcript",
+                primary_result_type="transcript",
+                text_source="transcript",
+            ),
+        )
+        cover_path = self.artifacts_dir / capture.id / "cover_image.jpg"
+        cover_path.parent.mkdir(parents=True, exist_ok=True)
+        cover_path.write_bytes(b"cover")
+
+        def backfill(current):
+            current.result.artifacts.append(
+                ArtifactModel(
+                    type="cover_image",
+                    label="节目封面",
+                    path=str(cover_path),
+                    download_url=f"/v1/captures/{current.id}/artifacts/cover_image",
+                    preview_url=f"/v1/captures/{current.id}/artifacts/cover_image/preview",
+                    mime_type="image/jpeg",
+                )
+            )
+            return current.result
+
+        with patch.object(capture_main, "ensure_capture_cover", side_effect=backfill):
+            response = self.client.post(f"/v1/captures/{capture.id}/cover")
+
+        self.assertEqual(response.status_code, 200)
+        artifacts = response.json()["artifacts"]
+        self.assertEqual([item["type"] for item in artifacts], ["cover_image"])
+        stored = capture_main.repository.get(capture.id)
+        self.assertEqual(stored.result.artifacts[0].type, "cover_image")
 
     def test_create_capture_response_omits_resolution_details(self) -> None:
         resolved = SimpleNamespace(
@@ -483,8 +968,12 @@ class CaptureApiTestCase(unittest.TestCase):
         self.client.close()
         error_client = TestClient(capture_main.app, raise_server_exceptions=False)
         try:
-            with patch.object(capture_main.repository, "create", side_effect=RuntimeError("boom")):
+            with (
+                patch.object(capture_main.repository, "create", side_effect=RuntimeError("boom")),
+                patch.object(capture_main.logger, "exception") as log_exception,
+            ):
                 response = error_client.post("/v1/captures", json={"text": "https://www.douyin.com/video/7624387162426887464"})
+                log_exception.assert_called_once()
         finally:
             error_client.close()
             self.client = TestClient(capture_main.app)

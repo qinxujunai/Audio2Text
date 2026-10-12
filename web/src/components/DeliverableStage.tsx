@@ -1,40 +1,66 @@
 import {
-  ChevronLeft,
-  ChevronRight,
+  ArrowLeft,
+  Check,
   Copy,
   Download,
   Expand,
   ExternalLink,
+  FolderOpen,
   Headphones,
   FileText,
   Film,
   Images,
-  Minus,
+  Pause,
   Play,
-  Plus,
-  RotateCw,
+  RotateCcw,
+  Save,
+  SkipBack,
+  SkipForward,
   X,
 } from "lucide-react";
 import {
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
+  type MutableRefObject,
+  type ReactNode,
   type SyntheticEvent,
-  type TouchEvent as ReactTouchEvent,
+  Suspense,
+  lazy,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 
-import { resolveApiUrl } from "../api";
-import type { Artifact, CaptureEnvelope, CaptureSourceImage } from "../types";
+import {
+  calmErrorMessage,
+  ensureCaptureCover,
+  resolveApiUrl,
+  retryCaptureImage,
+} from "../api";
+import {
+  isDesktopApp,
+  openCaptureSource,
+  openSavedArtifact,
+  revealSavedArtifact,
+  saveDesktopArtifact,
+  type SavedArtifact,
+} from "../desktop";
+import type { Artifact, CaptureEnvelope, CaptureSourceImage, ResultSegment } from "../types";
+import type { ImageViewerItem, ImageViewerMode } from "./ImageViewer";
+
+const ImageViewer = lazy(() => import("./ImageViewer"));
+import { ProofreadingButton } from "./LocalTools";
 
 type DeliverableStageProps = {
   capture: CaptureEnvelope;
+  onCaptureUpdated: (capture: CaptureEnvelope) => void;
+  onNotify: (message: string) => void;
+  onReset: () => void;
+  onRetry?: () => void;
 };
 
 type VideoOrientation = "unknown" | "portrait" | "landscape" | "square-ish";
-type ImagePreviewMode = "image" | "live";
+type ImagePreviewMode = ImageViewerMode;
 type ImageGalleryItem = {
   index: number;
   label: string;
@@ -42,12 +68,12 @@ type ImageGalleryItem = {
   liveSourceUrl: string | null;
   imageArtifact: Artifact | null;
   liveArtifact: Artifact | null;
+  deliveryStatus: "pending" | "ready" | "failed";
+  thumbnailUrl: string;
+  width: number | null;
+  height: number | null;
 };
-type ViewerPan = { x: number; y: number };
-type ViewerVisual = {
-  key: string;
-  imageSrc: string;
-};
+type SaveReceipt = SavedArtifact & { artifactType: string };
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -72,6 +98,74 @@ function bytesLabel(size?: number | null) {
 
 function artifactUrl(artifact: Artifact) {
   return resolveApiUrl(artifact.download_url, true);
+}
+
+function artifactPreviewUrl(artifact: Artifact) {
+  return resolveApiUrl(artifact.preview_url || `${artifact.download_url}/preview`, true);
+}
+
+function ArtifactAction({
+  artifact,
+  captureId,
+  className = "copy-action",
+  children,
+  onSaved,
+  onNotify,
+}: {
+  artifact: Artifact;
+  captureId: string;
+  className?: string;
+  children: ReactNode;
+  onSaved: (receipt: SaveReceipt) => void;
+  onNotify: (message: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  if (!isDesktopApp()) {
+    return (
+      <a
+        className={className}
+        download
+        href={artifactUrl(artifact)}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {children}
+      </a>
+    );
+  }
+  return (
+    <button
+      className={className}
+      disabled={busy}
+      onClick={async () => {
+        if (busy) return;
+        setBusy(true);
+        try {
+          const saved = await saveDesktopArtifact(captureId, artifact.type);
+          onSaved({ ...saved, artifactType: artifact.type });
+          setSaved(true);
+          window.setTimeout(() => setSaved(false), 1800);
+        } catch (error) {
+          onNotify(calmErrorMessage(error, "文件暂时还没保存好，请稍后再试。"));
+        } finally {
+          setBusy(false);
+        }
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      type="button"
+    >
+      {busy ? (
+        "正在保存"
+      ) : saved ? (
+        <>
+          <Check size={14} />
+          已保存
+        </>
+      ) : (
+        children
+      )}
+    </button>
+  );
 }
 
 function isStaticImageArtifact(artifact: Artifact) {
@@ -145,7 +239,7 @@ function heroDescription(capture: CaptureEnvelope, hasVideoArtifact: boolean) {
   if (capture.source.media_kind === "video") {
     return hasVideoArtifact
       ? "文字与视频已整理完成，可直接查看、播放或下载。"
-      : "文字已整理完成，视频文件暂未成功下载。";
+      : "文字已整理完成，视频文件暂未就绪。";
   }
   if (capture.source.media_kind === "audio") {
     return "文字已整理完成，可直接复制或下载。";
@@ -231,6 +325,8 @@ function buildGalleryItems(capture: CaptureEnvelope): ImageGalleryItem[] {
       const liveArtifact = liveArtifactsByIndex.get(index) || null;
       const imageSourceUrl = (sourceItem?.image_url || "").trim();
       const liveSourceUrl = (sourceItem?.live_photo_video_url || "").trim();
+      const deliveryStatus =
+        sourceItem?.delivery_status || imageArtifact?.status || "pending";
 
       if (!imageArtifact && !imageSourceUrl) {
         return null;
@@ -243,33 +339,38 @@ function buildGalleryItems(capture: CaptureEnvelope): ImageGalleryItem[] {
         liveSourceUrl: liveSourceUrl || null,
         imageArtifact,
         liveArtifact,
+        deliveryStatus,
+        thumbnailUrl: (sourceItem?.thumbnail_url || "").trim(),
+        width: sourceItem?.width || null,
+        height: sourceItem?.height || null,
       } satisfies ImageGalleryItem;
     })
     .filter((item): item is ImageGalleryItem => Boolean(item));
 }
 
-function downloadHref(artifact: Artifact | null, fallbackUrl: string | null) {
-  return artifact ? artifactUrl(artifact) : fallbackUrl || "";
+function preferredImageUrl(item: ImageGalleryItem) {
+  if (item.thumbnailUrl) return resolveApiUrl(item.thumbnailUrl, true);
+  return preferredFullImageUrl(item);
 }
 
-function preferredImageUrl(item: ImageGalleryItem) {
-  return item.imageArtifact
-    ? artifactUrl(item.imageArtifact)
-    : item.imageSourceUrl;
+function preferredFullImageUrl(item: ImageGalleryItem) {
+  return item.imageArtifact?.status === "ready"
+    ? artifactPreviewUrl(item.imageArtifact)
+    : "";
 }
 
 function imageFallbackUrl(item: ImageGalleryItem) {
-  return item.imageArtifact ? item.imageSourceUrl : "";
+  return preferredFullImageUrl(item) || item.imageSourceUrl;
 }
 
 function preferredLiveUrl(item: ImageGalleryItem) {
-  return item.liveArtifact
-    ? artifactUrl(item.liveArtifact)
-    : item.liveSourceUrl || "";
+  return item.liveArtifact?.status === "ready"
+    ? artifactPreviewUrl(item.liveArtifact)
+    : "";
 }
 
 function liveFallbackUrl(item: ImageGalleryItem) {
-  return item.liveArtifact ? item.liveSourceUrl || "" : "";
+  return "";
 }
 
 function MediaImage({
@@ -285,15 +386,28 @@ function MediaImage({
   fallbackSrc?: string;
   className?: string;
   eager?: boolean;
-  onLoad?: (event: SyntheticEvent<HTMLImageElement>) => void;
+  onLoad?: () => void;
 }) {
   const resolvedPrimary = primarySrc || fallbackSrc || "";
   const resolvedFallback = fallbackSrc || "";
   const [src, setSrc] = useState(resolvedPrimary);
+  const imageRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     setSrc(resolvedPrimary);
   }, [resolvedPrimary]);
+
+  useEffect(() => {
+    const image = imageRef.current;
+    if (!image || !image.complete) return;
+    if (image.naturalWidth > 0) {
+      onLoad?.();
+      return;
+    }
+    if (resolvedFallback && src !== resolvedFallback) {
+      setSrc(resolvedFallback);
+    }
+  }, [resolvedFallback, resolvedPrimary, src]);
 
   if (!resolvedPrimary) {
     return (
@@ -312,8 +426,9 @@ function MediaImage({
       alt={alt}
       className={className}
       loading={eager ? "eager" : "lazy"}
+      ref={imageRef}
       src={src}
-      onLoad={onLoad}
+      onLoad={() => onLoad?.()}
       onError={() => {
         if (resolvedFallback && src !== resolvedFallback) {
           setSrc(resolvedFallback);
@@ -354,18 +469,43 @@ function LiveHoverPreview({ item }: { item: ImageGalleryItem }) {
 
 function ImageGalleryCard({
   item,
+  captureId,
   onOpen,
+  onSaved,
+  onNotify,
+  onRetry,
 }: {
   item: ImageGalleryItem;
-  onOpen: () => void;
+  captureId: string;
+  onOpen: (trigger: HTMLButtonElement) => void;
+  onSaved: (receipt: SaveReceipt) => void;
+  onNotify: (message: string) => void;
+  onRetry: () => void;
 }) {
   const [showLivePreview, setShowLivePreview] = useState(false);
-  const canPreviewLive = Boolean(item.liveSourceUrl || item.liveArtifact);
-  const imageDownload = downloadHref(item.imageArtifact, item.imageSourceUrl);
+  const canPreviewLive = item.liveArtifact?.status === "ready";
+  const preferredUrl = preferredImageUrl(item);
+  const imageReady = item.deliveryStatus === "ready" && Boolean(preferredUrl);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const isImageLoading = imageReady && !imageLoaded;
+
+  useEffect(() => {
+    setImageLoaded(false);
+  }, [preferredUrl]);
+
+  const cardClassName = [
+    "image-card",
+    showLivePreview ? "is-live-hovered" : "",
+    isImageLoading ? "is-image-loading" : "",
+    !imageReady ? `is-${item.deliveryStatus}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <article
-      className={showLivePreview ? "image-card is-live-hovered" : "image-card"}
+      aria-busy={isImageLoading}
+      className={cardClassName}
       onMouseEnter={() => {
         if (canPreviewLive) setShowLivePreview(true);
       }}
@@ -374,9 +514,10 @@ function ImageGalleryCard({
       }}
     >
       <button
-        aria-label={`查看图片 ${item.index}`}
+        aria-label={`${canPreviewLive ? "LIVE，" : ""}查看图片 ${item.index}`}
         className="image-card-media-button"
-        onClick={onOpen}
+        disabled={!imageReady}
+        onClick={(event) => onOpen(event.currentTarget)}
         type="button"
       >
         {canPreviewLive ? (
@@ -386,14 +527,33 @@ function ImageGalleryCard({
           </span>
         ) : null}
 
-        {showLivePreview && canPreviewLive ? (
+        {!imageReady ? (
+          <span className="image-card-delivery-state">
+            <span aria-hidden="true" className="image-card-delivery-icon">
+              <Images size={18} />
+            </span>
+            {item.deliveryStatus === "failed" ? (
+              <>
+                <strong>这张图片暂未就绪</strong>
+                <span>可以单独重新获取，不影响其他内容。</span>
+              </>
+            ) : (
+              <>
+                <strong>图片准备中</strong>
+                <span>完成后会在这里原位显示。</span>
+              </>
+            )}
+          </span>
+        ) : showLivePreview && canPreviewLive ? (
           <LiveHoverPreview item={item} />
         ) : (
           <MediaImage
             alt={item.label}
             className="image-card-media-image"
+            eager
             fallbackSrc={imageFallbackUrl(item)}
-            primarySrc={preferredImageUrl(item)}
+            onLoad={() => setImageLoaded(true)}
+            primarySrc={preferredUrl}
           />
         )}
 
@@ -407,757 +567,25 @@ function ImageGalleryCard({
           <span>{`图片 ${item.index}`}</span>
         </div>
 
-        <a
-          className="image-card-action"
-          download={item.imageArtifact?.label || `image_${item.index}.jpg`}
-          href={imageDownload}
-          onClick={(event) => event.stopPropagation()}
-        >
-          <Download size={13} />
-          下载
-        </a>
+        {item.deliveryStatus === "failed" ? (
+          <button className="image-card-action" onClick={onRetry} type="button">
+            <RotateCcw size={13} />
+            重新获取
+          </button>
+        ) : item.imageArtifact?.status === "ready" ? (
+          <ArtifactAction
+            artifact={item.imageArtifact}
+            captureId={captureId}
+            className="image-card-action"
+            onNotify={onNotify}
+            onSaved={onSaved}
+          >
+            <Download size={13} />
+            {isDesktopApp() ? "保存" : "下载"}
+          </ArtifactAction>
+        ) : null}
       </div>
     </article>
-  );
-}
-
-function ImageViewerOverlay({
-  items,
-  activeIndex,
-  previewMode,
-  onPreviewModeChange,
-  onClose,
-  onNavigate,
-}: {
-  items: ImageGalleryItem[];
-  activeIndex: number;
-  previewMode: ImagePreviewMode;
-  onPreviewModeChange: (mode: ImagePreviewMode) => void;
-  onClose: () => void;
-  onNavigate: (nextIndex: number) => void;
-}) {
-  const activeItem = items[activeIndex];
-  const liveAvailable = Boolean(
-    activeItem?.liveSourceUrl || activeItem?.liveArtifact,
-  );
-  const effectiveMode = liveAvailable ? previewMode : "image";
-  const imageDownload = activeItem
-    ? downloadHref(activeItem.imageArtifact, activeItem.imageSourceUrl)
-    : "";
-  const liveDownload = activeItem
-    ? downloadHref(activeItem.liveArtifact, activeItem.liveSourceUrl)
-    : "";
-  const livePrimary = activeItem ? preferredLiveUrl(activeItem) : "";
-  const imagePrimary = activeItem ? preferredImageUrl(activeItem) : "";
-  const activeVisual = useMemo<ViewerVisual | null>(
-    () =>
-      activeItem
-        ? {
-            key: `${activeItem.index}:${effectiveMode}`,
-            imageSrc: imagePrimary,
-          }
-        : null,
-    [activeItem, effectiveMode, imagePrimary],
-  );
-  const [liveSrc, setLiveSrc] = useState(livePrimary);
-  const [livePlaybackError, setLivePlaybackError] = useState(false);
-  const [transitionVisual, setTransitionVisual] =
-    useState<ViewerVisual | null>(null);
-  const activeVisualRef = useRef<ViewerVisual | null>(activeVisual);
-  const overlayRef = useRef<HTMLDivElement | null>(null);
-  const viewportRef = useRef<HTMLDivElement | null>(null);
-  const imageSurfaceRef = useRef<HTMLDivElement | null>(null);
-  const liveVideoRef = useRef<HTMLVideoElement | null>(null);
-  const pointerStateRef = useRef<{
-    pointerId: number;
-    x: number;
-    y: number;
-  } | null>(null);
-  const touchNavigationRef = useRef<{
-    x: number;
-    y: number;
-    at: number;
-  } | null>(null);
-  const wheelNavigationRef = useRef(0);
-  const chromeHideTimerRef = useRef<number | null>(null);
-  const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
-  const [imageNaturalSize, setImageNaturalSize] = useState({
-    width: 0,
-    height: 0,
-  });
-  const [liveNaturalSize, setLiveNaturalSize] = useState({
-    width: 0,
-    height: 0,
-  });
-  const [imageScale, setImageScale] = useState(1);
-  const [imageRotation, setImageRotation] = useState(0);
-  const [imagePan, setImagePan] = useState<ViewerPan>({ x: 0, y: 0 });
-  const [isDraggingImage, setIsDraggingImage] = useState(false);
-  const [isChromeVisible, setIsChromeVisible] = useState(false);
-  const [navOffsets, setNavOffsets] = useState<{
-    left: number;
-    right: number;
-  } | null>(null);
-  const [mediaChrome, setMediaChrome] = useState<{
-    top: number;
-    left: number;
-    right: number;
-  } | null>(null);
-
-  useEffect(() => {
-    setLiveSrc(livePrimary);
-    setLivePlaybackError(false);
-    setLiveNaturalSize({ width: 0, height: 0 });
-  }, [livePrimary, activeItem?.index]);
-
-  useEffect(() => {
-    if (!activeVisual) return;
-    const previous = activeVisualRef.current;
-    if (previous && previous.key !== activeVisual.key && previous.imageSrc) {
-      setTransitionVisual(previous);
-      const timer = window.setTimeout(() => setTransitionVisual(null), 240);
-      activeVisualRef.current = activeVisual;
-      return () => window.clearTimeout(timer);
-    }
-    activeVisualRef.current = activeVisual;
-    return undefined;
-  }, [activeVisual]);
-
-  useEffect(() => {
-    if (!viewportRef.current) return;
-    const element = viewportRef.current;
-
-    const updateViewportSize = () => {
-      setViewportSize({
-        width: element.clientWidth,
-        height: element.clientHeight,
-      });
-    };
-
-    updateViewportSize();
-    const resizeObserver = new ResizeObserver(() => updateViewportSize());
-    resizeObserver.observe(element);
-    window.addEventListener("resize", updateViewportSize);
-
-    return () => {
-      resizeObserver.disconnect();
-      window.removeEventListener("resize", updateViewportSize);
-    };
-  }, []);
-
-  useEffect(() => {
-    setImagePan({ x: 0, y: 0 });
-    setImageRotation(0);
-    setIsDraggingImage(false);
-    pointerStateRef.current = null;
-  }, [activeItem?.index, effectiveMode]);
-
-  useEffect(() => {
-    return () => {
-      if (chromeHideTimerRef.current) {
-        window.clearTimeout(chromeHideTimerRef.current);
-      }
-    };
-  }, []);
-
-  const isImageRotatedSideways = imageRotation % 180 !== 0;
-  const imageDisplaySize = {
-    width: isImageRotatedSideways
-      ? imageNaturalSize.height
-      : imageNaturalSize.width,
-    height: isImageRotatedSideways
-      ? imageNaturalSize.width
-      : imageNaturalSize.height,
-  };
-  const fitScale =
-    imageDisplaySize.width > 0 &&
-    imageDisplaySize.height > 0 &&
-    viewportSize.width > 0 &&
-    viewportSize.height > 0
-      ? Math.min(
-          viewportSize.width / imageDisplaySize.width,
-          viewportSize.height / imageDisplaySize.height,
-          1,
-        )
-      : 1;
-  const isOriginalView = Math.abs(imageScale - 1) < 0.02;
-  const scaledImageSize = {
-    width: imageDisplaySize.width * imageScale,
-    height: imageDisplaySize.height * imageScale,
-  };
-  const imageCanPan =
-    effectiveMode === "image" &&
-    viewportSize.width > 0 &&
-    viewportSize.height > 0 &&
-    (scaledImageSize.width > viewportSize.width + 2 ||
-      scaledImageSize.height > viewportSize.height + 2);
-  const liveFrameClass =
-    liveNaturalSize.width > 0 && liveNaturalSize.height > 0
-      ? liveNaturalSize.width >= liveNaturalSize.height
-        ? "image-viewer-media-frame is-live is-landscape"
-        : "image-viewer-media-frame is-live is-portrait"
-      : "image-viewer-media-frame is-live is-portrait";
-  const liveFrameStyle =
-    liveNaturalSize.width > 0 && liveNaturalSize.height > 0
-      ? ({
-          "--viewer-live-ratio": `${liveNaturalSize.width} / ${liveNaturalSize.height}`,
-        } as CSSProperties)
-      : undefined;
-
-  useEffect(() => {
-    if (effectiveMode !== "image") return;
-    if (!imageNaturalSize.width || !viewportSize.width) return;
-    setImageScale(fitScale);
-    setImagePan({ x: 0, y: 0 });
-  }, [
-    activeItem?.index,
-    effectiveMode,
-    fitScale,
-    imageNaturalSize.height,
-    imageNaturalSize.width,
-    imageRotation,
-    viewportSize.width,
-  ]);
-
-  function clampImagePanValue(nextPan: ViewerPan, scale = imageScale) {
-    if (
-      !viewportSize.width ||
-      !viewportSize.height ||
-      !imageDisplaySize.width ||
-      !imageDisplaySize.height
-    ) {
-      return { x: 0, y: 0 };
-    }
-    const maxX = Math.max(
-      0,
-      (imageDisplaySize.width * scale - viewportSize.width) / 2,
-    );
-    const maxY = Math.max(
-      0,
-      (imageDisplaySize.height * scale - viewportSize.height) / 2,
-    );
-    return {
-      x: clampNumber(nextPan.x, -maxX, maxX),
-      y: clampNumber(nextPan.y, -maxY, maxY),
-    };
-  }
-
-  useEffect(() => {
-    setImagePan((current) => clampImagePanValue(current));
-  }, [
-    imageDisplaySize.height,
-    imageDisplaySize.width,
-    imageScale,
-    imageRotation,
-    viewportSize.height,
-    viewportSize.width,
-  ]);
-
-  function navigateBy(offset: number) {
-    if (items.length <= 1) return;
-    onNavigate((activeIndex + offset + items.length) % items.length);
-  }
-
-  function resetImageView(mode: "fit" | "original") {
-    setImagePan({ x: 0, y: 0 });
-    setImageScale(mode === "original" ? 1 : fitScale);
-  }
-
-  function toggleImageViewSize() {
-    resetImageView(isOriginalView ? "fit" : "original");
-  }
-
-  function rotateImageView() {
-    setImagePan({ x: 0, y: 0 });
-    setImageRotation((current) => (current + 90) % 360);
-  }
-
-  function showViewerChrome() {
-    if (chromeHideTimerRef.current) {
-      window.clearTimeout(chromeHideTimerRef.current);
-      chromeHideTimerRef.current = null;
-    }
-    setIsChromeVisible(true);
-  }
-
-  function hideViewerChrome(delay = 260) {
-    if (chromeHideTimerRef.current) {
-      window.clearTimeout(chromeHideTimerRef.current);
-    }
-    chromeHideTimerRef.current = window.setTimeout(() => {
-      setIsChromeVisible(false);
-      chromeHideTimerRef.current = null;
-    }, delay);
-  }
-
-  function updateNavOffsets() {
-    const overlay = overlayRef.current;
-    const mediaElement =
-      effectiveMode === "live" ? liveVideoRef.current : imageSurfaceRef.current;
-    if (!overlay || !mediaElement) {
-      setNavOffsets(null);
-      setMediaChrome(null);
-      return;
-    }
-
-    const overlayRect = overlay.getBoundingClientRect();
-    const mediaRect = mediaElement.getBoundingClientRect();
-    if (!mediaRect.width || !mediaRect.height) {
-      setNavOffsets(null);
-      setMediaChrome(null);
-      return;
-    }
-
-    const inset = 14;
-    const minEdge = 18;
-    const maxLeft = Math.max(minEdge, overlayRect.width - 64);
-    const left = clampNumber(
-      mediaRect.left - overlayRect.left + inset,
-      minEdge,
-      maxLeft,
-    );
-    const right = clampNumber(
-      overlayRect.right - mediaRect.right + inset,
-      minEdge,
-      maxLeft,
-    );
-    const top = clampNumber(
-      mediaRect.top - overlayRect.top + inset,
-      minEdge,
-      Math.max(minEdge, overlayRect.height - 64),
-    );
-    setNavOffsets((current) =>
-      current?.left === left && current?.right === right
-        ? current
-        : { left, right },
-    );
-    setMediaChrome((current) =>
-      current?.top === top && current?.left === left && current?.right === right
-        ? current
-        : { top, left, right },
-    );
-  }
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(updateNavOffsets);
-    window.addEventListener("resize", updateNavOffsets);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener("resize", updateNavOffsets);
-    };
-  }, [
-    activeIndex,
-    effectiveMode,
-    imagePan.x,
-    imagePan.y,
-    imageScale,
-    liveNaturalSize.height,
-    liveNaturalSize.width,
-    viewportSize.height,
-    viewportSize.width,
-  ]);
-
-  function handleImagePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (effectiveMode !== "image") return;
-    if (!imageCanPan) return;
-    pointerStateRef.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-    setIsDraggingImage(true);
-  }
-
-  function handleImagePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    if (
-      !pointerStateRef.current ||
-      pointerStateRef.current.pointerId !== event.pointerId
-    )
-      return;
-    const deltaX = event.clientX - pointerStateRef.current.x;
-    const deltaY = event.clientY - pointerStateRef.current.y;
-    pointerStateRef.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-    };
-    setImagePan((current) =>
-      clampImagePanValue({ x: current.x + deltaX, y: current.y + deltaY }),
-    );
-  }
-
-  function clearImagePointer(event?: ReactPointerEvent<HTMLDivElement>) {
-    if (
-      event &&
-      pointerStateRef.current &&
-      pointerStateRef.current.pointerId === event.pointerId
-    ) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    pointerStateRef.current = null;
-    setIsDraggingImage(false);
-  }
-
-  function handleViewerWheel(event: React.WheelEvent<HTMLDivElement>) {
-    if (items.length <= 1) return;
-    const mediaElement =
-      effectiveMode === "live" ? liveVideoRef.current : imageSurfaceRef.current;
-    if (mediaElement) {
-      const rect = mediaElement.getBoundingClientRect();
-      const withinMedia =
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom;
-      if (!withinMedia) return;
-    }
-    const dominantDelta =
-      Math.abs(event.deltaY) >= Math.abs(event.deltaX)
-        ? event.deltaY
-        : event.deltaX;
-    if (Math.abs(dominantDelta) < 2) return;
-    event.preventDefault();
-    const now = window.performance.now();
-    if (now - wheelNavigationRef.current < 320) return;
-    wheelNavigationRef.current = now;
-    navigateBy(dominantDelta > 0 ? 1 : -1);
-  }
-
-  function handleViewerTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
-    if (event.touches.length !== 1) {
-      touchNavigationRef.current = null;
-      return;
-    }
-    const touch = event.touches[0];
-    touchNavigationRef.current = {
-      x: touch.clientX,
-      y: touch.clientY,
-      at: window.performance.now(),
-    };
-  }
-
-  function handleViewerTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
-    const start = touchNavigationRef.current;
-    touchNavigationRef.current = null;
-    if (!start || items.length <= 1 || imageCanPan) return;
-    const touch = event.changedTouches[0];
-    if (!touch) return;
-    const deltaX = touch.clientX - start.x;
-    const deltaY = touch.clientY - start.y;
-    if (Math.abs(deltaX) < 52 || Math.abs(deltaX) < Math.abs(deltaY) * 1.35)
-      return;
-    navigateBy(deltaX < 0 ? 1 : -1);
-  }
-
-  if (!activeItem) return null;
-
-  return (
-    <div
-      aria-label="图片查看层"
-      className={
-        isChromeVisible
-          ? "image-viewer-overlay is-chrome-visible"
-          : "image-viewer-overlay"
-      }
-      onClick={onClose}
-      ref={overlayRef}
-      role="dialog"
-      aria-modal="true"
-      onTouchStart={handleViewerTouchStart}
-      onTouchEnd={handleViewerTouchEnd}
-    >
-      <button
-        aria-label="关闭图片预览"
-        className="image-viewer-close"
-        onClick={(event) => {
-          event.stopPropagation();
-          onClose();
-        }}
-        type="button"
-      >
-        <X size={20} />
-      </button>
-
-      {liveAvailable ? (
-        <span
-          className="image-viewer-live-badge"
-          style={
-            mediaChrome
-              ? { top: mediaChrome.top, left: mediaChrome.left }
-              : undefined
-          }
-        >
-          LIVE
-        </span>
-      ) : null}
-
-      {items.length > 1 ? (
-        <>
-          <button
-            aria-label="查看上一张图片"
-            className="image-viewer-nav is-prev"
-            style={navOffsets ? { left: navOffsets.left } : undefined}
-            onPointerEnter={showViewerChrome}
-            onPointerLeave={() => hideViewerChrome()}
-            onClick={(event) => {
-              event.stopPropagation();
-              navigateBy(-1);
-            }}
-            type="button"
-          >
-            <ChevronLeft size={18} />
-          </button>
-          <button
-            aria-label="查看下一张图片"
-            className="image-viewer-nav is-next"
-            style={navOffsets ? { right: navOffsets.right } : undefined}
-            onPointerEnter={showViewerChrome}
-            onPointerLeave={() => hideViewerChrome()}
-            onClick={(event) => {
-              event.stopPropagation();
-              navigateBy(1);
-            }}
-            type="button"
-          >
-            <ChevronRight size={18} />
-          </button>
-        </>
-      ) : null}
-
-      <div className="image-viewer-stage">
-        {transitionVisual ? (
-          <div aria-hidden="true" className="image-viewer-transition-underlay">
-            <img alt="" src={transitionVisual.imageSrc} />
-          </div>
-        ) : null}
-
-        <div
-          className={[
-            "image-viewer-viewport",
-            imageCanPan ? "can-pan" : "",
-            isDraggingImage ? "is-dragging" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          ref={viewportRef}
-          onPointerDown={handleImagePointerDown}
-          onPointerMove={handleImagePointerMove}
-          onPointerUp={clearImagePointer}
-          onPointerCancel={clearImagePointer}
-          onPointerLeave={(event) => {
-            if (pointerStateRef.current) clearImagePointer(event);
-          }}
-          onWheel={handleViewerWheel}
-        >
-          {effectiveMode === "live" && liveAvailable ? (
-            <div
-              className={liveFrameClass}
-              key={`live-${activeItem.index}`}
-              style={liveFrameStyle}
-              onClick={(event) => event.stopPropagation()}
-              onPointerEnter={showViewerChrome}
-              onPointerLeave={() => hideViewerChrome()}
-            >
-              <video
-                autoPlay
-                loop
-                muted
-                playsInline
-                poster={imagePrimary}
-                preload="metadata"
-                ref={liveVideoRef}
-                src={liveSrc}
-                onCanPlay={() => setLivePlaybackError(false)}
-                onLoadedMetadata={(event) => {
-                  setLiveNaturalSize({
-                    width: event.currentTarget.videoWidth,
-                    height: event.currentTarget.videoHeight,
-                  });
-                  window.requestAnimationFrame(updateNavOffsets);
-                }}
-                onError={() => {
-                  const fallback = liveFallbackUrl(activeItem);
-                  if (fallback && liveSrc !== fallback) {
-                    setLiveSrc(fallback);
-                    return;
-                  }
-                  setLivePlaybackError(true);
-                }}
-              />
-              {livePlaybackError ? (
-                <p className="image-viewer-note">
-                  当前浏览器无法直接播放 Live，仍可下载原片段。
-                </p>
-              ) : null}
-            </div>
-          ) : (
-            <div className="image-viewer-media-frame is-image">
-              <div
-                className="image-viewer-image-surface"
-                key={`image-${activeItem.index}`}
-                ref={imageSurfaceRef}
-                onClick={(event) => event.stopPropagation()}
-                onPointerEnter={showViewerChrome}
-                onPointerLeave={() => hideViewerChrome()}
-                style={
-                  {
-                    transform: `translate(${imagePan.x}px, ${imagePan.y}px) rotate(${imageRotation}deg) scale(${imageScale})`,
-                  } satisfies CSSProperties
-                }
-              >
-                <MediaImage
-                  alt={activeItem.label}
-                  className="image-viewer-image"
-                  eager
-                  fallbackSrc={imageFallbackUrl(activeItem)}
-                  primarySrc={imagePrimary}
-                  onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
-                    setImageNaturalSize({
-                      width: event.currentTarget.naturalWidth,
-                      height: event.currentTarget.naturalHeight,
-                    });
-                    window.requestAnimationFrame(updateNavOffsets);
-                  }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div
-        className="image-viewer-toolbar"
-        onClick={(event) => event.stopPropagation()}
-        onPointerEnter={showViewerChrome}
-        onPointerLeave={() => hideViewerChrome(320)}
-      >
-        {liveAvailable ? (
-          <div className="image-viewer-toolbar-group">
-            <button
-              className={
-                previewMode === "image"
-                  ? "image-viewer-toolbar-button is-label is-active"
-                  : "image-viewer-toolbar-button is-label"
-              }
-              onClick={() => onPreviewModeChange("image")}
-              type="button"
-            >
-              图片
-            </button>
-            <button
-              className={
-                previewMode === "live"
-                  ? "image-viewer-toolbar-button is-label is-active"
-                  : "image-viewer-toolbar-button is-label"
-              }
-              onClick={() => onPreviewModeChange("live")}
-              type="button"
-            >
-              Live
-            </button>
-            <span className="image-viewer-toolbar-divider" />
-          </div>
-        ) : null}
-
-        <div className="image-viewer-toolbar-group is-navigation">
-          {items.length > 1 ? (
-            <button
-              aria-label="上一张"
-              className="image-viewer-toolbar-button"
-              onClick={() => navigateBy(-1)}
-              type="button"
-            >
-              <ChevronLeft size={16} />
-            </button>
-          ) : null}
-          <span className="image-viewer-toolbar-count">{`${activeIndex + 1}/${items.length}`}</span>
-          {items.length > 1 ? (
-            <button
-              aria-label="下一张"
-              className="image-viewer-toolbar-button"
-              onClick={() => navigateBy(1)}
-              type="button"
-            >
-              <ChevronRight size={16} />
-            </button>
-          ) : null}
-          <span className="image-viewer-toolbar-divider" />
-        </div>
-
-        {effectiveMode === "image" ? (
-          <div className="image-viewer-toolbar-group is-image-tools">
-            <button
-              aria-label="缩小图片"
-              className="image-viewer-toolbar-button"
-              onClick={() =>
-                setImageScale((current) =>
-                  clampNumber(
-                    Number((current - 0.14).toFixed(2)),
-                    Math.min(fitScale, 0.35),
-                    3.5,
-                  ),
-                )
-              }
-              type="button"
-            >
-              <Minus size={16} />
-            </button>
-            <span className="image-viewer-toolbar-value">{`${Math.round(imageScale * 100)}%`}</span>
-            <button
-              aria-label="放大图片"
-              className="image-viewer-toolbar-button"
-              onClick={() =>
-                setImageScale((current) =>
-                  clampNumber(
-                    Number((current + 0.14).toFixed(2)),
-                    Math.min(fitScale, 0.35),
-                    3.5,
-                  ),
-                )
-              }
-              type="button"
-            >
-              <Plus size={16} />
-            </button>
-            <button
-              aria-label={isOriginalView ? "适应屏幕显示" : "按原始尺寸显示"}
-              className="image-viewer-toolbar-button is-label"
-              onClick={toggleImageViewSize}
-              type="button"
-            >
-              {isOriginalView ? "适应" : "1:1"}
-            </button>
-            <button
-              aria-label="旋转图片"
-              className="image-viewer-toolbar-button"
-              onClick={rotateImageView}
-              type="button"
-            >
-              <RotateCw size={16} />
-            </button>
-            <span className="image-viewer-toolbar-divider" />
-          </div>
-        ) : null}
-
-        <div className="image-viewer-toolbar-group">
-          <a
-            className="image-viewer-toolbar-button is-label is-download"
-            download={
-              effectiveMode === "live"
-                ? activeItem.liveArtifact?.label ||
-                  `image_${activeItem.index}_live.mp4`
-                : activeItem.imageArtifact?.label ||
-                  `image_${activeItem.index}.jpg`
-            }
-            href={effectiveMode === "live" ? liveDownload : imageDownload}
-          >
-            <Download size={15} />
-            {effectiveMode === "live" ? "下载 Live" : "下载图片"}
-          </a>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1166,11 +594,17 @@ function VideoPanel({
   sourceArtifact,
   audioArtifact,
   posterUrl,
+  captureId,
+  onSaved,
+  onNotify,
 }: {
   previewArtifact: Artifact | null;
   sourceArtifact: Artifact | null;
   audioArtifact: Artifact | null;
   posterUrl?: string | null;
+  captureId: string;
+  onSaved: (receipt: SaveReceipt) => void;
+  onNotify: (message: string) => void;
 }) {
   const [orientation, setOrientation] = useState<VideoOrientation>("unknown");
   const [playbackError, setPlaybackError] = useState(false);
@@ -1231,23 +665,26 @@ function VideoPanel({
 
         <div className="media-panel-actions">
           {audioArtifact ? (
-            <a
+            <ArtifactAction
+              artifact={audioArtifact}
+              captureId={captureId}
               className="copy-action media-action-audio"
-              download
-              href={artifactUrl(audioArtifact)}
+              onNotify={onNotify}
+              onSaved={onSaved}
             >
               <Headphones size={14} />
-              下载音频
-            </a>
+              {isDesktopApp() ? "保存音频" : "下载音频"}
+            </ArtifactAction>
           ) : null}
-          <a
-            className="copy-action"
-            download
-            href={artifactUrl(downloadArtifact)}
+          <ArtifactAction
+            artifact={downloadArtifact}
+            captureId={captureId}
+            onNotify={onNotify}
+            onSaved={onSaved}
           >
             <Download size={14} />
-            下载视频
-          </a>
+            {isDesktopApp() ? "保存视频" : "下载视频"}
+          </ArtifactAction>
           {fileSize ? (
             <span className="media-size-pill">{fileSize}</span>
           ) : null}
@@ -1261,7 +698,7 @@ function VideoPanel({
             preload="auto"
             playsInline
             poster={posterUrl || undefined}
-            src={artifactUrl(activeArtifact)}
+            src={artifactPreviewUrl(activeArtifact)}
             onCanPlay={() => setPlaybackError(false)}
             onError={() => {
               if (
@@ -1291,7 +728,212 @@ function VideoPanel({
   );
 }
 
-function VideoUnavailablePanel({ notice }: { notice: string }) {
+function formatPlaybackTime(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
+}
+
+function PodcastPanel({
+  capture,
+  audioArtifact,
+  coverArtifact,
+  onTimeChange,
+  audioRef,
+  onSaved,
+  onNotify,
+}: {
+  capture: CaptureEnvelope;
+  audioArtifact: Artifact;
+  coverArtifact: Artifact | null;
+  onTimeChange: (time: number) => void;
+  audioRef: MutableRefObject<HTMLAudioElement | null>;
+  onSaved: (receipt: SaveReceipt) => void;
+  onNotify: (message: string) => void;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(capture.source.duration_seconds || 0);
+  const [speed, setSpeed] = useState(1);
+  const [panelVisible, setPanelVisible] = useState(true);
+  const [playbackStarted, setPlaybackStarted] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return undefined;
+    const observer = new IntersectionObserver(
+      ([entry]) => setPanelVisible(entry.intersectionRatio >= 0.55),
+      { threshold: [0, 0.55, 1] },
+    );
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, []);
+
+  function seekBy(delta: number) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = clampNumber(audio.currentTime + delta, 0, audio.duration || duration || 0);
+  }
+
+  function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      setPlaybackStarted(true);
+      void audio.play();
+    }
+    else audio.pause();
+  }
+
+  return (
+    <>
+    <section className="podcast-panel" aria-label="播客播放器" ref={panelRef}>
+      <audio
+        ref={audioRef}
+        preload="metadata"
+        src={artifactPreviewUrl(audioArtifact)}
+        onDurationChange={(event) => setDuration(event.currentTarget.duration || duration)}
+        onEnded={() => setPlaying(false)}
+        onPause={() => setPlaying(false)}
+        onPlay={() => setPlaying(true)}
+        onTimeUpdate={(event) => {
+          const nextTime = event.currentTarget.currentTime;
+          setCurrentTime(nextTime);
+          onTimeChange(nextTime);
+        }}
+      />
+      <div className="podcast-cover-wrap">
+        {coverArtifact ? (
+          <img alt="节目封面" className="podcast-cover" src={artifactPreviewUrl(coverArtifact)} />
+        ) : (
+          <div className="podcast-cover is-placeholder" aria-hidden="true">
+            <Headphones size={32} />
+          </div>
+        )}
+      </div>
+      <div className="podcast-heading">
+        <span className="result-section-kicker">播客</span>
+        <strong>{capture.source.title || capture.capture.title || "音频节目"}</strong>
+        {capture.source.author ? <span>{capture.source.author}</span> : null}
+      </div>
+      <div className="podcast-controls">
+        <button aria-label="后退 15 秒" className="podcast-icon-button" onClick={() => seekBy(-15)} type="button">
+          <SkipBack size={18} />
+          <span>15</span>
+        </button>
+        <button aria-label={playing ? "暂停" : "播放"} className="podcast-play-button" onClick={togglePlayback} type="button">
+          {playing ? <Pause size={20} /> : <Play size={20} fill="currentColor" />}
+        </button>
+        <button aria-label="前进 15 秒" className="podcast-icon-button" onClick={() => seekBy(15)} type="button">
+          <SkipForward size={18} />
+          <span>15</span>
+        </button>
+      </div>
+      <div className="podcast-timeline">
+        <span>{formatPlaybackTime(currentTime)}</span>
+        <input
+          aria-label="播放进度"
+          max={Math.max(duration, 0.01)}
+          min="0"
+          onChange={(event) => {
+            const value = Number(event.currentTarget.value);
+            if (audioRef.current) audioRef.current.currentTime = value;
+            setCurrentTime(value);
+          }}
+          step="0.1"
+          type="range"
+          value={Math.min(currentTime, Math.max(duration, 0.01))}
+        />
+        <span>{formatPlaybackTime(duration)}</span>
+      </div>
+      <div className="podcast-footer">
+        <label>
+          <span>倍速</span>
+          <select
+            aria-label="播放速度"
+            onChange={(event) => {
+              const value = Number(event.currentTarget.value);
+              setSpeed(value);
+              if (audioRef.current) audioRef.current.playbackRate = value;
+            }}
+            value={speed}
+          >
+            {[0.75, 1, 1.25, 1.5, 2].map((value) => (
+              <option key={value} value={value}>{value}x</option>
+            ))}
+          </select>
+        </label>
+        <span>{audioArtifact.mime_type === "audio/mp4" ? "M4A" : audioArtifact.mime_type.replace("audio/", "").toUpperCase()}</span>
+        <ArtifactAction
+          artifact={audioArtifact}
+          captureId={capture.capture.id}
+          className="copy-action media-action-audio"
+          onNotify={onNotify}
+          onSaved={onSaved}
+        >
+          <Headphones size={14} />
+          {isDesktopApp() ? "保存音频" : "下载音频"}
+        </ArtifactAction>
+      </div>
+    </section>
+    <div
+      aria-hidden={panelVisible || !playbackStarted}
+      className={
+        !panelVisible && playbackStarted
+          ? "podcast-compact-bar is-visible"
+          : "podcast-compact-bar"
+      }
+    >
+      <button
+        aria-label={playing ? "暂停播客" : "继续播放播客"}
+        onClick={togglePlayback}
+        type="button"
+      >
+        {playing ? <Pause size={18} /> : <Play size={18} fill="currentColor" />}
+      </button>
+      <div>
+        <strong>{capture.source.title || capture.capture.title || "音频节目"}</strong>
+        <span>{`${formatPlaybackTime(currentTime)} / ${formatPlaybackTime(duration)}`}</span>
+      </div>
+      <progress aria-label="播客播放进度" max={Math.max(duration, 0.01)} value={currentTime} />
+    </div>
+    </>
+  );
+}
+
+function TimedTranscript({
+  segments,
+  activeTime,
+  onSeek,
+}: {
+  segments: ResultSegment[];
+  activeTime: number;
+  onSeek: (seconds: number) => void;
+}) {
+  return (
+    <div className="timed-transcript" aria-label="带时间的正文">
+      {segments.map((segment, index) => {
+        const start = segment.start_sec ?? 0;
+        const end = segment.end_sec ?? Number.POSITIVE_INFINITY;
+        const active = activeTime >= start && activeTime < end;
+        return (
+          <button
+            className={active ? "transcript-segment is-active" : "transcript-segment"}
+            key={`${start}-${index}`}
+            onClick={() => onSeek(start)}
+            type="button"
+          >
+            <span>{formatPlaybackTime(start)}</span>
+            <p>{segment.text}</p>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function VideoUnavailablePanel({ notice, onRetry }: { notice: string; onRetry?: () => void }) {
   return (
     <section className="media-panel media-panel-empty">
       <div className="media-panel-head">
@@ -1305,19 +947,37 @@ function VideoUnavailablePanel({ notice }: { notice: string }) {
         <div className="media-panel-empty-card">
           <Film size={22} />
           <strong>暂未拿到可预览视频</strong>
-          <p>{notice || "文本已整理完成，但原视频暂未成功下载。"}</p>
+          <p>{notice || "文本已整理完成，但视频文件暂未就绪。"}</p>
+          {onRetry ? (
+            <button className="copy-action is-primary media-panel-retry" onClick={onRetry} type="button">
+              <RotateCcw size={14} aria-hidden="true" />
+              重新获取视频
+            </button>
+          ) : null}
         </div>
       </div>
     </section>
   );
 }
 
-export function DeliverableStage({ capture }: DeliverableStageProps) {
+export function DeliverableStage({
+  capture,
+  onCaptureUpdated,
+  onNotify,
+  onReset,
+  onRetry,
+}: DeliverableStageProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">(
     "idle",
   );
   const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null);
   const [previewMode, setPreviewMode] = useState<ImagePreviewMode>("image");
+  const [retryingImage, setRetryingImage] = useState<number | null>(null);
+  const [saveReceipt, setSaveReceipt] = useState<SaveReceipt | null>(null);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [coverRequested, setCoverRequested] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const viewerTriggerRef = useRef<HTMLButtonElement | null>(null);
   const primaryText =
     capture.result.views.primary || capture.result.primary_text || "";
   const markdownText = capture.result.views.markdown || "";
@@ -1327,6 +987,30 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
     primaryText.split("\n").filter((item) => item.trim()).length >= 8;
   const showImages = shouldShowImages(capture);
   const imageItems = useMemo(() => buildGalleryItems(capture), [capture]);
+  const viewerItems = useMemo(
+    () =>
+      imageItems.filter(
+        (item) =>
+          item.deliveryStatus === "ready" && Boolean(preferredImageUrl(item)),
+      ),
+    [imageItems],
+  );
+  const viewerSlides = useMemo<ImageViewerItem[]>(
+    () =>
+      viewerItems.map((item) => ({
+        index: item.index,
+        label: item.label,
+        imageSrc: preferredFullImageUrl(item),
+        imageFallbackSrc: item.imageSourceUrl,
+        liveSrc: preferredLiveUrl(item),
+        liveFallbackSrc: liveFallbackUrl(item),
+        imageArtifact: item.imageArtifact,
+        liveArtifact: item.liveArtifact,
+        width: item.width,
+        height: item.height,
+      })),
+    [viewerItems],
+  );
   const imagesZip = useMemo(
     () =>
       showImages
@@ -1346,6 +1030,17 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
     () =>
       capture.artifacts.find((item) => item.type === "source_audio") || null,
     [capture.artifacts],
+  );
+  const coverArtifact = useMemo(
+    () => capture.artifacts.find((item) => item.type === "cover_image") || null,
+    [capture.artifacts],
+  );
+  const timedSegments = useMemo(
+    () =>
+      (capture.result.segments || []).filter(
+        (item) => typeof item.start_sec === "number" && item.text.trim(),
+      ),
+    [capture.result.segments],
   );
   const previewVideoArtifact = useMemo(
     () =>
@@ -1373,23 +1068,20 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
   );
   const videoArtifact =
     previewVideoArtifact || sourceVideoArtifact || fallbackVideoArtifact;
+  const hasVideoPanel = capture.source.media_kind === "video";
+  const hasPodcastPanel =
+    capture.source.media_kind === "audio" && Boolean(sourceAudioArtifact);
+  const hasPlayableVideo = Boolean(videoArtifact);
+  const sourceUrl = resultSourceUrl(capture);
   const visibleFacts = useMemo(
     () =>
       capture.result.content_facts.filter((fact) =>
-        [
-          "title",
-          "platform",
-          "content_type",
-          "author",
-          "published_at",
-          "duration",
-        ].includes(fact.key),
+        ["title", "platform", "content_type", "author", "published_at", "duration"].includes(
+          fact.key,
+        ),
       ),
     [capture.result.content_facts],
   );
-  const hasVideoPanel = capture.source.media_kind === "video";
-  const hasPlayableVideo = Boolean(videoArtifact);
-  const sourceUrl = resultSourceUrl(capture);
   const isImageOnlyResult = showImages && !primaryText.trim();
   const isVideoOnlyResult = hasPlayableVideo && !primaryText.trim();
   const heroHeading = heroTitle(capture);
@@ -1397,9 +1089,48 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
   const imagesPending = showImages && capture.capture.asset_preparation_pending;
   const mainGridClass = hasVideoPanel
     ? "deliverable-workspace has-video"
+    : hasPodcastPanel
+      ? "deliverable-workspace has-audio"
     : showImages
       ? "deliverable-workspace has-images"
       : "deliverable-workspace";
+
+  const titleFact = visibleFacts.find((fact) => fact.key === "title");
+  const secondaryFacts = visibleFacts.filter((fact) => fact.key !== "title");
+  const factsSection = titleFact || secondaryFacts.length || sourceUrl ? (
+    <section className="facts-strip">
+      {titleFact ? (
+        <div className="facts-strip-main">
+          <div className="fact-chip fact-chip-title">
+            <span>{factLabel(titleFact.key, titleFact.label)}</span>
+            <strong title={titleFact.value}>{titleFact.value}</strong>
+          </div>
+        </div>
+      ) : null}
+
+      {secondaryFacts.length || sourceUrl ? (
+        <div className="facts-strip-side">
+          {secondaryFacts.map((fact) => (
+            <div className={`fact-chip fact-chip-${fact.key}`} key={fact.key}>
+              <span>{factLabel(fact.key, fact.label)}</span>
+              <strong title={fact.value}>{fact.value}</strong>
+            </div>
+          ))}
+          {sourceUrl ? (
+            <button
+              className="fact-chip fact-chip-action"
+              onClick={() => void handleOpenSource()}
+              type="button"
+            >
+              <span>来源</span>
+              <strong>查看来源</strong>
+              <ExternalLink size={13} />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  ) : null;
 
   async function handleCopy() {
     if (!copyPayload.trim()) return;
@@ -1408,102 +1139,93 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
     window.setTimeout(() => setCopyState("idle"), 2200);
   }
 
-  const titleFact = visibleFacts.find((fact) => fact.key === "title");
-  const secondaryFacts = visibleFacts.filter((fact) => fact.key !== "title");
-  const factsSection =
-    titleFact || secondaryFacts.length || sourceUrl ? (
-      <section className="facts-strip">
-        {titleFact ? (
-          <div className="facts-strip-main">
-            <div className="fact-chip fact-chip-title">
-              <span>{factLabel(titleFact.key, titleFact.label)}</span>
-              <strong title={titleFact.value}>{titleFact.value}</strong>
-            </div>
-          </div>
-        ) : null}
+  async function handleRetryImage(imageIndex: number) {
+    if (retryingImage != null) return;
+    setRetryingImage(imageIndex);
+    try {
+      const updated = await retryCaptureImage(capture.capture.id, imageIndex);
+      onCaptureUpdated(updated);
+      onNotify(`图片 ${imageIndex} 已重新获取。`);
+    } catch (error) {
+      onNotify(calmErrorMessage(error, "这张图片暂时未能重新获取。"));
+    } finally {
+      setRetryingImage(null);
+    }
+  }
 
-        {secondaryFacts.length || sourceUrl ? (
-          <div className="facts-strip-side">
-            {secondaryFacts.map((fact) => (
-              <div className={`fact-chip fact-chip-${fact.key}`} key={fact.key}>
-                <span>{factLabel(fact.key, fact.label)}</span>
-                <strong title={fact.value}>{fact.value}</strong>
-              </div>
-            ))}
-            {sourceUrl ? (
-              <a
-                className="fact-chip fact-chip-action"
-                href={sourceUrl}
-                rel="noreferrer"
-                target="_blank"
-              >
-                <span>来源</span>
-                <strong>查看来源</strong>
-                <ExternalLink size={13} />
-              </a>
-            ) : null}
-          </div>
-        ) : null}
-      </section>
-    ) : null;
+  async function handleOpenSource() {
+    if (!sourceUrl) return;
+    if (!isDesktopApp()) {
+      window.open(sourceUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      await openCaptureSource(capture.capture.id);
+    } catch (error) {
+      onNotify(calmErrorMessage(error, "暂时无法打开来源页面。"));
+    }
+  }
+
+  function seekPodcast(seconds: number) {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = seconds;
+    setPlaybackTime(seconds);
+    void audioRef.current.play();
+  }
 
   useEffect(() => {
     if (activeImageIndex == null) return;
-    if (!imageItems.length || activeImageIndex >= imageItems.length) {
+    if (!viewerItems.length || activeImageIndex >= viewerItems.length) {
       setActiveImageIndex(null);
     }
-  }, [activeImageIndex, imageItems.length]);
+  }, [activeImageIndex, viewerItems.length]);
 
   useEffect(() => {
-    if (activeImageIndex == null) return;
-    const activeItem = imageItems[activeImageIndex];
-    const hasLive = Boolean(
-      activeItem?.liveSourceUrl || activeItem?.liveArtifact,
-    );
-    setPreviewMode(hasLive ? "live" : "image");
-  }, [activeImageIndex, imageItems]);
+    setCoverRequested(false);
+  }, [capture.capture.id]);
 
   useEffect(() => {
-    if (activeImageIndex == null) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [activeImageIndex]);
+    if (!saveReceipt) return undefined;
+    const timer = window.setTimeout(() => setSaveReceipt(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [saveReceipt]);
 
   useEffect(() => {
-    if (activeImageIndex == null) return;
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setActiveImageIndex(null);
-        return;
-      }
-      if (imageItems.length <= 1) return;
-      if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        setActiveImageIndex((current) =>
-          current == null
-            ? current
-            : (current - 1 + imageItems.length) % imageItems.length,
-        );
-      }
-      if (event.key === "ArrowRight") {
-        event.preventDefault();
-        setActiveImageIndex((current) =>
-          current == null ? current : (current + 1) % imageItems.length,
-        );
-      }
+    if (
+      coverRequested ||
+      capture.source.media_kind !== "audio" ||
+      coverArtifact ||
+      !capture.source.thumbnail_url
+    ) {
+      return;
     }
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeImageIndex, imageItems.length]);
+    setCoverRequested(true);
+    void ensureCaptureCover(capture.capture.id)
+      .then(onCaptureUpdated)
+      .catch(() => undefined);
+  }, [
+    capture.capture.id,
+    capture.source.media_kind,
+    capture.source.thumbnail_url,
+    coverArtifact,
+    coverRequested,
+    onCaptureUpdated,
+  ]);
 
   return (
     <section className="deliverable-stage">
       <div className="deliverable-stage-inner">
+        {isDesktopApp() ? (
+          <button
+            aria-label="返回首页"
+            className="desktop-result-back"
+            onClick={onReset}
+            title="返回首页"
+            type="button"
+          >
+            <ArrowLeft size={18} />
+          </button>
+        ) : null}
         <header className="deliverable-hero">
           <div className="deliverable-hero-pill">
             <FileText size={14} />
@@ -1520,6 +1242,7 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
               <span>{durationLabel(capture.source.duration_seconds)}</span>
             ) : null}
           </div>
+
         </header>
 
         <div className="deliverable-workspace-shell">
@@ -1533,39 +1256,44 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                   </div>
 
                   <div className="result-actions">
-                    {sourceAudioArtifact && !hasVideoPanel ? (
-                      <a
+                    {sourceAudioArtifact && !hasVideoPanel && !hasPodcastPanel ? (
+                      <ArtifactAction
+                        artifact={sourceAudioArtifact}
+                        captureId={capture.capture.id}
                         className="copy-action media-action-audio"
-                        download
-                        href={artifactUrl(sourceAudioArtifact)}
+                        onNotify={onNotify}
+                        onSaved={setSaveReceipt}
                       >
                         <Headphones size={14} />
-                        下载音频
-                      </a>
+                        {isDesktopApp() ? "保存音频" : "下载音频"}
+                      </ArtifactAction>
                     ) : null}
 
                     {textArtifact ? (
-                      <a
-                        className="copy-action"
-                        download
-                        href={artifactUrl(textArtifact)}
+                      <ArtifactAction
+                        artifact={textArtifact}
+                        captureId={capture.capture.id}
+                        onNotify={onNotify}
+                        onSaved={setSaveReceipt}
                       >
                         <Download size={14} />
-                        下载 .txt
-                      </a>
+                        {isDesktopApp() ? "保存 .txt" : "下载 .txt"}
+                      </ArtifactAction>
                     ) : null}
 
                     {markdownArtifact ? (
-                      <a
-                        className="copy-action"
-                        download
-                        href={artifactUrl(markdownArtifact)}
+                      <ArtifactAction
+                        artifact={markdownArtifact}
+                        captureId={capture.capture.id}
+                        onNotify={onNotify}
+                        onSaved={setSaveReceipt}
                       >
                         <Download size={14} />
-                        下载 .md
-                      </a>
+                        {isDesktopApp() ? "保存 .md" : "下载 .md"}
+                      </ArtifactAction>
                     ) : null}
 
+                    {showCopyAction && isDesktopApp() ? <ProofreadingButton captureId={capture.capture.id} /> : null}
                     {showCopyAction ? (
                       <button
                         className="copy-action is-primary"
@@ -1591,7 +1319,13 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                       : "result-content-shell"
                   }
                 >
-                  {primaryText.trim() ? (
+                  {hasPodcastPanel && timedSegments.length ? (
+                    <TimedTranscript
+                      activeTime={playbackTime}
+                      onSeek={seekPodcast}
+                      segments={timedSegments}
+                    />
+                  ) : primaryText.trim() ? (
                     <div
                       className={
                         isLongTextResult
@@ -1644,13 +1378,31 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                 key={`${previewVideoArtifact?.download_url || "no-preview"}:${sourceVideoArtifact?.download_url || fallbackVideoArtifact?.download_url || "no-source"}`}
                 posterUrl={capture.source.thumbnail_url}
                 audioArtifact={sourceAudioArtifact}
+                captureId={capture.capture.id}
+                onNotify={onNotify}
+                onSaved={setSaveReceipt}
                 previewArtifact={previewVideoArtifact}
                 sourceArtifact={sourceVideoArtifact || fallbackVideoArtifact}
               />
             ) : null}
 
+            {hasPodcastPanel && sourceAudioArtifact ? (
+              <PodcastPanel
+                audioArtifact={sourceAudioArtifact}
+                audioRef={audioRef}
+                capture={capture}
+                coverArtifact={coverArtifact}
+                onNotify={onNotify}
+                onSaved={setSaveReceipt}
+                onTimeChange={setPlaybackTime}
+              />
+            ) : null}
+
             {hasVideoPanel && !hasPlayableVideo ? (
-              <VideoUnavailablePanel notice={capture.quality.result_notice} />
+              <VideoUnavailablePanel
+                notice={capture.quality.result_notice}
+                onRetry={onRetry}
+              />
             ) : null}
 
             {!hasVideoPanel && showImages ? (
@@ -1662,14 +1414,16 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                   </div>
 
                   {imagesZip ? (
-                    <a
+                    <ArtifactAction
+                      artifact={imagesZip}
+                      captureId={capture.capture.id}
                       className="copy-action"
-                      download
-                      href={artifactUrl(imagesZip)}
+                      onNotify={onNotify}
+                      onSaved={setSaveReceipt}
                     >
                       <Download size={14} />
-                      全部下载
-                    </a>
+                      {isDesktopApp() ? "保存全部图片" : "全部下载"}
+                    </ArtifactAction>
                   ) : imagesPending ? (
                     <button className="copy-action" disabled type="button">
                       <Download size={14} />
@@ -1683,9 +1437,26 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
                     <div className="image-grid">
                       {imageItems.map((item, index) => (
                         <ImageGalleryCard
+                          captureId={capture.capture.id}
                           item={item}
                           key={`image-${item.index}`}
-                          onOpen={() => setActiveImageIndex(index)}
+                          onNotify={onNotify}
+                          onOpen={(trigger) => {
+                            const viewerIndex = viewerItems.findIndex(
+                              (candidate) => candidate.index === item.index,
+                            );
+                            if (viewerIndex >= 0) {
+                              viewerTriggerRef.current = trigger;
+                              setPreviewMode(
+                                viewerItems[viewerIndex]?.liveArtifact?.status === "ready"
+                                  ? "live"
+                                  : "image",
+                              );
+                              setActiveImageIndex(viewerIndex);
+                            }
+                          }}
+                          onRetry={() => void handleRetryImage(item.index)}
+                          onSaved={setSaveReceipt}
                         />
                       ))}
                     </div>
@@ -1703,15 +1474,66 @@ export function DeliverableStage({ capture }: DeliverableStageProps) {
           {factsSection}
         </div>
 
-        {activeImageIndex != null && imageItems.length ? (
-          <ImageViewerOverlay
-            activeIndex={activeImageIndex}
-            items={imageItems}
-            onClose={() => setActiveImageIndex(null)}
-            onNavigate={setActiveImageIndex}
-            onPreviewModeChange={setPreviewMode}
-            previewMode={previewMode}
-          />
+        {saveReceipt ? (
+          <div className="save-toast" role="status">
+            <div className="save-toast-copy">
+              <Save size={15} />
+              <span>已保存到下载文件夹</span>
+              <strong title={saveReceipt.file_name}>{saveReceipt.file_name}</strong>
+            </div>
+            <div className="save-toast-actions">
+              <button
+                onClick={() => void openSavedArtifact(capture.capture.id, saveReceipt.artifactType).catch(() => onNotify("系统暂时无法打开这个文件。"))}
+                type="button"
+              >
+                打开
+              </button>
+              <button
+                onClick={() => void revealSavedArtifact(capture.capture.id, saveReceipt.artifactType).catch(() => onNotify("系统暂时无法定位这个文件。"))}
+                type="button"
+              >
+                显示位置
+              </button>
+              <button
+                aria-label="关闭保存提示"
+                className="save-toast-close"
+                onClick={() => setSaveReceipt(null)}
+                type="button"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {activeImageIndex != null && viewerSlides.length ? (
+          <Suspense fallback={null}>
+            <ImageViewer
+              activeIndex={activeImageIndex}
+              items={viewerSlides}
+              onClose={() => {
+                setActiveImageIndex(null);
+                window.requestAnimationFrame(() => viewerTriggerRef.current?.focus());
+              }}
+              onNavigate={setActiveImageIndex}
+              onPreviewModeChange={setPreviewMode}
+              previewMode={previewMode}
+              renderDownloadAction={(artifact, mode) => (
+                <ArtifactAction
+                  artifact={artifact}
+                  captureId={capture.capture.id}
+                  className="image-viewer-toolbar-button is-label is-download"
+                  onNotify={onNotify}
+                  onSaved={setSaveReceipt}
+                >
+                  <Download size={15} />
+                  {isDesktopApp()
+                    ? mode === "live" ? "保存 Live" : "保存图片"
+                    : mode === "live" ? "下载 Live" : "下载图片"}
+                </ArtifactAction>
+              )}
+            />
+          </Suspense>
         ) : null}
       </div>
     </section>

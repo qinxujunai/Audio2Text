@@ -3,11 +3,15 @@ from __future__ import annotations
 import queue
 import json
 import tempfile
+import threading
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
+
+import av
 
 import app.pipeline as pipeline
 import app.store_fs as store_fs
@@ -17,6 +21,518 @@ from app.schemas import ArtifactModel, ResultDocumentModel, SourceMetaModel
 
 
 class PipelineAndStoreTestCase(unittest.TestCase):
+    def test_transcription_provider_network_error_is_structured_and_retryable(self) -> None:
+        error = pipeline._transcription_error_from_exception(
+            RuntimeError("HTTPSConnectionPool: connection reset by peer")
+        )
+
+        self.assertEqual(error.stage, "transcribe")
+        self.assertEqual(error.reason_code, "transcribe_network_failed")
+        self.assertTrue(error.retryable)
+
+    def test_transcription_runtime_unavailable_is_actionable_without_retry_loop(self) -> None:
+        error = pipeline._transcription_error_from_exception(
+            RuntimeError("轻量转写模型尚未准备完成。")
+        )
+
+        self.assertEqual(error.reason_code, "transcribe_runtime_unavailable")
+        self.assertFalse(error.retryable)
+        self.assertIn("转写运行时", pipeline._public_error_message_with_reason("transcribe", error.reason_code))
+
+    def test_capture_store_never_persists_whole_capture_failed_state(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "store_runs" / uuid4().hex
+        captures_dir = root / "captures"
+        artifacts_dir = root / "artifacts"
+        captures_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with patch.object(store_fs, "CAPTURES_DIR", captures_dir), patch.object(
+                store_fs, "ARTIFACTS_DIR", artifacts_dir
+            ):
+                capture = store_fs.create_capture(
+                    input_type="url",
+                    source_platform="generic_web",
+                    content_type="webpage",
+                    url="https://example.com/storage-boundary",
+                )
+                processing = capture.processing.model_copy(
+                    update={"current_stage": "failed", "progress_percent": 0}
+                )
+                updated = store_fs.update_capture(
+                    capture.id,
+                    status="failed",
+                    result_state="failed",
+                    error_stage="extract",
+                    error_message="需要用户重新选择来源。",
+                    processing=processing,
+                )
+
+                self.assertIsNotNone(updated)
+                self.assertEqual(updated.status, "needs_user_action")
+                self.assertEqual(updated.result_state, "awaiting_user")
+                self.assertEqual(updated.processing.current_stage, "awaiting_user")
+                self.assertEqual(updated.processing.progress_percent, 18)
+                persisted = store_fs.get_capture(capture.id)
+                self.assertIsNotNone(persisted)
+                self.assertEqual(persisted.status, "needs_user_action")
+                self.assertEqual(persisted.result_state, "awaiting_user")
+        finally:
+            for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+                if child.is_file():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    child.rmdir()
+            root.rmdir()
+
+    def test_capture_store_repairs_legacy_failed_record_on_partial_update(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "store_runs" / uuid4().hex
+        captures_dir = root / "captures"
+        artifacts_dir = root / "artifacts"
+        captures_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with patch.object(store_fs, "CAPTURES_DIR", captures_dir), patch.object(
+                store_fs, "ARTIFACTS_DIR", artifacts_dir
+            ):
+                capture = store_fs.create_capture(
+                    input_type="url",
+                    source_platform="generic_web",
+                    content_type="webpage",
+                    url="https://example.com/legacy-partial-update",
+                )
+                # Simulate a pre-migration file written by an older worker.
+                store_fs.update_capture(
+                    capture.id,
+                    status="failed",
+                    result_state="failed",
+                    processing=capture.processing.model_copy(
+                        update={"current_stage": "failed", "progress_percent": 0}
+                    ),
+                )
+
+                updated = store_fs.update_capture(capture.id, title="仍可恢复的内容")
+
+                self.assertIsNotNone(updated)
+                self.assertEqual(updated.status, "needs_user_action")
+                self.assertEqual(updated.result_state, "awaiting_user")
+                self.assertEqual(updated.processing.current_stage, "awaiting_user")
+                self.assertGreaterEqual(updated.processing.progress_percent, 18)
+                persisted = store_fs.get_capture(capture.id)
+                self.assertIsNotNone(persisted)
+                self.assertEqual(persisted.status, "needs_user_action")
+        finally:
+            for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+                if child.is_file():
+                    child.unlink(missing_ok=True)
+                elif child.is_dir():
+                    child.rmdir()
+            root.rmdir()
+
+    def test_capture_update_keeps_concurrent_fields_from_losing_each_other(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "store_runs" / uuid4().hex
+        captures_dir = root / "captures"
+        artifacts_dir = root / "artifacts"
+        captures_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch.object(store_fs, "CAPTURES_DIR", captures_dir), patch.object(
+            store_fs, "ARTIFACTS_DIR", artifacts_dir
+        ):
+            capture = store_fs.create_capture(
+                input_type="url",
+                source_platform="wechat_article",
+                content_type="article",
+                url="https://example.com/concurrent",
+            )
+            target = store_fs._capture_path(capture.id)
+            real_read_json = store_fs._read_json
+            first_read = threading.Event()
+            release_first = threading.Event()
+            second_read = threading.Event()
+            allow_second = threading.Event()
+            first_call = {"value": True}
+
+            def coordinated_read(path: Path, **kwargs):
+                payload = real_read_json(path, **kwargs)
+                if path != target:
+                    return payload
+                if first_call["value"]:
+                    first_call["value"] = False
+                    first_read.set()
+                    self.assertTrue(release_first.wait(timeout=2))
+                else:
+                    second_read.set()
+                    self.assertTrue(allow_second.wait(timeout=2))
+                return payload
+
+            first_done = threading.Event()
+            second_done = threading.Event()
+
+            def update_title() -> None:
+                try:
+                    store_fs.update_capture(capture.id, title="title-from-worker")
+                finally:
+                    first_done.set()
+
+            def update_error() -> None:
+                try:
+                    store_fs.update_capture(capture.id, error_message="error-from-retry")
+                finally:
+                    second_done.set()
+
+            with patch.object(store_fs, "_read_json", side_effect=coordinated_read):
+                first_thread = threading.Thread(target=update_title)
+                second_thread = threading.Thread(target=update_error)
+                first_thread.start()
+                self.assertTrue(first_read.wait(timeout=2))
+                second_thread.start()
+
+                # With the old split transaction, the second read happens
+                # before the first write.  Let it finish first so the test
+                # deterministically exercises the lost-update interleaving.
+                second_read_before_release = second_read.wait(timeout=0.25)
+                if second_read_before_release:
+                    allow_second.set()
+                    self.assertTrue(second_done.wait(timeout=2))
+                release_first.set()
+                self.assertTrue(first_done.wait(timeout=2))
+                if not second_read_before_release:
+                    self.assertTrue(second_read.wait(timeout=2))
+                    allow_second.set()
+                    self.assertTrue(second_done.wait(timeout=2))
+                first_thread.join(timeout=2)
+                second_thread.join(timeout=2)
+
+            final = store_fs.get_capture(capture.id)
+            self.assertIsNotNone(final)
+            self.assertEqual(final.title, "title-from-worker")
+            self.assertEqual(final.error_message, "error-from-retry")
+
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        root.rmdir()
+
+    def test_platform_access_recovery_reason_codes_are_user_action_states(self) -> None:
+        self.assertTrue(
+            {
+                "browser_challenge_required",
+                "browser_session_expired",
+                "browser_network_risk",
+                "douyin_fresh_cookies_required",
+            }.issubset(pipeline.USER_ACTION_REQUIRED_REASON_CODES)
+        )
+
+    def test_platform_challenge_is_persisted_as_user_action_not_failure(self) -> None:
+        capture_url = "https://www.xiaohongshu.com/discovery/item/1234567890abcdef"
+        capture = SimpleNamespace(
+            id="capture-platform-challenge",
+            status="queued",
+            result_state="processing",
+            input_type="url",
+            url=capture_url,
+            title=capture_url,
+            source_platform="xiaohongshu",
+            content_type="image_article",
+            started_at=None,
+            finished_at=None,
+            error_stage=None,
+            error_message=None,
+            source=SourceMetaModel(
+                platform="xiaohongshu",
+                content_type="image_article",
+                raw_input_text=capture_url,
+            ),
+            processing=pipeline.ProcessingStateModel(),
+        )
+        resolved = SimpleNamespace(
+            normalized_url=capture_url,
+            platform="xiaohongshu",
+            content_type="image_article",
+            input_warning="",
+            cleaned_input=capture_url,
+            detected_urls=[capture_url],
+            selection_reason="direct_url",
+        )
+        updates: list[dict] = []
+
+        def update_capture(capture_id: str, **fields):
+            self.assertEqual(capture_id, capture.id)
+            updates.append(fields)
+            for key, value in fields.items():
+                setattr(capture, key, value)
+            return capture
+
+        adapter = SimpleNamespace(
+            extract=lambda *args, **kwargs: (_ for _ in ()).throw(
+                ExtractionError(
+                    "extract",
+                    "当前页面触发了平台验证。",
+                    reason_code="browser_challenge_required",
+                    retryable=True,
+                )
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            pipeline.repository, "get", return_value=capture
+        ), patch.object(pipeline.repository, "update", side_effect=update_capture), patch.object(
+            pipeline.repository,
+            "capture_workspace",
+            return_value=Path(tmp_dir),
+        ), patch.object(pipeline, "ARTIFACTS_DIR", Path(tmp_dir) / "artifacts"), patch.object(
+            pipeline, "resolve_url", return_value=resolved
+        ), patch.object(pipeline, "get_url_adapter", return_value=adapter):
+            pipeline.active_capture_ids.clear()
+            pipeline.queued_capture_ids.clear()
+            pipeline.process_capture(capture.id)
+
+        self.assertTrue(updates)
+        self.assertEqual(capture.status, "needs_user_action")
+        self.assertEqual(capture.result_state, "awaiting_user")
+        self.assertEqual(capture.processing.current_stage, "awaiting_user")
+        self.assertEqual(capture.processing.failure_reason_code, "browser_challenge_required")
+        self.assertTrue(capture.processing.retryable)
+        self.assertFalse(any(fields.get("status") == "failed" for fields in updates))
+
+    def test_recovery_of_missing_local_file_stays_actionable(self) -> None:
+        capture = SimpleNamespace(
+            id="capture-missing-local-file",
+            status="queued",
+            input_type="file",
+            storage_path=str(Path.cwd() / "tests_runtime" / "missing-upload" / "source.mp4"),
+            updated_at="2099-01-01T00:00:00+00:00",
+            created_at="2099-01-01T00:00:00+00:00",
+            processing=pipeline.ProcessingStateModel(
+                retry_count=0,
+                current_stage="queued",
+                progress_percent=2,
+                progress_detail="",
+                failure_reason_code=None,
+                retryable=True,
+                trace=[],
+                warnings=[],
+            ),
+        )
+        updates = []
+        with patch.object(pipeline.repository, "list_pending_ids", return_value=[capture.id]), patch.object(
+            pipeline.repository, "get", return_value=capture
+        ), patch.object(pipeline.repository, "update", side_effect=lambda _id, **kwargs: updates.append(kwargs)), patch.object(
+            pipeline, "write_capture_event"
+        ):
+            pipeline.recover_pending_captures()
+
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0]["status"], "needs_user_action")
+        self.assertEqual(updates[0]["result_state"], "awaiting_user")
+        self.assertEqual(updates[0]["processing"].current_stage, "awaiting_user")
+        self.assertEqual(updates[0]["processing"].failure_reason_code, "input_file_missing")
+
+    def test_exhausted_transient_retry_stays_recoverable(self) -> None:
+        capture_url = "https://example.com/unstable-source"
+        capture = SimpleNamespace(
+            id="capture-retry-exhausted",
+            status="queued",
+            result_state="processing",
+            input_type="url",
+            url=capture_url,
+            title=capture_url,
+            source_platform="generic_web",
+            content_type="webpage",
+            started_at=None,
+            finished_at=None,
+            error_stage=None,
+            error_message=None,
+            source=SourceMetaModel(
+                platform="generic_web",
+                content_type="webpage",
+                raw_input_text=capture_url,
+            ),
+            processing=pipeline.ProcessingStateModel(
+                retry_count=pipeline.AUTOMATIC_RETRY_LIMIT,
+            ),
+        )
+        resolved = SimpleNamespace(
+            normalized_url=capture_url,
+            platform="generic_web",
+            content_type="webpage",
+            input_warning="",
+            cleaned_input=capture_url,
+            detected_urls=[capture_url],
+            selection_reason="direct_url",
+        )
+        updates: list[dict] = []
+
+        def update_capture(capture_id: str, **fields):
+            self.assertEqual(capture_id, capture.id)
+            updates.append(fields)
+            for key, value in fields.items():
+                setattr(capture, key, value)
+            return capture
+
+        adapter = SimpleNamespace(
+            extract=lambda *args, **kwargs: (_ for _ in ()).throw(
+                ExtractionError(
+                    "extract",
+                    "无法连接来源站点。",
+                    reason_code="source_fetch_failed",
+                    retryable=True,
+                )
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            pipeline.repository, "get", return_value=capture
+        ), patch.object(pipeline.repository, "update", side_effect=update_capture), patch.object(
+            pipeline.repository,
+            "capture_workspace",
+            return_value=Path(tmp_dir),
+        ), patch.object(pipeline, "ARTIFACTS_DIR", Path(tmp_dir) / "artifacts"), patch.object(
+            pipeline, "resolve_url", return_value=resolved
+        ), patch.object(pipeline, "get_url_adapter", return_value=adapter):
+            pipeline.active_capture_ids.clear()
+            pipeline.queued_capture_ids.clear()
+            pipeline.process_capture(capture.id)
+
+        self.assertTrue(updates)
+        self.assertEqual(capture.status, "needs_user_action")
+        self.assertEqual(capture.result_state, "awaiting_user")
+        self.assertEqual(capture.processing.current_stage, "awaiting_user")
+        self.assertEqual(capture.processing.failure_reason_code, "retry_exhausted")
+        self.assertTrue(capture.processing.retryable)
+        self.assertIn("已自动重试", capture.error_message)
+        self.assertFalse(any(fields.get("status") == "failed" for fields in updates))
+
+    def test_unexpected_processing_error_is_requeued_before_attention_state(self) -> None:
+        capture_url = "https://example.com/unexpected-source"
+        capture = SimpleNamespace(
+            id="capture-unexpected-error",
+            status="queued",
+            result_state="processing",
+            input_type="url",
+            url=capture_url,
+            title=capture_url,
+            source_platform="generic_web",
+            content_type="webpage",
+            started_at=None,
+            finished_at=None,
+            error_stage=None,
+            error_message=None,
+            source=SourceMetaModel(
+                platform="generic_web",
+                content_type="webpage",
+                raw_input_text=capture_url,
+            ),
+            processing=pipeline.ProcessingStateModel(),
+        )
+        resolved = SimpleNamespace(
+            normalized_url=capture_url,
+            platform="generic_web",
+            content_type="webpage",
+            input_warning="",
+            cleaned_input=capture_url,
+            detected_urls=[capture_url],
+            selection_reason="direct_url",
+        )
+        updates: list[dict] = []
+
+        def update_capture(capture_id: str, **fields):
+            self.assertEqual(capture_id, capture.id)
+            updates.append(fields)
+            for key, value in fields.items():
+                setattr(capture, key, value)
+            return capture
+
+        adapter = SimpleNamespace(
+            extract=lambda *args, **kwargs: (_ for _ in ()).throw(
+                RuntimeError("simulated adapter defect")
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch.object(
+            pipeline.repository, "get", return_value=capture
+        ), patch.object(pipeline.repository, "update", side_effect=update_capture), patch.object(
+            pipeline.repository,
+            "capture_workspace",
+            return_value=Path(tmp_dir),
+        ), patch.object(pipeline, "ARTIFACTS_DIR", Path(tmp_dir) / "artifacts"), patch.object(
+            pipeline, "resolve_url", return_value=resolved
+        ), patch.object(pipeline, "get_url_adapter", return_value=adapter), patch.object(
+            pipeline, "enqueue_capture"
+        ) as enqueue_capture, patch.object(pipeline.logger, "exception"):
+            pipeline.active_capture_ids.clear()
+            pipeline.queued_capture_ids.clear()
+            pipeline.process_capture(capture.id)
+
+        self.assertEqual(capture.status, "queued")
+        self.assertEqual(capture.result_state, "processing")
+        self.assertEqual(capture.processing.current_stage, "queued")
+        self.assertEqual(capture.processing.retry_count, 1)
+        self.assertIsNone(capture.processing.failure_reason_code)
+        self.assertTrue(capture.processing.retryable)
+        self.assertIsNone(capture.error_message)
+        enqueue_capture.assert_called_once_with(capture.id)
+
+    def test_automatic_retry_only_accepts_bounded_transient_errors(self) -> None:
+        capture = SimpleNamespace(
+            processing=SimpleNamespace(retry_count=0),
+        )
+        transient = ExtractionError(
+            "extract",
+            "网络暂时不可用",
+            reason_code="source_fetch_failed",
+            retryable=True,
+        )
+        user_action = ExtractionError(
+            "extract",
+            "需要刷新会话",
+            reason_code="browser_session_expired",
+            retryable=True,
+        )
+
+        self.assertTrue(pipeline._should_automatically_retry(capture, transient))
+        self.assertFalse(pipeline._should_automatically_retry(capture, user_action))
+
+        capture.processing.retry_count = 1
+        self.assertTrue(pipeline._should_automatically_retry(capture, transient))
+
+        capture.processing.retry_count = pipeline.AUTOMATIC_RETRY_LIMIT
+        self.assertFalse(pipeline._should_automatically_retry(capture, transient))
+
+    def test_image_preview_preserves_original_and_bounds_longest_edge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "source.jpg"
+            output = av.open(str(source), mode="w")
+            try:
+                stream = output.add_stream("mjpeg", rate=1)
+                stream.width = 1200
+                stream.height = 800
+                stream.pix_fmt = "yuvj420p"
+                frame = av.VideoFrame(1200, 800, "yuvj420p")
+                for plane in frame.planes:
+                    plane.update(bytes([128]) * plane.buffer_size)
+                for packet in stream.encode(frame):
+                    output.mux(packet)
+                for packet in stream.encode():
+                    output.mux(packet)
+            finally:
+                output.close()
+
+            original_bytes = source.read_bytes()
+            width, height, thumbnail = pipeline._prepare_image_preview(source)
+
+            self.assertEqual((width, height), (1200, 800))
+            self.assertEqual(source.read_bytes(), original_bytes)
+            self.assertIsNotNone(thumbnail)
+            self.assertTrue(thumbnail.is_file())
+            with av.open(str(thumbnail)) as container:
+                thumbnail_frame = next(container.decode(video=0))
+            self.assertEqual(max(thumbnail_frame.width, thumbnail_frame.height), 640)
+
     def test_desktop_runtime_does_not_apply_cloud_duration_limit(self) -> None:
         source = SourceMetaModel(platform="bilibili", content_type="video", duration_seconds=4 * 60 * 60)
 
@@ -62,6 +578,43 @@ class PipelineAndStoreTestCase(unittest.TestCase):
         self.assertIn("duration_seconds", records[1])
         self.assertEqual(records[-1]["status"], "done")
         self.assertEqual(records[-1]["recovery_seconds"], 2.5)
+
+    def test_capture_diagnostics_marks_automatic_retry_as_queued(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            diagnostics = CaptureDiagnostics("cap-retry")
+            diagnostics.path = Path(tmp_dir) / "capture_traces" / "cap-retry.jsonl"
+            diagnostics.finish_capture(status="queued", retry_count=1)
+            records = read_trace_records("cap-retry", logs_dir=Path(tmp_dir))
+
+        self.assertEqual(records[-1]["status"], "queued")
+        self.assertEqual(records[-1]["stage"], "queued")
+
+    def test_capture_diagnostics_projects_legacy_failure_to_actionable_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            diagnostics = CaptureDiagnostics("cap-legacy-failure-trace")
+            diagnostics.path = Path(tmp_dir) / "capture_traces" / "cap-legacy-failure-trace.jsonl"
+            diagnostics.finish_capture(status="failed")
+            records = read_trace_records("cap-legacy-failure-trace", logs_dir=Path(tmp_dir))
+
+        self.assertEqual(records[-1]["status"], "needs_user_action")
+        self.assertEqual(records[-1]["stage"], "awaiting_user")
+
+    def test_capture_diagnostics_redacts_sensitive_url_query_and_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            diagnostics = CaptureDiagnostics("cap-redaction")
+            diagnostics.path = Path(tmp_dir) / "capture_traces" / "cap-redaction.jsonl"
+            diagnostics.event(
+                "external_error",
+                detail="GET https://example.com/article?sig=secret-value&lang=zh",
+                access_token="do-not-write",
+            )
+            records = read_trace_records("cap-redaction", logs_dir=Path(tmp_dir))
+
+        record = records[-1]
+        self.assertEqual(record["access_token"], "[redacted]")
+        self.assertIn("sig=[redacted]", record["detail"])
+        self.assertIn("lang=zh", record["detail"])
+        self.assertNotIn("secret-value", record["detail"])
 
     def test_recovery_seconds_detects_worker_recovery_gap(self) -> None:
         capture = SimpleNamespace(
@@ -244,6 +797,138 @@ class PipelineAndStoreTestCase(unittest.TestCase):
         pipeline.queued_capture_ids.clear()
         pipeline.active_capture_ids.clear()
 
+    def test_isolated_worker_failure_requeues_pending_capture(self) -> None:
+        capture = SimpleNamespace(
+            id="cap-worker-failure",
+            status="processing",
+            processing=pipeline.ProcessingStateModel(
+                current_stage="extract",
+                progress_percent=30,
+            ),
+        )
+        updated = {}
+
+        with patch.object(pipeline.repository, "get", return_value=capture), patch.object(
+            pipeline.repository,
+            "update",
+            side_effect=lambda capture_id, **fields: updated.update(
+                {"capture_id": capture_id, **fields}
+            ),
+        ), patch.object(pipeline, "enqueue_capture") as enqueue_capture:
+            pipeline._persist_isolated_worker_failure(
+                capture.id,
+                RuntimeError("simulated worker crash"),
+            )
+
+        self.assertEqual(updated["capture_id"], capture.id)
+        self.assertEqual(updated["status"], "queued")
+        self.assertIsNone(updated["error_stage"])
+        self.assertEqual(updated["processing"].current_stage, "queued")
+        self.assertEqual(updated["processing"].retry_count, 1)
+        self.assertIsNone(updated["processing"].failure_reason_code)
+        self.assertTrue(updated["processing"].retryable)
+        self.assertIsNone(updated["error_message"])
+        enqueue_capture.assert_called_once_with(capture.id)
+
+    def test_repeated_isolated_worker_failure_stays_actionable(self) -> None:
+        capture = SimpleNamespace(
+            id="cap-worker-failure-exhausted",
+            status="processing",
+            processing=pipeline.ProcessingStateModel(
+                current_stage="extract",
+                progress_percent=30,
+                retry_count=pipeline.AUTOMATIC_RETRY_LIMIT,
+            ),
+        )
+        updated = {}
+
+        with patch.object(pipeline.repository, "get", return_value=capture), patch.object(
+            pipeline.repository,
+            "update",
+            side_effect=lambda capture_id, **fields: updated.update(
+                {"capture_id": capture_id, **fields}
+            ),
+        ):
+            pipeline._persist_isolated_worker_failure(
+                capture.id,
+                RuntimeError("simulated repeated worker crash"),
+            )
+
+        self.assertEqual(updated["capture_id"], capture.id)
+        self.assertEqual(updated["status"], "needs_user_action")
+        self.assertEqual(updated["result_state"], "awaiting_user")
+        self.assertEqual(updated["processing"].current_stage, "awaiting_user")
+        self.assertEqual(updated["processing"].failure_reason_code, "internal_error")
+        self.assertTrue(updated["processing"].retryable)
+        self.assertNotIn("simulated repeated worker crash", updated["error_message"])
+
+    def test_legacy_failed_worker_record_is_repaired_to_actionable_state(self) -> None:
+        capture = SimpleNamespace(
+            id="cap-worker-legacy-failed",
+            status="failed",
+            error_stage="extract",
+            processing=pipeline.ProcessingStateModel(
+                current_stage="failed",
+                progress_percent=0,
+            ),
+        )
+        updated = {}
+
+        with patch.object(pipeline.repository, "get", return_value=capture), patch.object(
+            pipeline.repository,
+            "update",
+            side_effect=lambda capture_id, **fields: updated.update(
+                {"capture_id": capture_id, **fields}
+            ),
+        ):
+            pipeline._persist_isolated_worker_failure(
+                capture.id,
+                RuntimeError("simulated legacy worker crash"),
+            )
+
+        self.assertEqual(updated["capture_id"], capture.id)
+        self.assertEqual(updated["status"], "needs_user_action")
+        self.assertEqual(updated["result_state"], "awaiting_user")
+        self.assertEqual(updated["error_stage"], "extract")
+        self.assertEqual(updated["processing"].current_stage, "awaiting_user")
+        self.assertEqual(updated["processing"].failure_reason_code, "internal_error")
+        self.assertTrue(updated["processing"].retryable)
+        self.assertNotIn("simulated legacy worker crash", updated["error_message"])
+
+    def test_store_reads_legacy_failed_json_as_actionable_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            capture_dir = root / "legacy-read"
+            capture_dir.mkdir(parents=True)
+            with patch.object(store_fs, "CAPTURES_DIR", root), patch.object(
+                store_fs, "ARTIFACTS_DIR", root / "artifacts"
+            ):
+                payload = store_fs.create_capture(
+                    input_type="url",
+                    source_platform="generic_web",
+                    content_type="webpage",
+                    url="https://example.com/legacy-read",
+                ).model_dump(mode="json")
+                store_fs.delete_capture(payload["id"])
+                payload["id"] = "legacy-read"
+                payload["status"] = "failed"
+                payload["result_state"] = "failed"
+                payload["processing"]["current_stage"] = "failed"
+                payload["processing"]["progress_percent"] = 0
+                (capture_dir / "capture.json").write_text(
+                    json.dumps(payload, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                loaded = store_fs.get_capture("legacy-read")
+                listed = store_fs.list_captures(limit=10)
+
+            self.assertIsNotNone(loaded)
+            self.assertEqual(loaded.status, "needs_user_action")
+            self.assertEqual(loaded.result_state, "awaiting_user")
+            self.assertEqual(loaded.processing.current_stage, "awaiting_user")
+            self.assertEqual(loaded.processing.progress_percent, 18)
+            self.assertEqual([item.status for item in listed], ["needs_user_action"])
+
     def test_clear_completed_captures_removes_external_storage_file(self) -> None:
         root = Path.cwd() / "tests_runtime" / "store_runs" / uuid4().hex
         captures_dir = root / "captures"
@@ -293,7 +978,10 @@ class PipelineAndStoreTestCase(unittest.TestCase):
                     raise PermissionError("busy")
                 real_replace(source, destination)
 
-            with patch.object(store_fs.os, "replace", side_effect=flaky_replace):
+            with (
+                patch.object(store_fs.os, "replace", side_effect=flaky_replace),
+                patch.object(store_fs, "_write_recovery_snapshot"),
+            ):
                 store_fs._write_json(target, {"id": "cap-busy", "status": "queued"})
 
             self.assertEqual(replace_attempts["count"], 3)
@@ -329,6 +1017,53 @@ class PipelineAndStoreTestCase(unittest.TestCase):
 
             self.assertEqual(payload["id"], "cap-read")
             self.assertEqual(attempts["count"], 1)
+            self.assertTrue(store_fs._recovery_snapshot_path(target).is_file())
+
+    def test_read_json_returns_last_good_snapshot_during_transient_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "capture.json"
+            target.write_text('{"id":"cap-snapshot","status":"processing"}', encoding="utf-8")
+            self.assertEqual(store_fs._read_json(target)["id"], "cap-snapshot")
+
+            with (
+                patch.object(Path, "read_text", side_effect=PermissionError("busy")),
+                patch.object(store_fs, "_STORE_READ_ATTEMPTS", 2),
+                patch.object(store_fs, "_store_retry_delay", return_value=0),
+            ):
+                payload = store_fs._read_json(target)
+
+            self.assertEqual(payload, {"id": "cap-snapshot", "status": "processing"})
+
+    def test_read_json_uses_disk_snapshot_after_process_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            target = Path(temp_dir) / "capture.json"
+            store_fs._write_json(target, {"id": "cap-disk-snapshot", "status": "processing"})
+            with store_fs._LAST_GOOD_JSON_GUARD:
+                store_fs._LAST_GOOD_JSON.clear()
+
+            real_read_text = Path.read_text
+
+            def locked_primary(path: Path, *args, **kwargs):
+                if path == target:
+                    raise PermissionError("busy")
+                return real_read_text(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "read_text", autospec=True, side_effect=locked_primary),
+                patch.object(store_fs, "_STORE_READ_ATTEMPTS", 2),
+                patch.object(store_fs, "_store_retry_delay", return_value=0),
+            ):
+                payload = store_fs._read_json(target)
+
+            self.assertEqual(payload, {"id": "cap-disk-snapshot", "status": "processing"})
+
+    def test_store_retry_budget_is_longer_than_the_old_short_lock_window(self) -> None:
+        self.assertGreaterEqual(store_fs._STORE_READ_ATTEMPTS, 32)
+        self.assertGreaterEqual(store_fs._STORE_WRITE_ATTEMPTS, 32)
+        self.assertLessEqual(
+            store_fs._store_retry_delay(store_fs._STORE_READ_ATTEMPTS - 1),
+            store_fs._STORE_RETRY_DELAY_CAP_SECONDS,
+        )
 
     def test_list_captures_skips_temporarily_unavailable_record(self) -> None:
         root = Path.cwd() / "tests_runtime" / "store_runs" / uuid4().hex
@@ -519,14 +1254,229 @@ class PipelineAndStoreTestCase(unittest.TestCase):
         self.assertIn("source_audio", artifact_types)
         self.assertNotIn("source_media", artifact_types)
         source_audio = next(artifact for artifact in persisted.artifacts if artifact.type == "source_audio")
-        self.assertEqual(Path(source_audio.path), media_path)
+        self.assertEqual(Path(source_audio.path), artifacts_dir / capture.id / "source_audio.m4a")
+        self.assertEqual(source_audio.mime_type, "audio/mp4")
+        self.assertEqual(Path(source_audio.path).read_bytes(), b"audio")
+
+    def test_persist_audio_result_saves_remote_cover_locally(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        artifacts_dir = root / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        capture = SimpleNamespace(
+            id="cap-audio-cover",
+            title="Podcast",
+            url="https://www.xiaoyuzhoufm.com/episode/demo",
+            source=SourceMetaModel(
+                platform="xiaoyuzhou",
+                content_type="audio",
+                canonical_url="https://www.xiaoyuzhoufm.com/episode/demo",
+                thumbnail_url="https://example.com/cover.jpg",
+            ),
+        )
+
+        def download(_: str, target: Path, **__: object) -> Path:
+            target.write_bytes(b"cover")
+            return target
+
+        with patch.object(pipeline, "ARTIFACTS_DIR", artifacts_dir), patch.object(
+            pipeline, "_download_image", side_effect=download
+        ):
+            persisted = pipeline._persist_result_artifacts(
+                capture,
+                ResultDocumentModel(primary_text="body", primary_result_type="transcript"),
+            )
+
+        cover = next(item for item in persisted.artifacts if item.type == "cover_image")
+        self.assertEqual(cover.mime_type, "image/jpeg")
+        self.assertEqual(Path(cover.path).read_bytes(), b"cover")
 
         for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
             if child.is_file():
                 child.unlink(missing_ok=True)
             elif child.is_dir():
                 child.rmdir()
-        root.rmdir()
+        if root.exists():
+            root.rmdir()
+
+    def test_ensure_capture_cover_backfills_legacy_audio_result(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        artifacts_dir = root / "artifacts"
+        capture = SimpleNamespace(
+            id="legacy-podcast-cover",
+            title="Podcast",
+            url="https://www.xiaoyuzhoufm.com/episode/demo",
+            source=SourceMetaModel(
+                platform="xiaoyuzhou",
+                content_type="audio",
+                canonical_url="https://www.xiaoyuzhoufm.com/episode/demo",
+                thumbnail_url="https://example.com/cover.jpg",
+            ),
+            result=ResultDocumentModel(primary_text="body"),
+        )
+
+        def download(_: str, target: Path, **__: object) -> Path:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b"cover")
+            return target
+
+        with patch.object(pipeline, "ARTIFACTS_DIR", artifacts_dir), patch.object(
+            pipeline, "_download_image", side_effect=download
+        ):
+            result = pipeline.ensure_capture_cover(capture)
+
+        cover = next(item for item in result.artifacts if item.type == "cover_image")
+        self.assertEqual(cover.status, "ready")
+        self.assertEqual(Path(cover.path).read_bytes(), b"cover")
+
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        if root.exists():
+            root.rmdir()
+
+    def test_repair_legacy_m4a_artifact_with_mp3_name(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        root.mkdir(parents=True, exist_ok=True)
+        legacy_path = root / "source_audio.mp3"
+        legacy_path.write_bytes(b"m4a-container")
+        capture = SimpleNamespace(
+            id="legacy-audio",
+            result=ResultDocumentModel(
+                primary_text="body",
+                artifacts=[
+                    ArtifactModel(
+                        type="source_audio",
+                        label="原音频",
+                        path=str(legacy_path),
+                        download_url="/v1/captures/legacy-audio/artifacts/source_audio",
+                        mime_type="audio/mpeg",
+                    )
+                ],
+            ),
+        )
+
+        with patch.object(pipeline, "_audio_codec_for_path", return_value="aac"), patch.object(
+            pipeline, "_audio_delivery_extension", return_value=".m4a"
+        ):
+            changed = pipeline.repair_legacy_audio_artifact(capture)
+
+        artifact = capture.result.artifacts[0]
+        self.assertTrue(changed)
+        self.assertEqual(Path(artifact.path), root / "source_audio.m4a")
+        self.assertEqual(artifact.mime_type, "audio/mp4")
+        self.assertTrue(Path(artifact.path).is_file())
+        self.assertFalse(legacy_path.exists())
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        if root.exists():
+            root.rmdir()
+
+    def test_failed_image_download_keeps_indexed_failed_artifact(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        artifacts_dir = root / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        capture = SimpleNamespace(
+            id="cap-image-failure",
+            title="Image note",
+            url="https://example.com/note",
+            source=SourceMetaModel(
+                platform="xiaohongshu",
+                content_type="image_article",
+                canonical_url="https://example.com/note",
+                image_urls=["https://example.com/one.jpg", "https://example.com/two.jpg"],
+                live_photo_video_urls=[],
+            ),
+        )
+
+        def download(url: str, target: Path, **_: object) -> Path:
+            if url.endswith("two.jpg"):
+                raise pipeline.ExtractionError("download", "资源下载失败")
+            target.write_bytes(b"image")
+            return target
+
+        with patch.object(pipeline, "ARTIFACTS_DIR", artifacts_dir), patch.object(
+            pipeline, "_download_image", side_effect=download
+        ):
+            persisted = pipeline._persist_result_artifacts(
+                capture,
+                ResultDocumentModel(primary_text="body", primary_result_type="article"),
+            )
+
+        by_type = {item.type: item for item in persisted.artifacts}
+        self.assertEqual(by_type["image_01"].status, "ready")
+        self.assertEqual(by_type["image_02"].status, "failed")
+        self.assertTrue(by_type["image_02"].optional)
+        self.assertNotIn("images_zip", by_type)
+
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        if root.exists():
+            root.rmdir()
+
+    def test_retry_failed_image_replaces_artifact_and_rebuilds_zip(self) -> None:
+        root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
+        artifact_dir = root / "artifacts" / "cap-image-retry"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        first_path = artifact_dir / "image_01.jpg"
+        first_path.write_bytes(b"first")
+        capture = SimpleNamespace(
+            id="cap-image-retry",
+            title="Retry note",
+            url="https://example.com/note",
+            source=SourceMetaModel(
+                platform="xiaohongshu",
+                content_type="image_article",
+                canonical_url="https://example.com/note",
+                image_urls=["https://example.com/one.jpg", "https://example.com/two.jpg"],
+                live_photo_video_urls=[],
+            ),
+            result=ResultDocumentModel(
+                primary_text="body",
+                artifacts=[
+                    pipeline._artifact_entry("cap-image-retry", "image_01", "图片 1", first_path),
+                    pipeline._artifact_entry(
+                        "cap-image-retry",
+                        "image_02",
+                        "图片 2",
+                        artifact_dir / "image_02.jpg",
+                        status="failed",
+                        optional=True,
+                    ),
+                ],
+            ),
+        )
+
+        def download(_: str, target: Path, **__: object) -> Path:
+            target.write_bytes(b"second")
+            return target
+
+        with patch.object(pipeline, "ARTIFACTS_DIR", root / "artifacts"), patch.object(
+            pipeline, "_download_image", side_effect=download
+        ):
+            result = pipeline.retry_capture_image(capture, 2)
+
+        by_type = {item.type: item for item in result.artifacts}
+        self.assertEqual(by_type["image_02"].status, "ready")
+        self.assertEqual(Path(by_type["image_02"].path).read_bytes(), b"second")
+        self.assertEqual(by_type["images_zip"].status, "ready")
+        with zipfile.ZipFile(by_type["images_zip"].path) as archive:
+            self.assertEqual(sorted(archive.namelist()), ["image_01.jpg", "image_02.jpg"])
+
+        for child in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if child.is_file():
+                child.unlink(missing_ok=True)
+            elif child.is_dir():
+                child.rmdir()
+        if root.exists():
+            root.rmdir()
 
     def test_persist_result_artifacts_skips_preview_media_for_browser_friendly_video(self) -> None:
         root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex
@@ -679,7 +1629,28 @@ class PipelineAndStoreTestCase(unittest.TestCase):
             None,
         )
 
-        self.assertEqual(result.result_notice, "文本已整理完成，原视频暂未成功下载。")
+        self.assertEqual(result.result_notice, "文本已整理完成，原视频文件暂未就绪。")
+
+    def test_media_capture_keeps_text_when_delivery_artifact_is_missing(self) -> None:
+        capture = SimpleNamespace(
+            source=SourceMetaModel(platform="youtube", content_type="video"),
+        )
+        result = ResultDocumentModel(primary_text="字幕已经拿到")
+
+        self.assertFalse(pipeline._ensure_required_media_artifact(capture, result))
+
+    def test_media_capture_still_protects_empty_result(self) -> None:
+        capture = SimpleNamespace(
+            source=SourceMetaModel(platform="youtube", content_type="video"),
+        )
+        result = ResultDocumentModel()
+
+        with self.assertRaises(ExtractionError) as context:
+            pipeline._ensure_required_media_artifact(capture, result)
+
+        self.assertEqual(context.exception.reason_code, "download_failed")
+        self.assertTrue(context.exception.retryable)
+        self.assertTrue(any("source_media" in warning for warning in context.exception.warnings))
 
     def test_persist_result_artifacts_writes_markdown_only_when_available(self) -> None:
         root = Path.cwd() / "tests_runtime" / "artifact_runs" / uuid4().hex

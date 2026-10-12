@@ -30,6 +30,8 @@ jobs:
       - name: Install Python dependencies
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m playwright install chromium
@@ -37,6 +39,8 @@ jobs:
       - name: Verify backend and security contracts
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           python -m unittest discover -s tests -p "test_*.py"
           node --test scripts/cf_worker_security.test.mjs
 
@@ -44,15 +48,19 @@ jobs:
         working-directory: web
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           npm ci
           npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
-          npm exec tsc -- --noEmit
+          node node_modules/typescript/bin/tsc --noEmit
           npm run build
 
       - name: Verify desktop shell
         working-directory: web/src-tauri
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           # Tauri validates configured resource paths during cargo check. The
           # release workflow replaces this empty directory with the built sidecar.
           New-Item -ItemType Directory -Force sidecar | Out-Null

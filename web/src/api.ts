@@ -15,7 +15,32 @@ const TEMPORARY_BUSY_MESSAGE = "服务暂时繁忙，请稍后重试。";
 
 type RequestError = Error & {
   status?: number;
+  code?: string;
 };
+
+export function calmPublicCopy(value: string, fallback = "暂时无法完成，请稍后再试。") {
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  if (!cleaned) return fallback;
+  // Never let transport, stack-trace, local-path, or provider internals reach
+  // a user-facing toast.  API envelopes already apply the same boundary on
+  // the server; this client-side guard also covers proxy and desktop errors.
+  if (
+    cleaned.length > 240 ||
+    /Traceback|Exception|FileNotFound|KeyError|TypeError|SyntaxError|yt[-_ ]?dlp|no video formats|HTTP\s+Error|ERROR\s*[:：]|https?:\/\/|[A-Za-z]:\\|\\\\/i.test(
+      cleaned,
+    )
+  ) {
+    return fallback;
+  }
+  return cleaned
+    .replace(/处理失败|操作失败|上传失败|下载失败|安装失败|清空记录失败|删除失败/g, "暂时未完成")
+    .replace(/失败/g, "暂未完成")
+    .replace(/出错/g, "暂时中断");
+}
+
+export function calmErrorMessage(error: unknown, fallback: string) {
+  return calmPublicCopy(error instanceof Error ? error.message : "", fallback);
+}
 
 async function getRuntime(): Promise<DesktopRuntime | null> {
   if (desktopRuntime) return desktopRuntime;
@@ -24,7 +49,7 @@ async function getRuntime(): Promise<DesktopRuntime | null> {
     desktopRuntimePromise = import("@tauri-apps/api/core")
       .then(async ({ invoke }) => {
         let lastError: unknown = null;
-        for (let attempt = 0; attempt < 30; attempt++) {
+        for (let attempt = 0; attempt < 100; attempt++) {
           try {
             return await invoke<DesktopRuntime>("desktop_runtime_info");
           } catch (error) {
@@ -64,7 +89,7 @@ function _sanitizeErrorMessage(raw: string): string {
     return TEMPORARY_BUSY_MESSAGE;
   }
   // Backend always produces Chinese error messages; pass through directly
-  return trimmed;
+  return calmPublicCopy(trimmed, TEMPORARY_BUSY_MESSAGE);
 }
 
 async function request<T>(
@@ -87,10 +112,12 @@ async function request<T>(
         : await response.text();
 
       if (!response.ok) {
-        // Retry on server errors (502/503/504) and rate limits (429)
+        // Retry on every server-side 5xx response and rate limits (429). A
+        // transient 500 is just as recoverable as a gateway error; surfacing
+        // it immediately creates a false terminal state in the workspace.
         if (
           attempt < retries &&
-          (response.status >= 502 || response.status === 429)
+          (response.status >= 500 || response.status === 429)
         ) {
           await wait(500 * (attempt + 1));
           continue;
@@ -100,12 +127,15 @@ async function request<T>(
             ? payload
             : typeof payload?.detail === "string"
               ? payload.detail
+              : typeof payload?.detail?.message === "string"
+                ? payload.detail.message
               : JSON.stringify(payload);
         const safeMessage = _sanitizeErrorMessage(rawDetail || "");
         const error = new Error(
           safeMessage || `HTTP ${response.status}`,
         ) as RequestError;
         error.status = response.status;
+        error.code = typeof payload?.detail?.code === "string" ? payload.detail.code : undefined;
         throw error;
       }
 
@@ -141,6 +171,12 @@ async function request<T>(
   throw lastError || new Error(TEMPORARY_BUSY_MESSAGE);
 }
 
+export function localRequest<T>(path: string, payload?: unknown, method?: string): Promise<T> {
+  return request<T>(`/v1/local${path}`, payload === undefined ? undefined : {
+    method: method || "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  }, 0);
+}
+
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -148,7 +184,7 @@ function wait(ms: number) {
 function shouldRetryCaptureRead(error: unknown) {
   if (!(error instanceof Error)) return false;
   const status = (error as RequestError).status;
-  if (status === 502 || status === 503 || status === 504) {
+  if (status !== undefined && status >= 500 && status < 600) {
     return true;
   }
   return (error.message || "").includes(TEMPORARY_BUSY_MESSAGE);
@@ -223,6 +259,40 @@ export function retryCapture(captureId: string) {
   );
 }
 
+export function refreshBrowserSession() {
+  return request<{ status: string }>(
+    "/v1/runtime/browser/refresh",
+    { method: "POST" },
+    0,
+  );
+}
+
+export function openBrowserSession(url?: string | null) {
+  return request<{ status: string }>(
+    "/v1/runtime/browser/session",
+    {
+      method: "POST",
+      body: url ? JSON.stringify({ url }) : undefined,
+      headers: url ? { "Content-Type": "application/json" } : undefined,
+    },
+    0,
+  );
+}
+
+export function retryCaptureImage(captureId: string, imageIndex: number) {
+  return request<CaptureEnvelope>(
+    `/v1/captures/${captureId}/images/${imageIndex}/retry`,
+    { method: "POST" },
+    0,
+  );
+}
+
+export function ensureCaptureCover(captureId: string) {
+  return request<CaptureEnvelope>(`/v1/captures/${captureId}/cover`, {
+    method: "POST",
+  });
+}
+
 export function captureEventsUrl(captureId: string) {
   return resolveApiUrl(`/v1/captures/${captureId}/events`, true);
 }
@@ -248,4 +318,9 @@ export async function restartDesktopRuntime() {
 export async function openPlatformSession(platform: "xiaohongshu" | "douyin") {
   const { invoke } = await import("@tauri-apps/api/core");
   await invoke("open_platform_session", { platform });
+}
+
+export async function revealDiagnosticsFolder() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("reveal_diagnostics_folder");
 }

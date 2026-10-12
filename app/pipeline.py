@@ -4,6 +4,7 @@ import hashlib
 import mimetypes
 import queue
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -32,6 +33,7 @@ from app.schemas import (
 )
 from app.settings import (
     ARTIFACTS_DIR,
+    AUTOMATIC_RETRY_LIMIT,
     DEFAULT_TIMEOUT_SECONDS,
     DEFAULT_USER_AGENT,
     FFMPEG_PATH,
@@ -61,8 +63,8 @@ PUBLIC_ERROR_MESSAGES = {
     "input": "这条内容当前不可用。你可以换一个公开链接，或重新上传文件再试。",
     "resolve": "这条内容当前不可用。你可以换一个公开链接，或重新上传文件再试。",
     "extract": "来源识别成功，但没有稳定拿到正文、字幕、媒体或图片结果。建议换一条内容再试。",
-    "download": "资源下载没有成功，请稍后重试，或换一条内容再试。",
-    "transcribe": "媒体已经拿到了，但转写没有成功。建议稍后重试，或换一个更清晰的音视频文件。",
+    "download": "资源还在准备中，请稍后重试，或换一条内容再试。",
+    "transcribe": "媒体已经拿到了，文字还在准备中。建议稍后重试，或换一个更清晰的音视频文件。",
     "internal": "处理过程中发生了内部问题。请返回首页，换一条内容重新试试。",
 }
 
@@ -425,14 +427,32 @@ def _artifact_mime_type(path: Path) -> str:
     return mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
 
-def _artifact_entry(capture_id: str, artifact_type: str, label: str, path: Path) -> ArtifactModel:
+def _artifact_entry(
+    capture_id: str,
+    artifact_type: str,
+    label: str,
+    path: Path,
+    *,
+    status: str = "ready",
+    optional: bool = False,
+    width: int | None = None,
+    height: int | None = None,
+    thumbnail_path: Path | None = None,
+) -> ArtifactModel:
+    download_url = f"/v1/captures/{capture_id}/artifacts/{artifact_type}"
     return ArtifactModel(
         type=artifact_type,
         label=label,
         path=str(path),
-        download_url=f"/v1/captures/{capture_id}/artifacts/{artifact_type}",
+        download_url=download_url,
+        preview_url=f"{download_url}/preview" if status == "ready" else None,
         mime_type=_artifact_mime_type(path),
         size_bytes=path.stat().st_size if path.exists() else None,
+        status=status,
+        optional=optional,
+        width=width,
+        height=height,
+        thumbnail_path=str(thumbnail_path) if thumbnail_path is not None else None,
     )
 
 
@@ -517,6 +537,46 @@ def _image_content_dedupe_key(path: Path) -> str:
         return f"bytes:{digest.hexdigest()}"
 
 
+def _prepare_image_preview(path: Path, *, max_edge: int = 640) -> tuple[int | None, int | None, Path | None]:
+    """Read image dimensions and create a bounded JPEG preview without touching the original."""
+    thumbnail_path = path.with_name(f"{path.stem}.thumb.v1.jpg")
+    try:
+        with av.open(str(path)) as container:
+            frame = next(container.decode(video=0))
+        width = int(frame.width)
+        height = int(frame.height)
+        if width <= 0 or height <= 0:
+            return None, None, None
+
+        scale = min(1.0, max_edge / max(width, height))
+        target_width = max(2, int(round(width * scale)))
+        target_height = max(2, int(round(height * scale)))
+        # yuvj420p requires even dimensions on several FFmpeg builds.
+        target_width -= target_width % 2
+        target_height -= target_height % 2
+        output = av.open(str(thumbnail_path), mode="w")
+        try:
+            stream = output.add_stream("mjpeg", rate=1)
+            stream.width = target_width
+            stream.height = target_height
+            stream.pix_fmt = "yuvj420p"
+            resized = frame.reformat(
+                width=target_width,
+                height=target_height,
+                format="yuvj420p",
+            )
+            for packet in stream.encode(resized):
+                output.mux(packet)
+            for packet in stream.encode():
+                output.mux(packet)
+        finally:
+            output.close()
+        return width, height, thumbnail_path
+    except Exception:
+        thumbnail_path.unlink(missing_ok=True)
+        return None, None, None
+
+
 def _persist_image_artifacts(
     capture,
     artifact_dir: Path,
@@ -539,6 +599,16 @@ def _persist_image_artifacts(
         try:
             _download_image(image_url, target, referer=referer)
         except ExtractionError:
+            artifacts.append(
+                _artifact_entry(
+                    capture.id,
+                    f"image_{index:02d}",
+                    f"图片 {index}",
+                    target,
+                    status="failed",
+                    optional=True,
+                )
+            )
             completed_images += 1
             if progress_callback is not None:
                 progress_callback(completed_images, total_images)
@@ -564,7 +634,18 @@ def _persist_image_artifacts(
             else:
                 saved_paths.append(live_target)
                 artifacts.append(_artifact_entry(capture.id, f"image_live_{index:02d}", f"Live 图片 {index}", live_target))
-        artifacts.append(_artifact_entry(capture.id, f"image_{index:02d}", f"图片 {index}", target))
+        width, height, thumbnail_path = _prepare_image_preview(target)
+        artifacts.append(
+            _artifact_entry(
+                capture.id,
+                f"image_{index:02d}",
+                f"图片 {index}",
+                target,
+                width=width,
+                height=height,
+                thumbnail_path=thumbnail_path,
+            )
+        )
         completed_images += 1
         if progress_callback is not None:
             progress_callback(completed_images, total_images)
@@ -590,6 +671,53 @@ def _merge_image_artifacts(result: ResultDocumentModel, image_artifacts: list[Ar
     return result
 
 
+def _rebuild_images_zip(capture_id: str, artifact_dir: Path, artifacts: list[ArtifactModel]) -> list[ArtifactModel]:
+    without_zip = [item for item in artifacts if item.type != "images_zip"]
+    ready_paths = [
+        Path(item.path)
+        for item in without_zip
+        if (re.fullmatch(r"image_(?:live_)?\d+", item.type) and item.status == "ready" and Path(item.path).is_file())
+    ]
+    zip_path = artifact_dir / "images.zip"
+    zip_path.unlink(missing_ok=True)
+    if len(ready_paths) < 2:
+        return without_zip
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for item in ready_paths:
+            archive.write(item, arcname=item.name)
+    return [*without_zip, _artifact_entry(capture_id, "images_zip", "全部图片", zip_path)]
+
+
+def retry_capture_image(capture, image_index: int) -> ResultDocumentModel:
+    if capture.result is None or image_index < 1 or image_index > min(len(capture.source.image_urls or []), 20):
+        raise ValueError("图片序号无效。")
+    artifact_type = f"image_{image_index:02d}"
+    current = next((item for item in capture.result.artifacts if item.type == artifact_type), None)
+    if current is not None and current.status == "ready" and Path(current.path).is_file():
+        return capture.result
+
+    artifact_dir = ARTIFACTS_DIR / capture.id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    image_url = capture.source.image_urls[image_index - 1]
+    target = artifact_dir / f"image_{image_index:02d}{_image_extension(image_url)}"
+    _download_image(image_url, target, referer=capture.source.canonical_url or capture.url or None)
+    width, height, thumbnail_path = _prepare_image_preview(target)
+    replacement = _artifact_entry(
+        capture.id,
+        artifact_type,
+        f"图片 {image_index}",
+        target,
+        width=width,
+        height=height,
+        thumbnail_path=thumbnail_path,
+    )
+    artifacts = [item for item in capture.result.artifacts if item.type not in {artifact_type, "images_zip"}]
+    artifacts.append(replacement)
+    capture.result.artifacts = _rebuild_images_zip(capture.id, artifact_dir, artifacts)
+    capture.result.views = _build_views(capture.result)
+    return capture.result
+
+
 def _persist_source_media_artifact(capture, media_file_path: str | None) -> ArtifactModel | None:
     if capture.source.content_type != "video":
         return None
@@ -613,6 +741,45 @@ def _audio_codec_for_path(path: Path) -> str:
     return ""
 
 
+def _audio_delivery_extension(path: Path, audio_codec: str) -> str:
+    try:
+        with av.open(str(path)) as container:
+            container_name = str(getattr(getattr(container, "format", None), "name", "") or "").lower()
+    except Exception:
+        container_name = ""
+    if any(token in container_name for token in ("mp4", "m4a", "mov")) or audio_codec in {"aac", "mp4a"}:
+        return ".m4a"
+    if "mp3" in container_name or audio_codec == "mp3":
+        return ".mp3"
+    if path.suffix.lower() in {".m4a", ".mp3", ".ogg", ".opus", ".wav", ".flac"}:
+        return path.suffix.lower()
+    return ".m4a"
+
+
+def repair_legacy_audio_artifact(capture) -> bool:
+    if capture.result is None:
+        return False
+    artifact = next((item for item in capture.result.artifacts if item.type == "source_audio"), None)
+    if artifact is None or artifact.status != "ready":
+        return False
+    source_path = Path(artifact.path)
+    if not source_path.is_file():
+        return False
+    codec = _audio_codec_for_path(source_path)
+    expected_extension = _audio_delivery_extension(source_path, codec)
+    if source_path.suffix.lower() == expected_extension and artifact.mime_type == _artifact_mime_type(source_path):
+        return False
+    target_path = source_path.with_suffix(expected_extension)
+    if target_path != source_path:
+        if target_path.exists():
+            target_path.unlink()
+        source_path.replace(target_path)
+    artifact.path = str(target_path)
+    artifact.mime_type = _artifact_mime_type(target_path)
+    artifact.size_bytes = target_path.stat().st_size
+    return True
+
+
 def _persist_source_audio_artifact(capture, artifact_dir: Path, media_file_path: str | None) -> ArtifactModel | None:
     if capture.source.content_type not in {"audio", "video"} or not media_file_path:
         return None
@@ -626,7 +793,11 @@ def _persist_source_audio_artifact(capture, artifact_dir: Path, media_file_path:
         return None
 
     if capture.source.content_type == "audio":
-        return _artifact_entry(capture.id, "source_audio", "原音频", source_path)
+        target_path = artifact_dir / f"source_audio{_audio_delivery_extension(source_path, audio_codec)}"
+        if source_path.resolve() != target_path.resolve():
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target_path)
+        return _artifact_entry(capture.id, "source_audio", "原音频", target_path)
 
     if not FFMPEG_PATH.exists():
         return None
@@ -654,6 +825,50 @@ def _persist_source_audio_artifact(capture, artifact_dir: Path, media_file_path:
         logger.warning("source audio export failed for %s: %s", source_path, (result.stderr or result.stdout or "").strip())
         return None
     return _artifact_entry(capture.id, "source_audio", "原音频", target_path)
+
+
+def _persist_cover_artifact(capture, artifact_dir: Path) -> ArtifactModel | None:
+    if capture.source.content_type != "audio" or not (capture.source.thumbnail_url or "").strip():
+        return None
+    target_path = artifact_dir / f"cover_image{_image_extension(capture.source.thumbnail_url)}"
+    try:
+        _download_image(
+            capture.source.thumbnail_url,
+            target_path,
+            referer=capture.source.canonical_url or capture.url or None,
+        )
+    except ExtractionError:
+        logger.warning("podcast cover download failed for capture %s", capture.id)
+        return None
+    return _artifact_entry(capture.id, "cover_image", "节目封面", target_path)
+
+
+def ensure_capture_cover(capture) -> ResultDocumentModel:
+    if capture.result is None:
+        raise ValueError("这条内容还没有可补全的结果。")
+    existing = next(
+        (
+            artifact
+            for artifact in capture.result.artifacts
+            if artifact.type == "cover_image"
+            and artifact.status == "ready"
+            and Path(artifact.path).is_file()
+        ),
+        None,
+    )
+    if existing is not None:
+        return capture.result
+
+    artifact_dir = ARTIFACTS_DIR / capture.id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    cover = _persist_cover_artifact(capture, artifact_dir)
+    if cover is None:
+        raise ValueError("这期播客暂时没有可保存的节目封面。")
+    capture.result.artifacts = [
+        artifact for artifact in capture.result.artifacts if artifact.type != "cover_image"
+    ]
+    capture.result.artifacts.append(cover)
+    return capture.result
 
 
 def _probe_video_stream_profile(path: Path) -> tuple[str, str, str]:
@@ -1098,7 +1313,7 @@ def _merge_result(
     if fallback_text:
         result_notice = "未检测到可转写语音，已改为交付页面文案与原视频。"
     elif source.content_type == "video" and primary_body and not media_ready:
-        result_notice = "文本已整理完成，原视频暂未成功下载。"
+        result_notice = "文本已整理完成，原视频文件暂未就绪。"
     markdown_text = _compose_markdown_text(resolved_title, primary_body)
 
     result = ResultDocumentModel(
@@ -1178,6 +1393,9 @@ def _persist_result_artifacts(
     source_audio_artifact = _persist_source_audio_artifact(capture, artifact_dir, media_file_path)
     if source_audio_artifact is not None:
         artifacts.append(source_audio_artifact)
+    cover_artifact = _persist_cover_artifact(capture, artifact_dir)
+    if cover_artifact is not None:
+        artifacts.append(cover_artifact)
     preview_media_artifact = _persist_preview_media_artifact(capture, artifact_dir, media_file_path)
     if preview_media_artifact is not None:
         artifacts.append(preview_media_artifact)
@@ -1219,6 +1437,35 @@ def _persist_result_artifacts(
     result.artifacts = artifacts
     result.views = _build_views(result)
     return result
+
+
+def _ensure_required_media_artifact(capture, result: ResultDocumentModel) -> bool:
+    """Keep text results usable when the optional original media is unavailable.
+
+    Text-first providers can produce a useful result before a media download
+    succeeds. The result page already has a degraded-media surface, so the
+    artifact boundary must preserve the text instead of turning the whole
+    capture into a dead-end state. A boolean keeps the caller's progress
+    message honest without exposing an internal ``failed`` state.
+    """
+    content_type = str(getattr(capture.source, "content_type", "") or "")
+    required_type = {"video": "source_media", "audio": "source_audio"}.get(content_type)
+    if not required_type:
+        return True
+    if any(item.type == required_type and item.status == "ready" for item in result.artifacts):
+        return True
+
+    if result.primary_text.strip():
+        return False
+
+    label = "原视频" if required_type == "source_media" else "原音频"
+    raise ExtractionError(
+        "download",
+        f"{label}文件尚未准备好，不能把当前结果标记为完成。",
+        warnings=[f"缺少必需交付文件：{required_type}"],
+        reason_code="download_failed",
+        retryable=True,
+    )
 
 
 def _persist_result_image_artifacts(
@@ -1373,19 +1620,253 @@ def _update_processing(
     return processing
 
 
+def _queue_internal_retry(capture) -> int | None:
+    """Persist one bounded retry for an unexpected internal interruption."""
+    if capture.processing.retry_count >= AUTOMATIC_RETRY_LIMIT:
+        return None
+
+    next_retry_count = capture.processing.retry_count + 1
+    retry_message = f"处理遇到短暂波动，正在自动恢复（第 {next_retry_count} 次）。"
+    retry_processing = _update_processing(
+        capture,
+        current_stage="queued",
+        progress_percent=2,
+        progress_detail=retry_message,
+        reset_failure_state=True,
+        retryable=True,
+        trace=[
+            _make_trace(
+                "queued",
+                retry_message,
+                level="warning",
+                provider="capture_retry",
+                detail=f"attempt={next_retry_count}; reason_code=internal_error",
+            )
+        ],
+    )
+    retry_processing.retry_count = next_retry_count
+    repository.update(
+        capture.id,
+        status="queued",
+        result_state="processing",
+        finished_at=None,
+        error_stage=None,
+        error_message=None,
+        processing=retry_processing,
+    )
+    write_capture_event(
+        capture.id,
+        "automatic_retry",
+        stage="queued",
+        retry_count=next_retry_count,
+        reason_code="internal_error",
+    )
+    return next_retry_count
+
+
+def _persist_isolated_worker_failure(capture_id: str, exc: BaseException) -> None:
+    """Keep one unexpected worker exception from leaving a capture stuck forever.
+
+    ``process_capture`` owns the normal extraction error boundary. This guard is
+    for failures outside that boundary (for example, a storage read before the
+    capture is loaded or a storage write while persisting an error). Retry the
+    bounded recovery path first; if it keeps happening, leave an actionable
+    state that the user can retry instead of a dead-end failure record.
+    """
+    try:
+        capture = repository.get(capture_id)
+        if capture is None or capture.status in {"done", "needs_user_action"}:
+            return
+
+        # A legacy worker or an extension point may have written the old
+        # whole-capture ``failed`` state before the outer recovery boundary
+        # gets control. Repair it here as well; leaving it untouched would
+        # make the API boundary look calm while the next retry still reads a
+        # dead-end record from storage.
+        if capture.status == "failed":
+            public_message = "处理暂时中断，已经自动尝试恢复。你可以重新处理这条内容。"
+            repaired_processing = _update_processing(
+                capture,
+                current_stage="awaiting_user",
+                progress_percent=max(18, capture.processing.progress_percent or 0),
+                progress_detail=public_message,
+                trace=[
+                    _make_trace(
+                        "internal",
+                        public_message,
+                        level="warning",
+                        detail=str(exc),
+                    )
+                ],
+                failure_reason_code="internal_error",
+                retryable=True,
+            )
+            repository.update(
+                capture_id,
+                status="needs_user_action",
+                result_state="awaiting_user",
+                finished_at=now_iso(),
+                error_stage=capture.error_stage or "internal",
+                error_message=public_message,
+                processing=repaired_processing,
+            )
+            logger.warning(
+                "Capture legacy failure repaired to actionable state: %s | error_type=%s",
+                capture_id,
+                type(exc).__name__,
+            )
+            return
+
+        next_retry_count = _queue_internal_retry(capture)
+        if next_retry_count is not None:
+            enqueue_capture(capture_id)
+            return
+
+        # A repeated worker crash must remain actionable rather than becoming
+        # a dead-end failure record. The user can retry after the runtime has
+        # been repaired or restarted, while the diagnostic detail stays local.
+        public_message = "处理暂时中断，已经自动尝试恢复。你可以重新处理这条内容。"
+        repository.update(
+            capture_id,
+            status="needs_user_action",
+            result_state="awaiting_user",
+            finished_at=now_iso(),
+            error_stage="internal",
+            error_message=public_message,
+            processing=_update_processing(
+                capture,
+                current_stage="awaiting_user",
+                progress_percent=18,
+                progress_detail=public_message,
+                trace=[
+                    _make_trace(
+                        "internal",
+                        public_message,
+                        level="warning",
+                        detail=str(exc),
+                    )
+                ],
+                failure_reason_code="internal_error",
+                retryable=True,
+            ),
+        )
+    except Exception as persist_exc:  # noqa: BLE001
+        logger.exception(
+            "Capture worker could not isolate failure state: %s | %s",
+            capture_id,
+            persist_exc,
+        )
+
+
 def _is_media_content(content_type: str) -> bool:
     return content_type in {"audio", "video"}
+
+
+def _should_automatically_retry(capture, error: ExtractionError) -> bool:
+    """Retry only bounded transient errors that do not need user action."""
+    return (
+        bool(error.retryable)
+        and capture.processing.retry_count < AUTOMATIC_RETRY_LIMIT
+        and error.reason_code not in USER_ACTION_REQUIRED_REASON_CODES
+    )
+
+
+def _transcription_error_from_exception(exc: BaseException) -> ExtractionError:
+    """Normalize provider failures before they reach the generic worker guard."""
+    if isinstance(exc, ExtractionError):
+        return exc
+
+    message = str(exc).strip()
+    lowered = message.lower()
+    unavailable_markers = (
+        "not configured",
+        "尚未配置",
+        "尚未安装",
+        "尚未准备",
+        "没有可识别的音轨",
+        "没有可识别的音频",
+        "无法确认音频时长",
+    )
+    if isinstance(exc, FileNotFoundError) or any(marker in lowered for marker in unavailable_markers):
+        reason_code = "transcribe_runtime_unavailable"
+        retryable = False
+    elif isinstance(exc, (httpx.HTTPError, TimeoutError, ConnectionError)) or any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout",
+            "connection",
+            "connection reset",
+            "connection refused",
+            "remote end closed",
+            "service unavailable",
+            "bad gateway",
+            "http error 429",
+            "http error 500",
+            "http error 502",
+            "http error 503",
+            "http error 504",
+            "too many requests",
+            "rate limit",
+        )
+    ):
+        reason_code = "transcribe_network_failed"
+        retryable = True
+    else:
+        reason_code = "transcribe_failed"
+        retryable = True
+    return ExtractionError(
+        "transcribe",
+        message or "转写服务暂时没有返回结果。",
+        reason_code=reason_code,
+        retryable=retryable,
+    )
 
 
 def _public_error_message(stage: str, raw_message: str | None = None) -> str:
     return _public_error_message_with_reason(stage, None, raw_message)
 
 
+USER_ACTION_REQUIRED_REASON_CODES = frozenset(
+    {
+        "browser_challenge_required",
+        "browser_session_expired",
+        "browser_network_risk",
+        "douyin_fresh_cookies_required",
+        "xiaohongshu_full_url_required",
+        "retry_exhausted",
+    }
+)
+
+EXPECTED_UNAVAILABLE_REASON_CODES = frozenset(
+    {
+        "source_not_found",
+        "source_access_restricted",
+        "youtube_video_unavailable",
+        "bilibili_video_invalid",
+        "xiaohongshu_placeholder_page",
+        "xiaoyuzhou_audio_missing",
+        "image_assets_missing",
+        "media_or_subtitle_missing",
+        "text_or_images_missing",
+    }
+)
+
+
 def _public_error_message_with_reason(stage: str, reason_code: str | None = None, raw_message: str | None = None) -> str:
+    if reason_code and (
+        reason_code.endswith("_network_failed")
+        or reason_code.endswith("_server_unavailable")
+    ):
+        return "当前网络或来源站点暂时不稳定，已自动尝试恢复。请稍后重试。"
+    if reason_code and reason_code.endswith("_rate_limited"):
+        return "来源站点当前请求较多，已自动稍后重试。请过一会儿再试。"
+    if reason_code == "unsafe_url":
+        return "这里只能处理公开网页地址，请不要提交本机或内网链接。"
     if reason_code == "youtube_video_unavailable":
         return "这条 YouTube 视频当前不可访问、已下架，或不再公开。请换一条公开视频再试。"
     if reason_code == "youtube_transcript_unavailable":
-        return "这条 YouTube 视频当前没有可用字幕，媒体回退也未成功。请稍后再试，或换一条带字幕的视频。"
+        return "这条 YouTube 视频当前没有可用字幕，媒体回退也没有拿到结果。请稍后再试，或换一条带字幕的视频。"
     if reason_code in {"youtube_extract_timeout", "youtube_extract_network_failed"}:
         return "当前网络环境没有稳定连上 YouTube。请稍后重试，或更换可访问 YouTube 的网络后再试。"
     if reason_code == "bilibili_video_invalid":
@@ -1394,6 +1875,8 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
         return "这条内容当前已经不可访问，或页面已经失效。请换一条公开内容再试。"
     if reason_code == "source_access_restricted":
         return "这条内容当前受访问限制，暂时无法处理。请换一条公开内容再试。"
+    if reason_code == "provider_unexpected_error":
+        return "当前提取路径暂时不稳定，已尝试备用路径；请稍后重试或更换公开内容。"
     if reason_code == "browser_runtime_missing":
         return "项目级浏览器运行时还没有准备好，当前这条内容无法走浏览器会话提取。请先补齐运行时后再试。"
     if reason_code == "browser_session_expired":
@@ -1411,19 +1894,23 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
     if reason_code == "douyin_direct_metadata_timeout":
         return "抖音公开链路响应较慢，已尝试浏览器会话；请稍后重试或刷新浏览器会话后再试。"
     if reason_code == "xiaohongshu_full_url_required":
-        return "这条小红书内容请从浏览器地址栏复制完整网页链接后再试。"
+        return "小红书短链接暂时无法稳定展开，请从浏览器地址栏复制完整网页链接后再试。"
     if reason_code == "xiaohongshu_placeholder_page":
         return "这条小红书内容当前不可访问，或页面已经失效。请换一条公开图文或视频再试。"
     if reason_code == "xiaoyuzhou_audio_missing":
         return "这条小宇宙内容没有拿到可转写音频。请换一条公开节目再试。"
     if reason_code == "source_fetch_failed":
         return "当前网络环境没有稳定连上来源站点，请稍后重试。"
+    if reason_code == "retry_exhausted":
+        return "连接仍不稳定，已自动重试；你可以重新处理，或换一条公开内容。"
     if reason_code == "extract_failed":
         return "没有稳定拿到页面下的正文内容。请稍后重试，或换一条公开内容。"
     if reason_code == "download_failed":
-        return "资源下载没有成功，请稍后重试，或换一条内容再试。"
+        return "资源还在准备中，请稍后重试，或换一条内容再试。"
     if reason_code == "transcribe_failed":
-        return "媒体已拿到，但转写没有成功。建议稍后重试，或换一个更清晰的音视频文件。"
+        return "媒体已拿到，文字还在准备中。建议稍后重试，或换一个更清晰的音视频文件。"
+    if reason_code == "transcribe_runtime_unavailable":
+        return "转写运行时还没有准备好，媒体文件已保留。请稍后重试，或检查本机转写配置。"
     if reason_code == "image_assets_missing":
         return "这条内容没有拿到可用图片。请检查链接是否有效，或换一条公开内容再试。"
     if reason_code == "media_or_subtitle_missing":
@@ -1436,9 +1923,14 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
         return default_message
 
     cleaned = _clean_text(raw_message)
-    if cleaned and not re.search(r"[A-Za-z_]+Error|Traceback|Exception|FileNotFoundError", cleaned):
+    unsafe_public_detail = re.compile(
+        r"https?://|www\.|[A-Za-z]:[\\/]|/usr/|Traceback|Exception|Error\b|HTTP\s+Error|"
+        r"KeyError|FileNotFound|yt[-_ ]?dl|bvid|cookie|(?:^|\s)\[[A-Za-z0-9_-]+\]",
+        re.IGNORECASE,
+    )
+    if cleaned and len(cleaned) <= 220 and not unsafe_public_detail.search(cleaned):
         return cleaned
-    return PUBLIC_ERROR_MESSAGES["internal"]
+    return PUBLIC_ERROR_MESSAGES.get(stage, PUBLIC_ERROR_MESSAGES["internal"])
 
 
 def _enforce_free_duration_limit(source: SourceMetaModel) -> None:
@@ -1494,38 +1986,42 @@ def recover_pending_captures() -> None:
         if _pending_capture_is_stale(capture):
             repository.update(
                 capture_id,
-                status="failed",
-                result_state="failed",
+                status="needs_user_action",
+                result_state="awaiting_user",
                 finished_at=now_iso(),
                 error_stage="internal",
-                error_message="上次任务已中断，请重新提交这条内容。",
+                error_message="上次任务已中断，请重新处理这条内容。",
                 processing=_update_processing(
                     capture,
-                    current_stage="failed",
-                    progress_percent=0,
+                    current_stage="awaiting_user",
+                    progress_percent=18,
                     progress_detail="上次任务距离现在过久，已停止自动恢复。",
                     trace=[_make_trace("internal", "陈旧任务已停止自动恢复。", level="warning")],
                     failure_reason_code="stale_recovery_expired",
                     retryable=True,
                 ),
             )
-            write_capture_event(capture_id, "capture_recovery_expired", stage="failed")
+            write_capture_event(capture_id, "capture_recovery_expired", stage="awaiting_user")
             continue
         if capture.input_type == "file" and capture.storage_path and not Path(capture.storage_path).exists():
             repository.update(
                 capture_id,
-                status="failed",
-                result_state="failed",
+                status="needs_user_action",
+                result_state="awaiting_user",
                 finished_at=now_iso(),
                 error_stage="input",
                 error_message="排队中的本地文件已经不存在，请重新上传。",
                 processing=_update_processing(
                     capture,
-                    current_stage="failed",
+                    current_stage="awaiting_user",
+                    progress_percent=18,
                     progress_detail="本地文件已缺失，无法恢复任务。",
-                    trace=[_make_trace("input", "本地文件已经丢失，无法恢复任务。", level="error")],
+                    trace=[_make_trace("input", "本地文件已经丢失，请重新上传。", level="warning")],
+                    failure_reason_code="input_file_missing",
+                    retryable=False,
                 ),
             )
+            write_capture_event(capture_id, "capture_needs_user_action", stage="input")
             continue
 
         repository.update(
@@ -1571,6 +2067,7 @@ def process_capture(capture_id: str) -> None:
     repository.capture_workspace(capture.id)
     diagnostics = CaptureDiagnostics(capture.id)
     recovery_seconds = _recovery_seconds_from_trace_events(capture)
+    retry_after_cleanup = False
     diagnostics.event(
         "capture_started",
         stage="queued",
@@ -1783,14 +2280,17 @@ def process_capture(capture_id: str) -> None:
                 update_live_progress("transcribe", percent, detail)
 
             transcription_provider = get_transcription_provider(platform=source.platform)
-            transcription = transcription_provider.transcribe(
-                extraction.media_file_path,
-                capture_id=capture.id,
-                output_folder=artifact_dir,
-                output_stem="raw_transcript",
-                source_url=capture.url,
-                progress_callback=transcription_progress,
-            )
+            try:
+                transcription = transcription_provider.transcribe(
+                    extraction.media_file_path,
+                    capture_id=capture.id,
+                    output_folder=artifact_dir,
+                    output_stem="raw_transcript",
+                    source_url=capture.url,
+                    progress_callback=transcription_progress,
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise _transcription_error_from_exception(exc) from exc
             diagnostics.finish(
                 "transcribe",
                 provider=transcription.provider,
@@ -1846,6 +2346,7 @@ def process_capture(capture_id: str) -> None:
                 else lambda percent, detail: update_live_progress("compose", percent, detail)
             ),
         )
+        media_delivery_ready = _ensure_required_media_artifact(capture, persisted_result)
         diagnostics.finish(
             "artifact",
             artifact_count=len(persisted_result.artifacts),
@@ -1857,6 +2358,8 @@ def process_capture(capture_id: str) -> None:
         done_message = (
             "正文和首批图片已可查看，下载文件仍在后台准备。"
             if prepare_images_async
+            else "文字已整理完成，原视频暂未准备好；文字结果已可查看。"
+            if not media_delivery_ready
             else "处理完成，结果已可查看和下载。"
         )
         persist_capture(
@@ -1871,6 +2374,11 @@ def process_capture(capture_id: str) -> None:
                 progress_percent=100,
                 progress_detail=done_message,
                 reset_failure_state=True,
+                warnings=(
+                    []
+                    if media_delivery_ready
+                    else ["原视频文件暂未就绪，已先交付文字结果。"]
+                ),
                 trace=[*artifact_traces, _make_trace("done", done_message)],
             ),
             result=persisted_result,
@@ -1887,47 +2395,172 @@ def process_capture(capture_id: str) -> None:
         logger.info("Capture completed: %s", capture.id)
 
     except ExtractionError as exc:
-        logger.warning("Capture failed: %s | %s | %s", capture.id, exc.stage, exc.message)
-        diagnostics.fail(exc.stage, reason_code=exc.reason_code, message=exc.message, retryable=exc.retryable)
+        can_retry_automatically = _should_automatically_retry(capture, exc)
+        if can_retry_automatically:
+            next_retry_count = capture.processing.retry_count + 1
+            retry_detail = f"刚才的连接不稳定，正在自动重试（第 {next_retry_count} 次）。"
+            retry_processing = _update_processing(
+                capture,
+                current_stage="queued",
+                progress_percent=2,
+                progress_detail=retry_detail,
+                reset_failure_state=True,
+                retryable=True,
+                trace=[
+                    _make_trace(
+                        "queued",
+                        retry_detail,
+                        level="warning",
+                        provider="capture_retry",
+                        detail=f"attempt={next_retry_count}; reason_code={exc.reason_code}",
+                    )
+                ],
+            )
+            retry_processing.retry_count = next_retry_count
+            repository.update(
+                capture.id,
+                status="queued",
+                result_state="processing",
+                finished_at=None,
+                error_stage=None,
+                error_message=None,
+                processing=retry_processing,
+            )
+            diagnostics.event(
+                "automatic_retry",
+                stage=exc.stage,
+                retry_count=next_retry_count,
+                reason_code=exc.reason_code,
+            )
+            diagnostics.finish_capture(
+                status="queued",
+                recovery_seconds=recovery_seconds,
+                retry_count=next_retry_count,
+                reason_code=exc.reason_code,
+            )
+            logger.info(
+                "Capture transient issue; scheduling automatic retry: %s | stage=%s reason_code=%s attempt=%s",
+                capture.id,
+                exc.stage,
+                exc.reason_code or "unknown",
+                next_retry_count,
+            )
+            retry_after_cleanup = True
+            return
+
+        provider_names = ",".join(
+            dict.fromkeys(
+                event.provider
+                for event in exc.provider_traces
+                if event.provider
+            )
+        ) or "unknown"
+        retry_exhausted = (
+            bool(exc.retryable)
+            and capture.processing.retry_count >= AUTOMATIC_RETRY_LIMIT
+            and exc.reason_code not in USER_ACTION_REQUIRED_REASON_CODES
+        )
+        terminal_reason_code = "retry_exhausted" if retry_exhausted else exc.reason_code
+        public_message = _public_error_message_with_reason(exc.stage, terminal_reason_code, exc.message)
+        # Every terminal extraction outcome is actionable from the product
+        # surface: the user can refresh a session, retry, or choose another
+        # public source. Keep the internal reason code for diagnostics, but do
+        # not turn an unavailable source into a dead-end "failed" workspace.
+        if terminal_reason_code in USER_ACTION_REQUIRED_REASON_CODES:
+            logger.info(
+                "Capture awaiting user action: %s | stage=%s reason_code=%s retryable=%s providers=%s | %s",
+                capture.id,
+                exc.stage,
+                terminal_reason_code or "unknown",
+                exc.retryable,
+                provider_names,
+                exc.message,
+            )
+        elif terminal_reason_code in EXPECTED_UNAVAILABLE_REASON_CODES:
+            logger.info(
+                "Capture unavailable: %s | stage=%s reason_code=%s retryable=%s providers=%s | %s",
+                capture.id,
+                exc.stage,
+                terminal_reason_code or "unknown",
+                exc.retryable,
+                provider_names,
+                exc.message,
+            )
+            diagnostics.fail(exc.stage, reason_code=exc.reason_code, message=exc.message, retryable=exc.retryable)
+        else:
+            logger.info(
+                "Capture needs user action: %s | stage=%s reason_code=%s retryable=%s providers=%s | %s",
+                capture.id,
+                exc.stage,
+                exc.reason_code or "unknown",
+                exc.retryable,
+                provider_names,
+                exc.message,
+            )
+            diagnostics.fail(exc.stage, reason_code=exc.reason_code, message=exc.message, retryable=exc.retryable)
         diagnostics.finish_capture(
-            status="failed",
+            status="needs_user_action",
             recovery_seconds=recovery_seconds,
             error_stage=exc.stage,
-            reason_code=exc.reason_code,
+            reason_code=terminal_reason_code,
             retryable=exc.retryable,
         )
         logger.info("Capture stage durations: %s | %s", capture.id, diagnostics.summary_text(recovery_seconds=recovery_seconds))
         repository.update(
             capture.id,
-            status="failed",
-            result_state="failed",
+            status="needs_user_action",
+            result_state="awaiting_user",
             finished_at=now_iso(),
             error_stage=exc.stage,
-            error_message=_public_error_message_with_reason(exc.stage, exc.reason_code, exc.message),
+            error_message=public_message,
             processing=_update_processing(
                 capture,
-                current_stage="failed",
-                progress_percent=0,
-                progress_detail=_public_error_message_with_reason(exc.stage, exc.reason_code, exc.message),
+                current_stage="awaiting_user",
+                progress_percent=18,
+                progress_detail=public_message,
                 warnings=exc.warnings,
                 trace=[
                     *_provider_trace_events(exc=exc),
                     _make_trace(
                         exc.stage,
-                        _public_error_message_with_reason(exc.stage, exc.reason_code, exc.message),
-                        level="error",
+                        public_message,
+                        level="warning",
                         detail=exc.message,
                     ),
                 ],
-                failure_reason_code=exc.reason_code,
+                failure_reason_code=terminal_reason_code,
                 retryable=exc.retryable,
             ),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Capture failed unexpectedly: %s", capture.id)
+        next_retry_count = _queue_internal_retry(capture)
+        if next_retry_count is not None:
+            logger.warning(
+                "Capture internal issue; scheduling automatic retry: %s | attempt=%s error_type=%s",
+                capture.id,
+                next_retry_count,
+                type(exc).__name__,
+            )
+            diagnostics.event(
+                "automatic_retry",
+                stage="internal",
+                retry_count=next_retry_count,
+                reason_code="internal_error",
+            )
+            diagnostics.finish_capture(
+                status="queued",
+                recovery_seconds=recovery_seconds,
+                retry_count=next_retry_count,
+                reason_code="internal_error",
+            )
+            retry_after_cleanup = True
+            return
+
+        logger.exception("Capture failed unexpectedly after automatic retries: %s", capture.id)
+        public_message = "处理暂时中断，已经自动尝试恢复。你可以重新处理这条内容。"
         diagnostics.fail("internal", message=str(exc), reason_code="internal_error", retryable=True)
         diagnostics.finish_capture(
-            status="failed",
+            status="needs_user_action",
             recovery_seconds=recovery_seconds,
             error_stage="internal",
             reason_code="internal_error",
@@ -1936,17 +2569,17 @@ def process_capture(capture_id: str) -> None:
         logger.info("Capture stage durations: %s | %s", capture.id, diagnostics.summary_text(recovery_seconds=recovery_seconds))
         repository.update(
             capture.id,
-            status="failed",
-            result_state="failed",
+            status="needs_user_action",
+            result_state="awaiting_user",
             finished_at=now_iso(),
             error_stage="internal",
-            error_message=PUBLIC_ERROR_MESSAGES["internal"],
+            error_message=public_message,
             processing=_update_processing(
                 capture,
-                current_stage="failed",
-                progress_percent=0,
-                progress_detail=PUBLIC_ERROR_MESSAGES["internal"],
-                trace=[_make_trace("internal", PUBLIC_ERROR_MESSAGES["internal"], level="error", detail=str(exc))],
+                current_stage="awaiting_user",
+                progress_percent=18,
+                progress_detail=public_message,
+                trace=[_make_trace("internal", public_message, level="warning", detail=str(exc))],
                 failure_reason_code="internal_error",
                 retryable=True,
             ),
@@ -1956,6 +2589,8 @@ def process_capture(capture_id: str) -> None:
     finally:
         with worker_lock:
             active_capture_ids.discard(capture_id)
+        if retry_after_cleanup:
+            enqueue_capture(capture_id)
 
 
 def process_pending_capture_once() -> bool:
@@ -1964,7 +2599,15 @@ def process_pending_capture_once() -> bool:
         if capture is None:
             continue
         if capture.status == "queued":
-            process_capture(capture_id)
+            try:
+                process_capture(capture_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Capture worker interruption; attempting bounded recovery: %s | error_type=%s",
+                    capture_id,
+                    type(exc).__name__,
+                )
+                _persist_isolated_worker_failure(capture_id, exc)
             return True
     return False
 
@@ -1982,7 +2625,15 @@ def _local_queue_worker_loop() -> None:
     while True:
         capture_id = capture_queue.get()
         try:
-            process_capture(capture_id)
+            try:
+                process_capture(capture_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Capture worker interruption; attempting bounded recovery: %s | error_type=%s",
+                    capture_id,
+                    type(exc).__name__,
+                )
+                _persist_isolated_worker_failure(capture_id, exc)
         finally:
             capture_queue.task_done()
 

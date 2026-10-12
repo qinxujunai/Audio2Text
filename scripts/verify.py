@@ -102,6 +102,13 @@ def _quality_gate_env() -> dict[str, str]:
     env.setdefault("PYTHONUTF8", "1")
     env.setdefault("PYTHONIOENCODING", "utf-8")
     env.setdefault("PYTHONUNBUFFERED", "1")
+    # Verification deliberately injects transient failures to exercise retry
+    # and recovery boundaries. Keep those records out of the live product log
+    # so an operator can distinguish a real runtime incident from test noise.
+    env.setdefault(
+        "AUDIO2TEXT_LOGS_DIR",
+        str(PROJECT_ROOT / "workspace" / "temp" / "verify-logs"),
+    )
     apply_cuda_runtime_to_env(env)
     return env
 
@@ -144,7 +151,7 @@ def main() -> int:
         npm = _resolve_command("npm")
         commands.extend(
             [
-                ("frontend type check", [npm, "exec", "tsc", "--", "--noEmit"], WEB_DIR),
+                ("frontend type check", [_resolve_command("node"), str(WEB_DIR / "node_modules/typescript/bin/tsc"), "--noEmit"], WEB_DIR),
                 ("frontend build", [npm, "run", "build"], WEB_DIR),
             ]
         )

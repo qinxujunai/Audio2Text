@@ -5,15 +5,22 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+import httpx
 import app.pipeline as pipeline
 import app.extractors as extractors
 import app.source_adapters as source_adapters
 from app.browser_provider import (
+    BrowserMediaResult,
     BrowserProviderError,
+    _capture_page,
+    _classify_http_error,
     _douyin_chapter_text,
     _douyin_media_urls_from_detail,
+    _looks_like_xiaohongshu_full_url,
+    _normalize_browser_exception,
+    _page_http_status_error,
     _pick_preferred_media_url,
 )
 from app.extractors import (
@@ -31,8 +38,9 @@ from app.extractors import (
     extract_xiaoyuzhou,
 )
 from app.settings import BROWSER_PROFILE_DIR
-from app.main import _to_capture_envelope
+from app.main import _public_source_warnings, _to_capture_envelope
 from app.resolver import infer_source_item_id, resolve_url
+from app.url_safety import UnsafeExternalUrlError, assert_public_http_url
 from app.schemas import ProcessingStateModel, ResultDocumentModel, SourceMetaModel
 from scripts.run_transcribe import _normalize_requested_language, _should_convert_to_simplified
 
@@ -79,7 +87,40 @@ class _BrowserFailureAdapter(source_adapters.BaseSourceAdapter):
         ]
 
 
+class _UnexpectedThenSuccessAdapter(source_adapters.BaseSourceAdapter):
+    platform = "test_platform_unexpected"
+
+    def build_providers(self, resolved, capture_dir: Path, *, cookie_text: str = "", progress_callback=None):
+        return [
+            source_adapters.ProviderSpec("direct_provider", lambda: (_ for _ in ()).throw(RuntimeError("boom"))),
+            source_adapters.ProviderSpec(
+                "open_source_provider",
+                lambda: ExtractionOutcome(
+                    platform="test_platform_unexpected",
+                    content_type="article",
+                    title="fallback result",
+                    primary_text="fallback text",
+                    strategy=["fallback"],
+                ),
+            ),
+        ]
+
+
 class PlatformContractsTestCase(unittest.TestCase):
+    def test_public_url_guard_rejects_local_and_private_targets(self) -> None:
+        for url in ("http://127.0.0.1:9/nope", "http://localhost:8000/health", "https://[::1]/"):
+            with self.subTest(url=url):
+                with self.assertRaises(UnsafeExternalUrlError):
+                    assert_public_http_url(url)
+
+        with patch("app.url_safety.socket.getaddrinfo", return_value=[(2, 1, 6, "", ("10.0.0.8", 443))]):
+            with self.assertRaises(UnsafeExternalUrlError):
+                assert_public_http_url("https://internal.example.test/item")
+
+    def test_resolver_rejects_non_public_input_before_queueing(self) -> None:
+        with self.assertRaises(ValueError):
+            resolve_url("http://127.0.0.1:9/nope")
+
     def test_browser_network_risk_is_actionable(self) -> None:
         from app.browser_provider import _page_state_error
 
@@ -92,6 +133,50 @@ class PlatformContractsTestCase(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertEqual(error.reason_code, "browser_network_risk")
         self.assertTrue(error.retryable)
+
+    def test_browser_navigation_statuses_are_classified_before_content_markers(self) -> None:
+        not_found = _page_http_status_error(404)
+        restricted = _page_http_status_error(403)
+        transient = _page_http_status_error(503)
+
+        self.assertIsNotNone(not_found)
+        self.assertEqual(not_found.reason_code, "source_not_found")
+        self.assertFalse(not_found.retryable)
+        self.assertIsNotNone(restricted)
+        self.assertEqual(restricted.reason_code, "source_access_restricted")
+        self.assertFalse(restricted.retryable)
+        self.assertIsNotNone(transient)
+        self.assertEqual(transient.reason_code, "browser_request_failed")
+        self.assertTrue(transient.retryable)
+        self.assertIsNone(_page_http_status_error(200))
+
+    def test_generic_browser_fallback_does_not_apply_platform_page_markers(self) -> None:
+        rendered = ("https://example.com/login-guide", "Login guide", "", "This article explains not found pages.", [])
+        with patch("app.browser_provider._capture_page", return_value=rendered) as capture_page:
+            result = source_adapters.fetch_generic_page("https://example.com/login-guide")
+
+        capture_page.assert_called_once_with("https://example.com/login-guide", check_state=False)
+        self.assertEqual(result.body_text, rendered[3])
+
+    def test_xiaohongshu_unavailable_shell_is_not_misclassified_as_challenge(self) -> None:
+        from app.browser_provider import _page_state_error
+
+        error = _page_state_error(
+            "https://www.xiaohongshu.com/404?error_code=300031",
+            "小红书",
+            "当前笔记暂时无法浏览",
+        )
+
+        self.assertIsNotNone(error)
+        self.assertEqual(error.reason_code, "source_not_found")
+        self.assertFalse(error.retryable)
+
+    def test_xiaohongshu_mobile_and_default_port_urls_are_full_note_urls(self) -> None:
+        self.assertTrue(
+            _looks_like_xiaohongshu_full_url(
+                "https://m.xiaohongshu.com:443/explore/66b1e4b0000000001d00beef"
+            )
+        )
 
     def _xiaoyuzhou_episode_html(
         self,
@@ -137,18 +222,29 @@ class PlatformContractsTestCase(unittest.TestCase):
     def test_resolve_url_routes_all_supported_platforms(self) -> None:
         cases = {
             "https://youtu.be/dQw4w9WgXcQ": "youtube",
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ": "youtube",
+            "https://www.youtube.com:443/watch?v=dQw4w9WgXcQ": "youtube",
             "https://www.bilibili.com/video/BV1xx411c7mD": "bilibili",
             "https://www.xiaoyuzhoufm.com/episode/67f0146e64f12bfc04dca0d1": "xiaoyuzhou",
             "https://www.douyin.com/video/7482735026417366324": "douyin",
+            "https://m.douyin.com/video/7482735026417366324": "douyin",
             "https://jingxuan.douyin.com/m/video/7618980634866534834": "douyin",
             "https://www.xiaohongshu.com/explore/66b1e4b0000000001d00beef": "xiaohongshu",
+            "https://m.xiaohongshu.com/explore/66b1e4b0000000001d00beef": "xiaohongshu",
             "https://mp.weixin.qq.com/s/example": "wechat_article",
+            "https://cdn.example.com/audio/sample.m4a": "generic_web",
+            "https://cdn.example.com/audio/sample.ogg": "generic_web",
+            "https://cdn.example.com/video/sample.mp4?download=1": "generic_web",
         }
 
         for url, expected in cases.items():
             with self.subTest(url=url):
                 resolved = resolve_url(url)
                 self.assertEqual(resolved.platform, expected)
+
+        self.assertEqual(resolve_url("https://cdn.example.com/audio/sample.m4a").content_type, "audio")
+        self.assertEqual(resolve_url("https://cdn.example.com/audio/sample.ogg").content_type, "audio")
+        self.assertEqual(resolve_url("https://cdn.example.com/video/sample.mp4?download=1").content_type, "video")
 
     def test_bilibili_direct_contract_selects_subtitles_and_media(self) -> None:
         self.assertEqual(
@@ -241,6 +337,55 @@ class PlatformContractsTestCase(unittest.TestCase):
             ["direct_provider", "browser_provider", "open_source_provider"],
         )
 
+    def test_douyin_recycles_browser_session_once_after_fresh_cookie_challenge(self) -> None:
+        resolved = SimpleNamespace(normalized_url="https://www.douyin.com/video/1234567890")
+        capture_dir = Path(tempfile.gettempdir())
+        expected = ExtractionOutcome(
+            platform="douyin",
+            content_type="video",
+            title="demo",
+            media_file_path=str(capture_dir / "demo.mp4"),
+        )
+        challenge = extractors.ExtractionError(
+            "extract",
+            "需要刷新会话",
+            reason_code="douyin_fresh_cookies_required",
+            retryable=True,
+        )
+
+        with patch.object(
+            source_adapters.BaseSourceAdapter,
+            "extract",
+            side_effect=[challenge, expected],
+        ) as extract_once, patch.object(source_adapters, "refresh_browser_runtime") as refresh:
+            outcome = source_adapters.DouyinAdapter().extract(resolved, capture_dir)
+
+        self.assertIs(outcome, expected)
+        self.assertEqual(extract_once.call_count, 2)
+        refresh.assert_called_once_with()
+        self.assertEqual(outcome.warnings, ["浏览器会话已自动刷新并重试。"])
+
+    def test_douyin_does_not_loop_forever_when_session_refresh_does_not_help(self) -> None:
+        resolved = SimpleNamespace(normalized_url="https://www.douyin.com/video/1234567890")
+        challenge = extractors.ExtractionError(
+            "extract",
+            "需要刷新会话",
+            reason_code="douyin_fresh_cookies_required",
+            retryable=True,
+        )
+
+        with patch.object(
+            source_adapters.BaseSourceAdapter,
+            "extract",
+            side_effect=[challenge, challenge],
+        ) as extract_once, patch.object(source_adapters, "refresh_browser_runtime") as refresh:
+            with self.assertRaises(extractors.ExtractionError) as raised:
+                source_adapters.DouyinAdapter().extract(resolved, Path(tempfile.gettempdir()))
+
+        self.assertEqual(raised.exception.reason_code, "douyin_fresh_cookies_required")
+        self.assertEqual(extract_once.call_count, 2)
+        refresh.assert_called_once_with()
+
     def test_xiaohongshu_provider_order_excludes_generic_web_fallback(self) -> None:
         resolved = SimpleNamespace(normalized_url="https://www.xiaohongshu.com/explore/demo")
         providers = source_adapters.XiaohongshuAdapter().build_providers(resolved, Path(tempfile.gettempdir()))
@@ -291,6 +436,173 @@ class PlatformContractsTestCase(unittest.TestCase):
         self.assertEqual(outcome.fallback_chain, ["direct_provider", "open_source_provider"])
         self.assertGreaterEqual(len(outcome.provider_traces), 3)
         self.assertTrue(any("duration=" in (entry.detail or "") for entry in outcome.provider_traces))
+
+    def test_non_retryable_input_error_does_not_cool_down_provider(self) -> None:
+        adapter = _FallbackAdapter()
+        resolved = SimpleNamespace(normalized_url="https://example.com/deleted-item")
+        record_failure = Mock()
+
+        with patch.object(source_adapters, "provider_is_available", return_value=True), patch.object(
+            source_adapters, "record_provider_success", lambda *args, **kwargs: None
+        ), patch.object(source_adapters, "record_provider_failure", record_failure):
+            outcome = adapter.extract(resolved, Path(tempfile.gettempdir()))
+
+        self.assertEqual(outcome.extractor_used, "open_source_provider")
+        record_failure.assert_not_called()
+
+    def test_generic_web_uses_browser_fallback_after_direct_fetch_failure(self) -> None:
+        adapter = source_adapters.GenericWebAdapter()
+        resolved = SimpleNamespace(
+            normalized_url="https://example.com/javascript-page",
+            platform="generic_web",
+            content_type="webpage",
+        )
+        browser_result = BrowserMediaResult(
+            final_url=resolved.normalized_url,
+            title="Rendered page",
+            media_url="",
+            body_text="Content rendered by the browser.",
+            image_urls=[],
+            live_photo_video_urls=[],
+        )
+
+        with patch.object(
+            source_adapters,
+            "extract_generic_web",
+            side_effect=extractors.ExtractionError(
+                "extract",
+                "直连被来源站点拒绝",
+                reason_code="source_fetch_failed",
+                retryable=True,
+            ),
+        ), patch.object(source_adapters, "fetch_generic_page", return_value=browser_result), patch.object(
+            source_adapters, "provider_is_available", return_value=True
+        ), patch.object(source_adapters, "record_provider_success", lambda *args, **kwargs: None), patch.object(
+            source_adapters, "record_provider_failure", lambda *args, **kwargs: None
+        ):
+            outcome = adapter.extract(resolved, Path(tempfile.gettempdir()))
+
+        self.assertEqual(outcome.extractor_used, "browser_provider")
+        self.assertTrue(outcome.fallback_used)
+        self.assertEqual(outcome.fallback_chain, ["direct_provider", "browser_provider"])
+        self.assertEqual(outcome.primary_text, "Content rendered by the browser.")
+
+    def test_generic_web_delivers_browser_media_for_transcription(self) -> None:
+        adapter = source_adapters.GenericWebAdapter()
+        resolved = SimpleNamespace(
+            normalized_url="https://example.com/watch",
+            platform="generic_web",
+            content_type="webpage",
+        )
+        capture_dir = Path(tempfile.gettempdir()) / "audio2text_generic_browser_media"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        browser_result = BrowserMediaResult(
+            final_url=resolved.normalized_url,
+            title="Rendered video",
+            media_url="https://media.example.com/watch.mp4",
+            body_text="页面说明",
+            image_urls=[],
+            live_photo_video_urls=[],
+        )
+        media_path = capture_dir / "generic_browser_source.mp4"
+        with patch.object(source_adapters, "fetch_generic_page", return_value=browser_result), patch.object(
+            source_adapters, "_download_browser_media", return_value=media_path
+        ):
+            outcome = adapter._browser_extract(resolved, capture_dir)
+
+        self.assertEqual(outcome.content_type, "video")
+        self.assertEqual(outcome.primary_text, "")
+        self.assertEqual(outcome.notes_text, "页面说明")
+        self.assertEqual(outcome.media_file_path, str(media_path))
+        self.assertTrue(outcome.needs_transcription)
+
+    def test_generic_web_delivers_browser_audio_for_transcription(self) -> None:
+        adapter = source_adapters.GenericWebAdapter()
+        resolved = SimpleNamespace(
+            normalized_url="https://example.com/listen",
+            platform="generic_web",
+            content_type="webpage",
+        )
+        capture_dir = Path(tempfile.gettempdir()) / "audio2text_generic_browser_audio"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+        browser_result = BrowserMediaResult(
+            final_url=resolved.normalized_url,
+            title="Rendered audio",
+            media_url="https://media.example.com/episode.ogg",
+            body_text="音频说明",
+            image_urls=[],
+            live_photo_video_urls=[],
+        )
+        media_path = capture_dir / "generic_browser_source.mp3"
+        with patch.object(source_adapters, "fetch_generic_page", return_value=browser_result), patch.object(
+            source_adapters, "_download_browser_media", return_value=media_path
+        ):
+            outcome = adapter._browser_extract(resolved, capture_dir)
+
+        self.assertEqual(outcome.content_type, "audio")
+        self.assertEqual(outcome.media_file_path, str(media_path))
+        self.assertTrue(outcome.needs_transcription)
+
+    def test_unexpected_provider_exception_switches_to_fallback_without_leaking_error(self) -> None:
+        adapter = _UnexpectedThenSuccessAdapter()
+        resolved = SimpleNamespace(normalized_url="https://example.com/watch")
+
+        with patch.object(source_adapters, "provider_is_available", return_value=True), patch.object(
+            source_adapters, "record_provider_success", lambda *args, **kwargs: None
+        ), patch.object(source_adapters, "record_provider_failure", lambda *args, **kwargs: None):
+            outcome = adapter.extract(resolved, Path(tempfile.gettempdir()))
+
+        self.assertEqual(outcome.extractor_used, "open_source_provider")
+        self.assertTrue(outcome.fallback_used)
+        self.assertEqual(outcome.fallback_chain, ["direct_provider", "open_source_provider"])
+        trace_text = " ".join(
+            f"{entry.message} {entry.detail or ''}" for entry in outcome.provider_traces
+        )
+        self.assertNotIn("boom", trace_text)
+        self.assertIn("error_type=RuntimeError", trace_text)
+
+    def test_unexpected_network_provider_exception_keeps_retryable_reason(self) -> None:
+        class _NetworkOnlyAdapter(source_adapters.BaseSourceAdapter):
+            platform = "test_network"
+
+            def build_providers(self, resolved, capture_dir: Path, *, cookie_text: str = "", progress_callback=None):
+                return [
+                    source_adapters.ProviderSpec(
+                        "direct_provider",
+                        lambda: (_ for _ in ()).throw(ConnectionError("connection reset by peer")),
+                    )
+                ]
+
+        adapter = _NetworkOnlyAdapter()
+        resolved = SimpleNamespace(normalized_url="https://example.com/network")
+        with patch.object(source_adapters, "provider_is_available", return_value=True), patch.object(
+            source_adapters, "record_provider_success", lambda *args, **kwargs: None
+        ), patch.object(source_adapters, "record_provider_failure", lambda *args, **kwargs: None):
+            with self.assertRaises(source_adapters.ExtractionError) as context:
+                adapter.extract(resolved, Path(tempfile.gettempdir()))
+
+        self.assertEqual(context.exception.reason_code, "test_network_extract_network_failed")
+        self.assertTrue(context.exception.retryable)
+        self.assertNotIn("connection reset by peer", context.exception.message)
+
+    def test_public_source_warnings_remove_provider_diagnostics(self) -> None:
+        source = SimpleNamespace(
+            warnings=[
+                "直连提取失败：ERROR: [XiaoHongShu] No video formats found!",
+                "浏览器会话已自动切换备用路径。",
+                "C:\\workspace\\capture\\secret-token.txt",
+            ]
+        )
+
+        warnings = _public_source_warnings(source)
+
+        self.assertEqual(
+            warnings,
+            [
+                "部分提取路径暂未就绪，已自动切换备用路径。",
+                "浏览器会话已自动切换备用路径。",
+            ],
+        )
 
     def test_douyin_direct_metadata_probe_has_bounded_timeout(self) -> None:
         resolved = SimpleNamespace(normalized_url="https://www.douyin.com/video/1234567890123")
@@ -360,6 +672,71 @@ class PlatformContractsTestCase(unittest.TestCase):
         self.assertEqual(outcome.duration_seconds, 12.0)
         self.assertEqual(outcome.thumbnail_url, "https://example.com/poster.jpg")
         media_path.unlink(missing_ok=True)
+
+    def test_youtube_subtitle_first_keeps_subtitle_when_media_download_is_unavailable(self) -> None:
+        resolved = SimpleNamespace(normalized_url="https://youtu.be/demo")
+        subtitle_outcome = ExtractionOutcome(
+            platform="youtube",
+            content_type="video",
+            title="sample",
+            primary_text="hello subtitle",
+            subtitle_text="hello subtitle",
+            strategy=["youtube_transcript_api", "subtitle"],
+        )
+        download_error = extractors.ExtractionError(
+            "download",
+            "媒体下载失败：Requested format is not available",
+            reason_code="download_failed",
+            retryable=True,
+        )
+
+        with patch.object(source_adapters, "extract_youtube_transcript", return_value=subtitle_outcome), patch.object(
+            source_adapters, "extract_with_ytdlp", side_effect=download_error
+        ):
+            provider = source_adapters.YouTubeAdapter().build_providers(
+                resolved,
+                Path(tempfile.gettempdir()),
+            )[0]
+            outcome = provider.runner()
+
+        self.assertEqual(outcome.subtitle_text, "hello subtitle")
+        self.assertIsNone(outcome.media_file_path)
+        self.assertTrue(any("先交付字幕" in warning for warning in outcome.warnings))
+
+    def test_youtube_media_failure_does_not_repeat_identical_open_source_download(self) -> None:
+        resolved = SimpleNamespace(
+            normalized_url="https://youtu.be/demo",
+            platform="youtube",
+            content_type="video",
+        )
+        subtitle_outcome = ExtractionOutcome(
+            platform="youtube",
+            content_type="video",
+            title="sample",
+            subtitle_text="hello subtitle",
+            strategy=["youtube_transcript_api", "subtitle"],
+        )
+        download_error = extractors.ExtractionError(
+            "download",
+            "媒体下载失败：超时",
+            reason_code="download_failed",
+            retryable=True,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.object(
+            source_adapters, "provider_is_available", return_value=True
+        ), patch.object(
+            source_adapters, "record_provider_failure", lambda *args, **kwargs: None
+        ), patch.object(
+            source_adapters, "extract_youtube_transcript", return_value=subtitle_outcome
+        ), patch.object(
+            source_adapters, "extract_with_ytdlp", side_effect=download_error
+        ) as ytdlp_extract:
+            outcome = source_adapters.YouTubeAdapter().extract(resolved, Path(temp_dir))
+
+        self.assertEqual(outcome.subtitle_text, "hello subtitle")
+        self.assertEqual(ytdlp_extract.call_count, 1)
+        self.assertTrue(any("先交付字幕" in warning for warning in outcome.warnings))
 
     def test_ytdlp_subtitle_selection_prefers_original_language_manual_track(self) -> None:
         info = {
@@ -917,6 +1294,14 @@ class PlatformContractsTestCase(unittest.TestCase):
             ("youtube_video_unavailable", False),
         )
         self.assertEqual(
+            _classify_external_error(
+                "ERROR: [youtube] aaaaaaaaaaa: This video is unavailable",
+                platform="youtube",
+                stage="extract",
+            ),
+            ("youtube_video_unavailable", False),
+        )
+        self.assertEqual(
             _classify_external_error("ERROR: [Douyin] 123456: Fresh cookies are needed", platform="douyin", stage="extract"),
             ("douyin_fresh_cookies_required", True),
         )
@@ -928,6 +1313,49 @@ class PlatformContractsTestCase(unittest.TestCase):
             _classify_external_error("HTTP Error 412: Precondition Failed", platform="bilibili", stage="extract"),
             ("bilibili_extract_precondition_failed", True),
         )
+        self.assertEqual(
+            _classify_external_error(
+                "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol",
+                platform="douyin",
+                stage="extract",
+            ),
+            ("douyin_extract_network_failed", True),
+        )
+        for message, expected_suffix in (
+            ("HTTP Error 429: Too Many Requests", "rate_limited"),
+            ("HTTP Error 503: Service Unavailable", "server_unavailable"),
+            ("Temporary failure in name resolution", "network_failed"),
+            ("Connection reset by peer", "network_failed"),
+        ):
+            with self.subTest(message=message):
+                reason, retryable = _classify_external_error(
+                    message,
+                    platform="douyin",
+                    stage="extract",
+                )
+                self.assertTrue(reason.endswith(expected_suffix))
+                self.assertTrue(retryable)
+
+    def test_browser_network_errors_are_safe_and_retryable(self) -> None:
+        network_error = httpx.ConnectError("[SSL: UNEXPECTED_EOF_WHILE_READING] internal-url")
+        normalized = _normalize_browser_exception(network_error)
+        self.assertEqual(normalized.reason_code, "browser_network_failed")
+        self.assertTrue(normalized.retryable)
+        self.assertNotIn("internal-url", normalized.message)
+
+    def test_browser_http_statuses_are_safe_and_retryable(self) -> None:
+        for status, expected_reason in (
+            (429, "browser_rate_limited"),
+            (503, "browser_server_unavailable"),
+        ):
+            with self.subTest(status=status):
+                request = httpx.Request("GET", "https://example.invalid")
+                response = httpx.Response(status, request=request)
+                error = httpx.HTTPStatusError("raw upstream detail", request=request, response=response)
+                normalized = _classify_http_error(error)
+                self.assertEqual(normalized.reason_code, expected_reason)
+                self.assertTrue(normalized.retryable)
+                self.assertNotIn("raw upstream detail", normalized.message)
 
     def test_public_error_message_prefers_reason_code(self) -> None:
         self.assertEqual(
@@ -940,8 +1368,22 @@ class PlatformContractsTestCase(unittest.TestCase):
         )
         self.assertEqual(
             pipeline._public_error_message_with_reason("extract", "xiaohongshu_full_url_required"),
-            "这条小红书内容请从浏览器地址栏复制完整网页链接后再试。",
+            "小红书短链接暂时无法稳定展开，请从浏览器地址栏复制完整网页链接后再试。",
         )
+        self.assertEqual(
+            pipeline._public_error_message_with_reason("extract", "provider_unexpected_error"),
+            "当前提取路径暂时不稳定，已尝试备用路径；请稍后重试或更换公开内容。",
+        )
+
+    def test_public_error_message_does_not_leak_provider_details(self) -> None:
+        message = pipeline._public_error_message_with_reason(
+            "extract",
+            "new_provider_reason",
+            "ERROR: [provider] https://example.com/internal?id=abc KeyError('token')",
+        )
+        self.assertEqual(message, pipeline.PUBLIC_ERROR_MESSAGES["extract"])
+        self.assertNotIn("https://", message)
+        self.assertNotIn("KeyError", message)
 
     def test_public_error_message_covers_browser_session_reasons(self) -> None:
         self.assertEqual(

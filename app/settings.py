@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from scripts.config import (
@@ -52,8 +53,43 @@ PRODUCT_SLOGAN = "\u4E07\u8C61\u5165\u9875\uFF0C\u843D\u5B57\u6210\u6587\u3002"
 
 APP_DISPLAY_NAME = f"{PRODUCT_NAME} API"
 CODE_NAME = os.environ.get("RELAY_ENGINE_NAME", "capture_text")
-APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.1.0").strip() or "2.1.0"
-APP_COMMIT = os.environ.get("AUDIO2TEXT_COMMIT", "unknown").strip()[:40] or "unknown"
+APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.3.0").strip() or "2.3.0"
+
+
+def _detect_git_commit() -> str:
+    """Return a short local revision when the launcher did not provide one.
+
+    Release environments may not contain Git, so this is deliberately best
+    effort and keeps the existing ``unknown`` fallback.  The value is only
+    exposed as a sanitized diagnostic identifier by ``/health``.
+    """
+    configured = os.environ.get("AUDIO2TEXT_COMMIT", "").strip()
+    if configured:
+        return configured[:40]
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "--short=12", "HEAD"],
+            cwd=PROJECT_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    revision = completed.stdout.strip()
+    if (
+        completed.returncode != 0
+        or not revision
+        or any(char not in "0123456789abcdefABCDEF" for char in revision)
+    ):
+        return "unknown"
+    return revision[:40]
+
+
+APP_COMMIT = _detect_git_commit()
 DESKTOP_TOKEN = os.environ.get("AUDIO2TEXT_DESKTOP_TOKEN", "").strip()
 RUNTIME_TARGET = os.environ.get(
     "AUDIO2TEXT_RUNTIME_TARGET",
@@ -66,10 +102,17 @@ RUNTIME_PACK_MANIFEST = Path(
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 WEB_APP_DIR = PROJECT_ROOT / "web"
 WEB_DIST_DIR = FRONTEND_DIR / "dist"
+FRONTEND_BUILD_MANIFEST = WEB_DIST_DIR / "build-manifest.json"
 CAPTURES_DIR = WORKSPACE_DIR / "captures"
 ARTIFACTS_DIR = WORKSPACE_DIR / "artifacts"
 CACHE_DIR = WORKSPACE_DIR / "cache"
 BROWSER_PROFILE_DIR = RUNTIME_DIR / "browser-profile"
+BROWSER_RUNTIME_MAX_TASKS = max(1, int(os.environ.get("BROWSER_RUNTIME_MAX_TASKS", "40")))
+BROWSER_RUNTIME_IDLE_SECONDS = max(60, int(os.environ.get("BROWSER_RUNTIME_IDLE_SECONDS", "1800")))
+# A transient source or browser connection can fail once while the upstream
+# is still healthy. Give it two bounded automatic retries, while the pipeline
+# still excludes user-action and permanent-unavailable reason codes.
+AUTOMATIC_RETRY_LIMIT = max(0, int(os.environ.get("AUDIO2TEXT_AUTOMATIC_RETRY_LIMIT", "2")))
 
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(PLAYWRIGHT_BROWSERS_DIR))
 
@@ -130,7 +173,7 @@ RELAY_RUN_MODE = os.environ.get("RELAY_RUN_MODE", "local").strip().lower() or "l
 RELAY_AUTO_START_WORKER = os.environ.get("RELAY_AUTO_START_WORKER", "1").strip().lower() in {"1", "true", "yes", "on"}
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0 Safari/537.36"
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36"
 )
 
 def read_cookie_payload(raw_text: str | None) -> str:

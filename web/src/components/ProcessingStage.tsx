@@ -1,7 +1,7 @@
-import { LogIn, RotateCcw } from "lucide-react";
+import { FolderOpen, LogIn, RotateCcw } from "lucide-react";
 import { motion } from "motion/react";
 
-type ProcessingPhase = "bootstrapping" | "processing" | "failed";
+type ProcessingPhase = "bootstrapping" | "processing" | "attention";
 
 type ProcessingStageProps = {
   phase: ProcessingPhase;
@@ -14,13 +14,21 @@ type ProcessingStageProps = {
   onReset?: () => void;
   onRetry?: () => void;
   onRefreshSession?: () => void;
+  onOpenPlatformSession?: () => void;
+  platformActionLabel?: string;
+  onDiagnostics?: () => void;
 };
 
 export function safeProgressDetail(raw: string | undefined): string {
   if (!raw) return "";
   const text = raw.trim();
   if (/^[a-zA-Z_]+Error/i.test(text)) return "";
-  if (/Traceback|Exception|FileNotFound|\.py"/i.test(text)) return "";
+  if (
+    /Traceback|Exception|FileNotFound|\.py"|https?:\/\/|HTTP\s+Error|KeyError|yt[-_ ]?dlp|ERROR\s*:/i.test(text) ||
+    /失败|出错|异常|错误|报错|未能|无法/i.test(text)
+  ) {
+    return "";
+  }
   if (/^\s*[{[]/.test(text)) return "";
   return text.length > 80 ? text.slice(0, 78) + "…" : text;
 }
@@ -36,6 +44,9 @@ export function ProcessingStage({
   onReset,
   onRetry,
   onRefreshSession,
+  onOpenPlatformSession,
+  platformActionLabel,
+  onDiagnostics,
 }: ProcessingStageProps) {
   const normalizedProgress = Math.min(
     100,
@@ -45,27 +56,26 @@ export function ProcessingStage({
 
   return (
     <section
-      className={
-        phase === "failed" ? "processing-stage is-failed" : "processing-stage"
-      }
+      aria-busy={phase === "bootstrapping" || phase === "processing"}
+      className={phase === "attention" ? "processing-stage is-attention" : "processing-stage"}
     >
       <div className="processing-shell">
-        {phase !== "failed" ? (
+        {phase === "bootstrapping" || phase === "processing" ? (
           <div className="processing-indicator" aria-hidden="true">
             <span className="processing-indicator-ring" />
             <span className="processing-indicator-core" />
           </div>
         ) : null}
 
-        <div className="processing-copy">
-          {phase === "failed" ? (
+        <div className="processing-copy" role="status" aria-live="polite" aria-atomic="true">
+          {phase === "attention" ? (
             <span className="eyebrow">{eyebrow}</span>
           ) : null}
           <h2>{title}</h2>
           <p>{description}</p>
         </div>
 
-        {phase !== "failed" ? (
+        {phase === "bootstrapping" || phase === "processing" ? (
           <div
             className="processing-meter"
             aria-label={`当前进度 ${normalizedProgress}%`}
@@ -85,12 +95,18 @@ export function ProcessingStage({
           </div>
         ) : null}
 
-        {phase === "failed" ? (
+        {phase === "attention" ? (
           <div className="processing-actions">
-            {onRefreshSession ? (
-              <button className="retry-button" onClick={onRefreshSession} type="button">
+            {onOpenPlatformSession ? (
+              <button className="retry-button" onClick={onOpenPlatformSession} type="button">
                 <LogIn size={16} aria-hidden="true" />
-                打开平台完成验证
+                {platformActionLabel || "打开平台完成验证"}
+              </button>
+            ) : null}
+            {onRefreshSession ? (
+              <button className="retry-button is-secondary" onClick={onRefreshSession} type="button">
+                <RotateCcw size={16} aria-hidden="true" />
+                完成后重新检查
               </button>
             ) : null}
             {onRetry ? (
@@ -102,6 +118,12 @@ export function ProcessingStage({
             {onReset ? (
               <button className="retry-button is-secondary" onClick={onReset} type="button">
                 返回首页
+              </button>
+            ) : null}
+            {onDiagnostics ? (
+              <button className="retry-button is-secondary" onClick={onDiagnostics} type="button">
+                <FolderOpen size={16} aria-hidden="true" />
+                查看诊断
               </button>
             ) : null}
           </div>

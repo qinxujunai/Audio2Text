@@ -38,7 +38,7 @@ export function RuntimeSetup({ packs, busy, error, onInstall }: RuntimeSetupProp
         {busy ? <LoaderCircle className="is-spinning" size={18} /> : <Download size={18} />}
         <span>{busy ? "正在安全安装" : "安装并继续"}</span>
       </button>
-      <p className="runtime-setup-note">文件会经过完整性校验，安装失败不会覆盖现有组件。</p>
+      <p className="runtime-setup-note">文件会经过完整性校验；中途退出也不会覆盖现有组件。</p>
     </section>
   );
 }

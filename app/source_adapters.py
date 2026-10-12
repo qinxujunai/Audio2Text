@@ -12,8 +12,10 @@ import httpx
 from app.browser_provider import (
     BrowserProviderError,
     fetch_douyin_media,
+    fetch_generic_page,
     fetch_wechat_page,
     fetch_xiaohongshu_page,
+    refresh_browser_runtime,
     resolve_xiaohongshu_share_url,
 )
 from app.extractors import (
@@ -21,6 +23,7 @@ from app.extractors import (
     ExtractionOutcome,
     ProviderTraceEntry,
     ProgressCallback,
+    _classify_external_error,
     extract_bilibili_direct,
     extract_douyin_direct,
     extract_generic_web,
@@ -32,6 +35,7 @@ from app.extractors import (
 from app.provider_state import provider_is_available, record_provider_failure, record_provider_success
 from app.resolver import ResolvedSource
 from app.settings import CN_PLATFORM_PROXY, CN_PLATFORM_RELAY_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, DEPLOYMENT_MODE
+from app.url_safety import UnsafeExternalUrlError, assert_public_http_url
 
 
 ProviderRunner = Callable[[], ExtractionOutcome]
@@ -107,12 +111,68 @@ def _append_provider_trace(
     )
 
 
+def _record_retryable_provider_failure(provider_key: str, error: BaseException) -> None:
+    """Cool down a provider only for failures that can recover.
+
+    A deleted/private/invalid item is a property of the input, not of the
+    provider. Counting those errors toward the shared cooldown used to let a
+    couple of bad links suppress a healthy extractor for every later user.
+    """
+
+    if bool(getattr(error, "retryable", True)):
+        record_provider_failure(provider_key)
+
+
 def _browser_error_to_extraction_error(exc: BrowserProviderError) -> ExtractionError:
     return ExtractionError(
         "extract",
         getattr(exc, "message", str(exc)),
         reason_code=getattr(exc, "reason_code", "browser_provider_failed"),
         retryable=getattr(exc, "retryable", True),
+    )
+
+
+def _unexpected_provider_failure(
+    provider_name: str,
+    exc: Exception,
+    *,
+    platform: str = "",
+) -> ExtractionError:
+    """Turn an adapter bug/runtime fault into a safe, retryable fallback signal.
+
+    Provider implementations are deliberately isolated from the adapter loop.  A
+    third-party parser, browser callback, or optional dependency must not abort
+    the entire extraction before the next provider gets a chance.  Keep the
+    exception type for diagnostics, but never copy its message into user-facing
+    warnings or provider traces because it may contain URLs, paths, or secrets.
+    """
+
+    label = _provider_label(provider_name)
+    classified_reason, classified_retryable = _classify_external_error(
+        str(exc),
+        platform=platform,
+        stage="extract",
+    )
+    if classified_reason.endswith(("_network_failed", "_server_unavailable", "_rate_limited", "_timeout")):
+        reason_code = classified_reason
+        retryable = classified_retryable
+    else:
+        reason_code = "provider_unexpected_error"
+        retryable = True
+    return ExtractionError(
+        "extract",
+        f"{label}暂时不可用，正在尝试备用路径。",
+        reason_code=reason_code,
+        retryable=retryable,
+        provider_traces=[
+            ProviderTraceEntry(
+                stage="extract",
+                level="warning",
+                provider=provider_name,
+                message=f"{label}出现未预期异常，已切换备用路径。",
+                detail=f"error_type={type(exc).__name__}",
+            )
+        ],
     )
 
 
@@ -182,7 +242,7 @@ def _source_id_from_xiaohongshu_url(url: str) -> str:
 
 def _xiaohongshu_needs_full_web_url(resolved: ResolvedSource) -> bool:
     parsed = urlparse(resolved.normalized_url)
-    host = (parsed.netloc or "").lower()
+    host = (parsed.hostname or "").lower().rstrip(".")
     if host == "xhslink.com":
         return True
     if not host.endswith("xiaohongshu.com"):
@@ -192,7 +252,7 @@ def _xiaohongshu_needs_full_web_url(resolved: ResolvedSource) -> bool:
 
 
 def _xiaohongshu_full_url_error() -> str:
-    return "这条小红书内容暂时还不能处理成功，请从浏览器地址栏复制完整网页链接后再试。"
+    return "小红书短链接暂时无法稳定展开，请从浏览器地址栏复制完整网页链接后再试。"
 
 
 def _recover_xiaohongshu_resolved_source(resolved: ResolvedSource) -> ResolvedSource:
@@ -218,16 +278,23 @@ def _download_browser_media(
     progress_start: int = 36,
     progress_end: int = 50,
     platform: str | None = None,
+    timeout_seconds: float | None = None,
+    max_attempts: int = 3,
 ) -> Path:
+    try:
+        assert_public_http_url(url)
+    except UnsafeExternalUrlError as exc:
+        raise ExtractionError("download", str(exc), reason_code="unsafe_url", retryable=False) from exc
     target_path.parent.mkdir(parents=True, exist_ok=True)
     headers = {
         "User-Agent": DEFAULT_USER_AGENT,
         "Referer": referer,
     }
+    request_timeout = max(1.0, float(timeout_seconds or DEFAULT_TIMEOUT_SECONDS))
     client_kwargs = {
         "follow_redirects": True,
         "headers": headers,
-        "timeout": DEFAULT_TIMEOUT_SECONDS,
+        "timeout": request_timeout,
         "trust_env": False,
     }
     if CN_PLATFORM_PROXY and platform in {"douyin", "xiaohongshu"}:
@@ -240,7 +307,7 @@ def _download_browser_media(
             with httpx.Client(
                 follow_redirects=True,
                 headers={"User-Agent": DEFAULT_USER_AGENT},
-                timeout=DEFAULT_TIMEOUT_SECONDS * 4,
+                timeout=request_timeout * 4,
                 trust_env=False,
             ) as client:
                 resp = client.get(relay_url)
@@ -260,7 +327,7 @@ def _download_browser_media(
                 retryable=True,
             ) from exc
     last_error: httpx.HTTPError | None = None
-    for _ in range(3):
+    for _ in range(max(1, int(max_attempts))):
         try:
             target_path.unlink(missing_ok=True)
             with httpx.Client(**client_kwargs) as client:
@@ -426,8 +493,8 @@ class BaseSourceAdapter:
                 return _prepend_warnings(outcome, failures)
             except BrowserProviderError as exc:
                 provider_duration = time.perf_counter() - provider_started if provider_started else 0.0
-                record_provider_failure(health_key)
                 last_error = _browser_error_to_extraction_error(exc)
+                _record_retryable_provider_failure(health_key, last_error)
                 failures.append(f"{_provider_label(provider.name)}失败：{exc.message}")
                 _append_provider_trace(
                     provider_traces,
@@ -438,7 +505,7 @@ class BaseSourceAdapter:
                 )
             except ExtractionError as exc:
                 provider_duration = time.perf_counter() - provider_started if provider_started else 0.0
-                record_provider_failure(health_key)
+                _record_retryable_provider_failure(health_key, exc)
                 last_error = exc
                 failures.append(f"{_provider_label(provider.name)}失败：{exc.message}")
                 _append_provider_trace(
@@ -448,6 +515,17 @@ class BaseSourceAdapter:
                     message=f"{_provider_label(provider.name)}失败。",
                     detail=_duration_detail(provider_duration, exc.message),
                 )
+            except Exception as exc:
+                provider_duration = time.perf_counter() - provider_started if provider_started else 0.0
+                record_provider_failure(health_key)
+                last_error = _unexpected_provider_failure(provider.name, exc, platform=self.platform)
+                failures.append(f"{_provider_label(provider.name)}暂时不可用，已自动切换备用路径。")
+                last_error.provider_traces[0].detail = _duration_detail(
+                    provider_duration,
+                    f"error_type={type(exc).__name__}",
+                )
+                provider_traces.extend(last_error.provider_traces)
+                last_error.provider_traces = []
 
         if last_error is not None:
             last_error.warnings = failures + list(last_error.warnings)
@@ -493,6 +571,7 @@ class BaseSourceAdapter:
                 except BrowserProviderError as exc:
                     provider_duration = time.perf_counter() - provider_started if provider_started else 0.0
                     last_error = _browser_error_to_extraction_error(exc)
+                    _record_retryable_provider_failure(health_key, last_error)
                     failures.append(f"{_provider_label(provider.name)}失败：{exc.message}")
                     _append_provider_trace(
                         provider_traces,
@@ -504,6 +583,7 @@ class BaseSourceAdapter:
                 except ExtractionError as exc:
                     provider_duration = time.perf_counter() - provider_started if provider_started else 0.0
                     last_error = exc
+                    _record_retryable_provider_failure(health_key, exc)
                     failures.append(f"{_provider_label(provider.name)}失败：{exc.message}")
                     _append_provider_trace(
                         provider_traces,
@@ -512,6 +592,16 @@ class BaseSourceAdapter:
                         message=f"{_provider_label(provider.name)}失败。",
                         detail=_duration_detail(provider_duration, exc.message),
                     )
+                except Exception as exc:
+                    provider_duration = time.perf_counter() - provider_started if provider_started else 0.0
+                    last_error = _unexpected_provider_failure(provider.name, exc, platform=self.platform)
+                    failures.append(f"{_provider_label(provider.name)}暂时不可用，已自动切换备用路径。")
+                    last_error.provider_traces[0].detail = _duration_detail(
+                        provider_duration,
+                        f"error_type={type(exc).__name__}",
+                    )
+                    provider_traces.extend(last_error.provider_traces)
+                    last_error.provider_traces = []
             if last_error is not None:
                 last_error.warnings = failures + list(last_error.warnings)
                 last_error.provider_traces = [*provider_traces, *last_error.provider_traces]
@@ -543,6 +633,72 @@ class LocalFileAdapter(BaseSourceAdapter):
 class GenericWebAdapter(BaseSourceAdapter):
     platform = "generic_web"
 
+    @staticmethod
+    def _media_type(url: str, fallback: str = "webpage") -> str:
+        suffix = Path(urlparse(url).path or "").suffix.lower()
+        if fallback in {"audio", "video"}:
+            return fallback
+        if suffix in {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus"}:
+            return "audio"
+        if suffix in {".mp4", ".mov", ".mkv", ".webm", ".m3u8"}:
+            return "video"
+        return "video"
+
+    def _browser_extract(
+        self,
+        resolved: ResolvedSource,
+        capture_dir: Path,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> ExtractionOutcome:
+        if progress_callback is not None:
+            progress_callback(32, "正在通过浏览器会话补全网页内容。")
+        browser_result = fetch_generic_page(resolved.normalized_url)
+        body_text = browser_result.body_text.strip()
+        image_urls = list(browser_result.image_urls)
+        if browser_result.media_url:
+            content_type = self._media_type(browser_result.media_url, resolved.content_type)
+            media_path = capture_dir / (
+                "generic_browser_source.mp3" if content_type == "audio" else "generic_browser_source.mp4"
+            )
+            if progress_callback is not None:
+                progress_callback(36, "正在下载原媒体文件。")
+            _download_browser_media(
+                browser_result.media_url,
+                media_path,
+                browser_result.final_url,
+                progress_callback=progress_callback,
+                progress_start=36,
+                progress_end=50,
+            )
+            if progress_callback is not None:
+                progress_callback(50, "原媒体已就绪，正在准备转写。")
+            return ExtractionOutcome(
+                platform=resolved.platform,
+                content_type=content_type,
+                title=browser_result.title or browser_result.final_url,
+                canonical_url=browser_result.final_url,
+                description=body_text[:140],
+                strategy=["browser_session", "media_direct"] + (["page_text"] if body_text else []),
+                notes_text=body_text[:5000],
+                media_file_path=str(media_path),
+                needs_transcription=True,
+            )
+        content_type = "image_article" if image_urls else (resolved.content_type or "webpage")
+        return ExtractionOutcome(
+            platform=resolved.platform,
+            content_type=content_type,
+            title=browser_result.title or browser_result.final_url,
+            canonical_url=browser_result.final_url,
+            description=body_text[:140],
+            image_urls=image_urls,
+            thumbnail_url=image_urls[0] if image_urls else None,
+            strategy=["browser_session", "page_images", "page_text"] if image_urls else ["browser_session", "page_text"],
+            article_text=body_text,
+            primary_text=body_text,
+            needs_transcription=False,
+        )
+
     def build_providers(
         self,
         resolved: ResolvedSource,
@@ -551,7 +707,26 @@ class GenericWebAdapter(BaseSourceAdapter):
         cookie_text: str = "",
         progress_callback: ProgressCallback | None = None,
     ) -> list[ProviderSpec]:
-        return [ProviderSpec("direct_provider", lambda: extract_generic_web(resolved))]
+        browser_provider = ProviderSpec(
+            "browser_provider",
+            lambda: self._browser_extract(resolved, capture_dir, progress_callback=progress_callback),
+        )
+        open_source_provider = ProviderSpec(
+            "open_source_provider",
+            lambda: extract_with_ytdlp(
+                resolved,
+                capture_dir,
+                cookie_text=cookie_text,
+                progress_callback=progress_callback,
+            ),
+        )
+        if resolved.content_type in {"audio", "video"}:
+            return [browser_provider, open_source_provider]
+        return [
+            ProviderSpec("direct_provider", lambda: extract_generic_web(resolved)),
+            browser_provider,
+            open_source_provider,
+        ]
 
     def validate_outcome(self, resolved: ResolvedSource, outcome: ExtractionOutcome) -> ExtractionOutcome:
         if resolved.platform == "wechat_article":
@@ -649,6 +824,16 @@ class WechatArticleAdapter(BaseSourceAdapter):
                 message="直连提取失败。",
                 detail=exc.message,
             )
+        except Exception as exc:
+            direct_error = _unexpected_provider_failure("direct_provider", exc, platform=self.platform)
+            failures.append("直连提取暂时不可用，已自动切换浏览器会话。")
+            _append_provider_trace(
+                provider_traces,
+                level="warning",
+                provider="direct_provider",
+                message="直连提取出现未预期异常，已切换备用路径。",
+                detail=f"error_type={type(exc).__name__}",
+            )
 
         _append_provider_trace(provider_traces, level="info", provider="browser_provider", message="开始尝试浏览器会话。")
         try:
@@ -702,6 +887,24 @@ class WechatArticleAdapter(BaseSourceAdapter):
             exc.warnings = failures + list(exc.warnings)
             exc.provider_traces = [*provider_traces, *exc.provider_traces]
             raise exc
+        except Exception as exc:
+            browser_error = _unexpected_provider_failure("browser_provider", exc, platform=self.platform)
+            failures.append("浏览器会话暂时不可用，已自动保留直连结果。")
+            _append_provider_trace(
+                provider_traces,
+                level="warning",
+                provider="browser_provider",
+                message="浏览器会话出现未预期异常，已切换备用路径。",
+                detail=f"error_type={type(exc).__name__}",
+            )
+            if direct_outcome is not None:
+                direct_outcome.extractor_used = "direct_provider"
+                direct_outcome.fallback_chain = ["direct_provider"]
+                direct_outcome.provider_traces = [*provider_traces, *direct_outcome.provider_traces]
+                return _prepend_warnings(direct_outcome, failures)
+            browser_error.provider_traces = [*provider_traces]
+            browser_error.warnings = failures + list(browser_error.warnings)
+            raise browser_error
 
 
 class YouTubeAdapter(BaseSourceAdapter):
@@ -724,8 +927,24 @@ class YouTubeAdapter(BaseSourceAdapter):
                 progress_callback=progress_callback,
             )
         except ExtractionError as exc:
-            outcome.warnings.append(f"原视频下载失败，当前仅保留字幕结果：{exc.message}")
-            return outcome
+            # The transcript is already a valid primary result. Media is an
+            # enhancement for preview/download; if its bounded download path
+            # is unavailable, keep the text and let the result page explain
+            # the degraded delivery instead of turning the whole capture into
+            # an actionable failure state.
+            if exc.stage == "download" or exc.reason_code == "download_failed":
+                outcome.warnings = [
+                    *outcome.warnings,
+                    "原视频文件暂未就绪，已先交付字幕结果。",
+                    *exc.warnings,
+                ]
+                return outcome
+            exc.warnings = [
+                *outcome.warnings,
+                "原视频文件暂未就绪，正在切换备用提取路径。",
+                *exc.warnings,
+            ]
+            raise
 
         if media_outcome.media_file_path and Path(media_outcome.media_file_path).exists():
             outcome.media_file_path = media_outcome.media_file_path
@@ -846,6 +1065,49 @@ class XiaoyuzhouAdapter(BaseSourceAdapter):
 class DouyinAdapter(BaseSourceAdapter):
     platform = "douyin"
 
+    def extract(
+        self,
+        resolved: ResolvedSource,
+        capture_dir: Path,
+        *,
+        cookie_text: str = "",
+        progress_callback: ProgressCallback | None = None,
+    ) -> ExtractionOutcome:
+        """Retry once after a transient Douyin session challenge.
+
+        Douyin can return a fresh-cookie challenge for an otherwise public
+        video when the persistent browser context has become stale.  The
+        browser provider and yt-dlp then report different versions of the same
+        transient condition.  Recycle the isolated context once and replay
+        the bounded provider chain before surfacing an actionable state.
+        """
+        try:
+            return super().extract(
+                resolved,
+                capture_dir,
+                cookie_text=cookie_text,
+                progress_callback=progress_callback,
+            )
+        except ExtractionError as exc:
+            if exc.reason_code not in {
+                "douyin_fresh_cookies_required",
+                "browser_challenge_required",
+                "browser_session_expired",
+            }:
+                raise
+            refresh_browser_runtime()
+            retried = super().extract(
+                resolved,
+                capture_dir,
+                cookie_text=cookie_text,
+                progress_callback=progress_callback,
+            )
+            retried.warnings = [
+                "浏览器会话已自动刷新并重试。",
+                *list(retried.warnings),
+            ]
+            return retried
+
     def _browser_extract(
         self,
         resolved: ResolvedSource,
@@ -855,7 +1117,10 @@ class DouyinAdapter(BaseSourceAdapter):
     ) -> ExtractionOutcome:
         if progress_callback is not None:
             progress_callback(28, "正在通过浏览器会话解析页面。")
-        browser_result = fetch_douyin_media(resolved.normalized_url)
+        # Keep the direct and browser providers from serially consuming
+        # several unbounded network windows. If this bounded browser attempt
+        # cannot deliver media, the adapter can still move to yt-dlp.
+        browser_result = fetch_douyin_media(resolved.normalized_url, goto_timeout_ms=25_000)
         page_text = browser_result.body_text.strip()
         chapter_outline = _looks_like_douyin_chapter_outline(page_text)
         notes_text = "" if chapter_outline else page_text[:280].strip()
@@ -872,6 +1137,8 @@ class DouyinAdapter(BaseSourceAdapter):
                 progress_start=36,
                 progress_end=50,
                 platform="douyin",
+                timeout_seconds=15.0,
+                max_attempts=2,
             )
             if progress_callback is not None:
                 progress_callback(50, "原视频已就绪，正在准备转写。")
@@ -930,7 +1197,7 @@ class DouyinAdapter(BaseSourceAdapter):
                     resolved,
                     capture_dir,
                     progress_callback=progress_callback,
-                    metadata_timeout_seconds=45.0,
+                    metadata_timeout_seconds=25.0,
                 ),
             ),
             ProviderSpec(
@@ -1105,6 +1372,12 @@ class XiaohongshuAdapter(BaseSourceAdapter):
                     detail=browser_error,
                 )
             )
+        except Exception as exc:
+            unexpected = _unexpected_provider_failure("browser_provider", exc, platform=self.platform)
+            browser_error = unexpected.message
+            browser_reason_code = unexpected.reason_code
+            browser_retryable = unexpected.retryable
+            provider_traces.extend(unexpected.provider_traces)
 
         try:
             provider_traces.append(
@@ -1153,6 +1426,8 @@ class XiaohongshuAdapter(BaseSourceAdapter):
                 "browser_challenge_required",
                 "browser_session_expired",
                 "browser_network_risk",
+                "source_not_found",
+                "source_access_restricted",
             } and browser_error:
                 raise ExtractionError(
                     "extract",
@@ -1165,6 +1440,31 @@ class XiaohongshuAdapter(BaseSourceAdapter):
             exc.warnings = ([browser_error] if browser_error else []) + list(exc.warnings)
             exc.provider_traces = list(provider_traces)
             raise
+        except Exception as exc:
+            unexpected = _unexpected_provider_failure("open_source_provider", exc, platform=self.platform)
+            provider_traces.extend(unexpected.provider_traces)
+            if browser_outcome is not None:
+                browser_outcome.fallback_used = False
+                browser_outcome.provider_traces = list(provider_traces)
+                return _prepend_warnings(browser_outcome, [browser_error] if browser_error else [])
+            if browser_reason_code in {
+                "browser_challenge_required",
+                "browser_session_expired",
+                "browser_network_risk",
+                "source_not_found",
+                "source_access_restricted",
+            } and browser_error:
+                raise ExtractionError(
+                    "extract",
+                    browser_error,
+                    warnings=[browser_error],
+                    reason_code=browser_reason_code,
+                    retryable=browser_retryable,
+                    provider_traces=list(provider_traces),
+                ) from exc
+            unexpected.provider_traces = list(provider_traces)
+            unexpected.warnings = ([browser_error] if browser_error else []) + list(unexpected.warnings)
+            raise unexpected
 
     def validate_outcome(self, resolved: ResolvedSource, outcome: ExtractionOutcome) -> ExtractionOutcome:
         if _xiaohongshu_needs_full_web_url(resolved):
