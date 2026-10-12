@@ -1385,6 +1385,16 @@ class PlatformContractsTestCase(unittest.TestCase):
         self.assertNotIn("https://", message)
         self.assertNotIn("KeyError", message)
 
+    def test_youtube_login_failure_explains_local_file_fallback(self) -> None:
+        message = pipeline._public_error_message_with_reason(
+            "extract", "youtube_login_required", "ERROR: [youtube] Sign in token=private-fixture"
+        )
+        self.assertIn("YouTube", message)
+        self.assertIn("登录", message)
+        self.assertIn("本地音视频", message)
+        self.assertNotIn("private-fixture", message)
+        self.assertNotIn("ERROR", message)
+
     def test_public_error_message_covers_browser_session_reasons(self) -> None:
         self.assertEqual(
             pipeline._public_error_message_with_reason("extract", "browser_runtime_missing"),

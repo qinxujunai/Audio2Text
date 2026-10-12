@@ -1865,6 +1865,8 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
         return "这里只能处理公开网页地址，请不要提交本机或内网链接。"
     if reason_code == "youtube_video_unavailable":
         return "这条 YouTube 视频当前不可访问、已下架，或不再公开。请换一条公开视频再试。"
+    if reason_code == "youtube_login_required":
+        return "YouTube 当前要求登录或验证身份，暂时无法读取这条链接。你可以上传已获得的本地音视频文件，或换一条可直接访问的公开视频。"
     if reason_code == "youtube_transcript_unavailable":
         return "这条 YouTube 视频当前没有可用字幕，媒体回退也没有拿到结果。请稍后再试，或换一条带字幕的视频。"
     if reason_code in {"youtube_extract_timeout", "youtube_extract_network_failed"}:

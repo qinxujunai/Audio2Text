@@ -54,6 +54,45 @@ def ci_debug_policy(environment: dict[str, str], data_root: Path):
                 winreg.SetValueEx(key, "wanxiang-chengwen.exe", 0, previous[1], previous[0])
 
 
+def close_owned_main_window(process: subprocess.Popen) -> dict:
+    """Close only this CI app's product window, never Tao's visible event target."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.PostMessageW.restype = wintypes.BOOL
+    user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+    user32.GetDpiForWindow.restype = wintypes.UINT
+    windows = []
+    @callback_type
+    def callback(handle, unused):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(handle, ctypes.byref(owner))
+        if owner.value == process.pid:
+            name = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(handle, name, len(name))
+            if name.value == "Tauri Window":
+                windows.append(handle)
+        return True
+    user32.EnumWindows(callback, 0)
+    if len(windows) != 1:
+        raise RuntimeError("One owned product window is required for normal shutdown acceptance.")
+    dpi = user32.GetDpiForWindow(windows[0])
+    if not dpi:
+        raise RuntimeError("Native product window DPI could not be read.")
+    started = time.monotonic()
+    if not user32.PostMessageW(windows[0], 0x0010, 0, 0):
+        raise RuntimeError("Owned product window close request failed.")
+    code = process.wait(timeout=15)
+    if code != 0:
+        raise RuntimeError("Native application returned a nonzero exit code.")
+    return {"exit_code": code, "elapsed_ms": round((time.monotonic() - started) * 1000, 2), "window_dpi": dpi}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--installer", type=Path, required=True)
@@ -139,6 +178,7 @@ def main() -> int:
                     except PlaywrightTimeoutError:
                         pass
             page.set_default_timeout(30000)
+            report["checks"]["native_viewport"] = page.evaluate("() => ({width:innerWidth,height:innerHeight,device_scale:devicePixelRatio})")
             errors = []
             page.on("pageerror", lambda error: errors.append(type(error).__name__))
             page.get_by_role("button", name="安装并继续", exact=True).wait_for()
@@ -186,8 +226,10 @@ def main() -> int:
                 report["checks"]["native_downloads"] = [item["file_name"] for item in saved]
                 page.screenshot(path=str(args.output.parent / "clean-cpu-result.png"))
                 assert not errors
-                report["passed"] = True
             browser.close()
+        stage = "idle_native_shutdown"
+        report["checks"]["idle_native_shutdown"] = close_owned_main_window(process)
+        report["passed"] = True
     except Exception as error:
         report.update(failed_stage=stage, error_type=type(error).__name__)
     finally:
