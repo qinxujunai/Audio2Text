@@ -1510,6 +1510,18 @@ class UISmokeTestCase(unittest.TestCase):
         self.assertTrue(self.page.get_by_role("button", name="打开平台完成验证").is_visible())
         self.assertTrue(self.page.get_by_role("button", name="完成后重新检查").is_visible())
 
+    def test_retired_youtube_input_stays_home_and_offers_local_file(self) -> None:
+        self.page.goto(self.base_url, wait_until="domcontentloaded")
+        self.assertNotIn("YouTube", self.page.locator(".hero-form-card").inner_text())
+        self.assertNotIn("YouTube", self.page.locator("textarea").get_attribute("placeholder") or "")
+        self.page.locator("textarea").fill("https://youtu.be/public-retirement-test")
+        self.page.locator(".hero-submit").click()
+        self.page.get_by_text("不再支持 YouTube 链接。你仍可上传本地音视频文件，或使用其他支持的平台。", exact=True).wait_for()
+        self.page.locator(".input-stage").wait_for(state="visible")
+        self.assertTrue(self.page.locator(".input-stage").is_visible())
+        self.assertEqual(self.page.locator('input[type="file"]').count(), 1)
+        self.assertEqual(self.page.locator(".processing-stage").count(), 0)
+
     def test_youtube_login_failure_explains_file_fallback_without_retry_loop(self) -> None:
         from app.pipeline import _public_error_message_with_reason
         capture = _failed_capture("youtubelogin001", created_at="2026-04-11 10:01:00")

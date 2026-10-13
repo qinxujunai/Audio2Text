@@ -7,12 +7,12 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from app.settings import BROWSER_PROFILE_DIR
+from app.resolver import _reject_retired_source
 
 
 DEFAULT_URLS = [
     "https://www.douyin.com/",
     "https://www.xiaohongshu.com/",
-    "https://www.youtube.com/",
 ]
 
 
@@ -38,6 +38,8 @@ def main() -> int:
     target_url = _target_url_from_file(args.target_file)
     urls = [target_url, *DEFAULT_URLS] if target_url else list(DEFAULT_URLS)
     urls = list(dict.fromkeys(url for url in urls if url))
+    for url in urls:
+        _reject_retired_source(url)
 
     print(f"Using project browser profile: {BROWSER_PROFILE_DIR}", flush=True)
     print("A real browser window will open with the project-isolated session profile.", flush=True)

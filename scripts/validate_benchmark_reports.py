@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-REQUIRED_PLATFORMS = {"youtube", "bilibili", "xiaoyuzhou", "douyin", "xiaohongshu", "wechat_article"}
+REQUIRED_PLATFORMS = {"bilibili", "xiaoyuzhou", "douyin", "xiaohongshu", "wechat_article"}
 REQUIRED_SLICES = {"mandarin", "english", "mixed_language", "dialect", "multi_speaker", "noise", "music", "proper_nouns", "long_form"}
 
 
@@ -65,6 +65,8 @@ def _sample_evidence(rows: Any, *, transcription: bool) -> dict[str, Any]:
                     coverage.add(r["slice"])
         else:
             for r in records:
+                if r.get("platform") not in REQUIRED_PLATFORMS:
+                    reasons.add("unsupported_platform_in_current_evidence")
                 if r.get("error_code") == "benchmark_timeout":
                     reasons.add("timeouts_present")
                 if r.get("platform") in REQUIRED_PLATFORMS:
@@ -105,7 +107,7 @@ def validate_extraction_report(path: str | Path) -> dict[str, Any]:
         if key in summary and (not isinstance(summary[key], (int, float)) or isinstance(summary[key], bool) or not math.isfinite(summary[key]) or abs(summary[key] - value) > 0.0001):
             reasons.append("summary_contradicts_raw_samples")
     # Failures remain in the denominator. A platform with no working complete
-    # example in any round cannot satisfy a usable six-platform release.
+    # example in any round cannot satisfy a usable supported-platform release.
     for repeat in (1, 2, 3):
         successful = {r.get("platform") for r in rows if r.get("repeat") == repeat and r.get("success") is True and r.get("complete") is True and not r.get("error_code")}
         if not REQUIRED_PLATFORMS.issubset(successful):

@@ -1507,7 +1507,9 @@ class XiaohongshuAdapter(BaseSourceAdapter):
 
 def get_url_adapter(resolved: ResolvedSource) -> BaseSourceAdapter:
     if resolved.platform == "youtube":
-        return YouTubeAdapter()
+        from app.resolver import YOUTUBE_RETIRED_MESSAGE
+        raise ExtractionError("extract", YOUTUBE_RETIRED_MESSAGE,
+                              reason_code="source_unsupported", retryable=False)
     if resolved.platform == "bilibili":
         return BilibiliAdapter()
     if resolved.platform == "xiaoyuzhou":

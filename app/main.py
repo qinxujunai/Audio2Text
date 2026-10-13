@@ -27,7 +27,7 @@ from app.pipeline import (
     repair_legacy_audio_artifact,
     retry_capture_image,
 )
-from app.resolver import infer_source_item_id, resolve_url
+from app.resolver import infer_source_item_id, resolve_url, _reject_retired_source, RetiredSourceError, YOUTUBE_RETIRED_MESSAGE
 from app.runtime_packs import RuntimePackError, RuntimePackManager
 from app.runtime_preflight import browser_runtime_available
 from app.browser_provider import (
@@ -1444,6 +1444,14 @@ async def retry_v1_capture(capture_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="这条内容正在处理中，请稍候。")
     if capture.status == "queued":
         raise HTTPException(status_code=409, detail="这条内容已在准备中，请稍候。")
+
+    if capture.input_type == "url":
+        if capture.source_platform == "youtube":
+            raise HTTPException(status_code=400, detail=YOUTUBE_RETIRED_MESSAGE)
+        try:
+            _reject_retired_source(capture.url or "")
+        except RetiredSourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     updated = repository.update(
         capture.id,

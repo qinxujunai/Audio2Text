@@ -28,6 +28,7 @@ const COLLAPSED_HISTORY_COUNT = 4;
 function platformLabel(platform?: string | null) {
   return (
     {
+      // Existing records retain their source label; new YouTube input is retired.
       youtube: "YouTube",
       bilibili: "哔哩哔哩",
       xiaoyuzhou: "小宇宙",
@@ -211,7 +212,7 @@ export function InputStage({
                   clearInput();
                 }
               }}
-              placeholder="粘贴公开链接，比如 YouTube、哔哩哔哩、小宇宙、抖音、小红书或微信公众号文章"
+              placeholder="粘贴公开链接，比如哔哩哔哩、小宇宙、抖音、小红书或微信公众号文章"
               rows={6}
             />
 

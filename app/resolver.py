@@ -25,7 +25,6 @@ class ResolvedSource:
 
 
 PLATFORM_RULES = [
-    (("youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be"), "youtube", "video", "YouTube"),
     (("bilibili.com", "www.bilibili.com", "m.bilibili.com", "b23.tv"), "bilibili", "video", "哔哩哔哩"),
     (("xiaoyuzhoufm.com", "www.xiaoyuzhoufm.com"), "xiaoyuzhou", "audio", "小宇宙"),
     (("douyin.com", "www.douyin.com", "m.douyin.com", "v.douyin.com", "jingxuan.douyin.com"), "douyin", "video", "抖音"),
@@ -36,7 +35,13 @@ PLATFORM_RULES = [
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".aac", ".ogg", ".opus"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
 TRAILING_NOISE = ".,;:!?)]}>\"'，。；：！？】）》」』、"
-SHORT_LINK_HOSTS = {"v.douyin.com", "b23.tv", "xhslink.com", "youtu.be"}
+SHORT_LINK_HOSTS = {"v.douyin.com", "b23.tv", "xhslink.com"}
+
+YOUTUBE_RETIRED_MESSAGE = "不再支持 YouTube 链接。你仍可上传本地音视频文件，或使用其他支持的平台。"
+
+
+class RetiredSourceError(ValueError):
+    """A removed source is an input decision, never a transient failure."""
 
 
 def _hostname(url: str) -> str:
@@ -52,6 +57,13 @@ def _is_xiaohongshu_landing(url: str) -> bool:
     host = (parsed.hostname or "").lower().rstrip(".")
     path = (parsed.path or "").rstrip("/")
     return host.endswith("xiaohongshu.com") and path in {"", "/explore"}
+
+
+def _reject_retired_source(url: str) -> None:
+    host = _hostname(url)
+    if any(host == domain or host.endswith("." + domain)
+           for domain in ("youtube.com", "youtu.be", "youtube-nocookie.com")):
+        raise RetiredSourceError(YOUTUBE_RETIRED_MESSAGE)
 
 
 def _infer_generic_media_type(url: str) -> str:
@@ -109,6 +121,7 @@ def normalize_url(raw_url: str) -> str:
 
 def _expand_short_url(url: str) -> str:
     normalized = normalize_url(url)
+    _reject_retired_source(normalized)
     try:
         assert_public_http_url(normalized)
     except UnsafeExternalUrlError as exc:
@@ -124,10 +137,12 @@ def _expand_short_url(url: str) -> str:
             headers=headers,
             timeout=min(DEFAULT_TIMEOUT_SECONDS, 12.0),
             trust_env=False,
+            event_hooks={"request": [lambda request: _reject_retired_source(str(request.url))]},
         ) as client:
             response = client.get(normalized)
             response.raise_for_status()
             expanded = str(response.url)
+            _reject_retired_source(expanded)
             try:
                 assert_public_http_url(expanded)
             except UnsafeExternalUrlError as exc:
@@ -165,6 +180,7 @@ def _select_url(raw_text: str) -> tuple[str, list[str], str, str | None]:
 def resolve_url(raw_input: str) -> ResolvedSource:
     cleaned = clean_input_text(raw_input)
     normalized, detected_urls, selection_reason, warning = _select_url(cleaned)
+    _reject_retired_source(normalized)
     try:
         assert_public_http_url(normalized)
     except UnsafeExternalUrlError as exc:

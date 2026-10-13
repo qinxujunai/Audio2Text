@@ -50,7 +50,7 @@ Object.assign(copy.zh, {
   faqTitle: "开始之前，了解这些。", faqSystem: "需要什么电脑？",
   faqSystemBody: "Windows 10 / 11，64 位。CPU 可完成本地识别；NVIDIA 显卡可使用可选 CUDA 组件。首次启动需要联网准备模型与运行组件，之后本地文件可离线识别。",
   faqSize: "为什么首次启动还要下载？", faqSizeBody: "安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。",
-  faqPlatforms: "哪些链接可以整理？", faqPlatformsBody: "支持哔哩哔哩、小宇宙、YouTube、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。",
+  faqPlatforms: "哪些链接可以整理？", faqPlatformsBody: "支持哔哩哔哩、小宇宙、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。",
   faqAI: "AI 校对能保证正确吗？", faqAIBody: "不能。模型只提出建议，你逐处确认后才能保存。数字与单位有额外保护，但人名、事实和语义仍需自己核对；原文与校对版始终分别保留。",
   faqSafety: "Windows 为什么提示安全警告？", faqSafetyBody: "当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。"
 });
@@ -75,7 +75,7 @@ Object.assign(copy.en, {
   faqTitle: "Before you start.", faqSystem: "What computer do I need?",
   faqSystemBody: "Windows 10 / 11, 64-bit. CPU recognition is supported; NVIDIA GPUs can use optional CUDA components. Initial setup downloads models and runtime components. Local files can then be recognized offline.",
   faqSize: "Why are there first-run downloads?", faqSizeBody: "The installer contains the base app. Models and media components are downloaded separately and checked against their hashes. GPU models and components are optional; the app does not change drivers or system settings.",
-  faqPlatforms: "Which links are supported?", faqPlatformsBody: "Bilibili, Xiaoyuzhou, YouTube, Douyin, Xiaohongshu, and WeChat articles. Access depends on your network, login, and platform rules. Support does not guarantee every link will work.",
+  faqPlatforms: "Which links are supported?", faqPlatformsBody: "Bilibili, Xiaoyuzhou, Douyin, Xiaohongshu, and WeChat articles. Access depends on your network, login, and platform rules. Support does not guarantee every link will work.",
   faqAI: "Are AI corrections always right?", faqAIBody: "No. Review each suggestion before saving. Numbers and units have extra guards, but names, facts, and meaning still need your judgment. Original and corrected versions remain separate.",
   faqSafety: "Why does Windows show a warning?", faqSafetyBody: "The installer is currently unsigned. Download from this page's GitHub Release and check the SHA-256 above. Use the feedback link if you encounter a problem."
 });

@@ -6,7 +6,6 @@ from urllib.parse import parse_qsl, urlsplit
 
 
 REQUIRED_SUCCESS_PLATFORMS = {
-    "youtube",
     "bilibili",
     "xiaoyuzhou",
     "douyin",

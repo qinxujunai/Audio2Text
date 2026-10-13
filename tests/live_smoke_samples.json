@@ -1,14 +1,6 @@
 {
   "success": [
     {
-      "platform": "youtube",
-      "variant": "subtitle_video",
-      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-      "expected_media_kind": "video",
-      "require_text": true,
-      "require_source_media": true
-    },
-    {
       "platform": "bilibili",
       "variant": "user_reported_video",
       "url": "https://www.bilibili.com/video/BV1sHU9BmEne/?p=114",
@@ -68,10 +60,6 @@
     }
   ],
   "failure": [
-    {
-      "platform": "youtube",
-      "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"
-    },
     {
       "platform": "bilibili",
       "url": "https://www.bilibili.com/video/BV1111111111"
