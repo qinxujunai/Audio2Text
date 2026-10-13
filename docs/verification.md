@@ -2,6 +2,14 @@
 
 ## 自动化检查
 
+结果页空间回归（Web 与无页头桌面壳，视频/长图文，1280×820、1707×1045、1920×1080、2560×1600）：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.ui_smoke_suite.UISmokeTestCase.test_result_workspace_uses_available_desktop_space
+```
+
+该检查验证结果区随窗口展开、两栏等高、正文列宽度、底部信息可见且无大块闲置空间。它已纳入 `scripts.release_gate`。桌面壳在 Chromium 中用隔离 IPC 桩验证布局；已安装桌面程序仍需单独核对 exe 与新打包产物的哈希，前端构建成功不代表已安装程序更新。
+
 后端：
 
 ```powershell
@@ -46,7 +54,10 @@ Docker 构建限时门槛：
 .\.venv\Scripts\python.exe -m scripts.release_gate `
   --final `
   --with-live-smoke `
-  --live-smoke-base-url "http://127.0.0.1:8000"
+  --live-smoke-base-url "http://127.0.0.1:8000" `
+  --deployment-contract-base-url "https://wanxiang.praxisai.online" `
+  --extraction-benchmark-report "workspace\\benchmarks\\extraction-release.json" `
+  --transcription-benchmark-report "workspace\\benchmarks\\transcription-release.json"
 ```
 
 ## 本地 API 启动
@@ -103,6 +114,8 @@ workspace/runtime/browser-profile
 - `selected_language`
 - `retryable`
 - `progress_percent`
+- 瞬时网络 / HTTP 5xx / 限流异常只进入有限自动重试，不得把整个 Capture 持久化为 `failed`
+- 浏览器与 HTTP provider 的原始 URL、路径、异常堆栈不得进入公开 API 或用户提示
 
 重点文件：
 
@@ -225,7 +238,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 
 - Docker 构建不依赖宿主机已有 `frontend/dist`
 - 镜像启动后首页可访问
-- 未挂载本地模型目录且未配置 OpenAI-compatible provider 时，预览模式仍可启动首页，但音视频转写应给出明确失败提示
+- 未挂载本地模型目录且未配置 OpenAI-compatible provider 时，预览模式仍可启动首页，但音视频转写应给出明确的恢复提示
 - 切换到 `openai_compatible` 并配置完整变量时，音视频转写不再依赖本地模型目录
 - `workspace` 挂载后，Playwright Chromium、模型和浏览器会话都来自宿主机挂载目录
 - 验收前可先执行 `.\.venv\Scripts\python.exe -m scripts.cleanup_runtime --yes`，清掉旧截图、旧 probe 和历史 smoke 结果，避免把临时产物误当成正式交付内容
@@ -245,7 +258,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 - 关闭启动窗口后链接失效；启动窗口保持打开时，公网首页可访问。
 - 如果回退到 localtunnel，首次访问的 IP 确认页应符合窗口提示，不视为产品报错。
 - `/health` 返回 `status=ok`
-- 提交无效输入时能进入中文失败态
+- 提交无效输入时能进入中文、可恢复的来源不可用提示，不暴露技术异常
 - 已完成 capture 的结果页刷新后仍可打开
 - artifact 下载链接能返回文件或明确失败
 - `scripts/start_cloudflare_tunnel.py` 和 `scripts/start_localtunnel.py` 只在排障时单独运行；它们不是发布验收里的用户入口。

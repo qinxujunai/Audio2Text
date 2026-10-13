@@ -10,9 +10,13 @@
 - 图文正文与正文图片提取
 - 视频结果页预览并下载原视频、原音频
 
-Windows 安装包是完整主产品；云端用于限额演示。目标电脑不需要
+Windows 安装包是主产品；云端用于限额演示。CPU 基础使用不需要
 Python、uv、CUDA 或单独安装 Chromium。首次使用安装 FFmpeg 9.0
 Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
+本机的 CUDA 路线另外配置了 SenseVoice Small FP32 与独立 GPU SDK，
+需可用的 NVIDIA CUDA/cuDNN 运行组件；这些不包含在约107MiB安装包中。
+YouTube 的完整 EJS 支持当前复用可用的 Node，不应据本机成功宣称干净电脑
+无需任何 JavaScript runtime 即可覆盖所有 YouTube 样例。
 
 ## 当前真实交付形态
 
@@ -45,6 +49,10 @@ Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 
 ## 发布前硬门槛
 
+2.3.0 批次实施及验收状态见 [发布记录](release-2.3.0.md)。CI 只产生候选包，
+不自动创建公开 Release。公开包必须是最终快照在真实安装窗口验收过的同一文件；
+不得把 CI 重建包直接替换到下载页。官网仅在正式 Release 或明确手动部署时更新。
+
 - 后端自动化测试通过
 - Worker 安全测试与 npm 官方安全审计通过
 - 前端类型检查通过
@@ -66,7 +74,7 @@ Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 - Hugging Face 上传前必须完成 `.\.venv\Scripts\hf.exe auth login`
 - HF Space 默认部署命令是 `.\.venv\Scripts\python.exe -m scripts.deploy_huggingface_space`；脚本会使用当前登录用户和默认 Space 名 `wanxiang-chengwen-preview`
 - 云端未配置 OpenAI-compatible 转写服务时，首页仍应可用，本地音视频文件上传前必须给出明确提示
-- 最终发布前必须执行 `.\.venv\Scripts\python.exe -m scripts.release_gate --final --with-live-smoke --live-smoke-base-url "http://127.0.0.1:8000"`
+- 最终发布前必须执行 `.\.venv\Scripts\python.exe -m scripts.release_gate --final --with-live-smoke --live-smoke-base-url "http://127.0.0.1:8000" --deployment-contract-base-url "https://wanxiang.praxisai.online" --extraction-benchmark-report "workspace\benchmarks\extraction-release.json" --transcription-benchmark-report "workspace\benchmarks\transcription-release.json"`
 
 本轮 2026-08-11 证据：哔哩哔哩、小宇宙、抖音、微信图文通过；
 小红书图文与 Live（15 图、14 个 Live 片段）通过。小红书视频样本触发
@@ -84,7 +92,7 @@ Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 ## 发布后仍应关注的边界
 
 - 抖音、小红书仍属于高波动平台，成功率依赖公开链路与项目级浏览器会话
-- Windows 默认使用 SenseVoice int8；运行时会检测 GPU、模型和平台语言，仅在有实测收益时选择项目级 Faster-Whisper，失败自动回落 CPU
+- 普通 Windows CPU 兼容版使用 SenseVoice int8；本机明确配置 SenseVoice Small FP32 CUDA，Whisper 可选，显式 CUDA 不静默回落 CPU。不同权重的结果必须分别说明
 - 小红书视频发布样本需要新鲜分享链接与有效项目级浏览器会话
 - `Assets/Models/...` 当前仍是 legacy fallback，不应在未迁移前直接删除
 

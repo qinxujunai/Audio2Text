@@ -10,15 +10,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BrandAndShowcaseTestCase(unittest.TestCase):
-    def test_brand_assets_share_the_same_svg(self) -> None:
+    def test_product_app_uses_the_compact_praxis_mark(self) -> None:
         source = (ROOT / "web/public/brand-mark.svg").read_bytes()
-        self.assertEqual(source, (ROOT / "showcase/public/brand-mark.svg").read_bytes())
-        self.assertEqual(source, (ROOT / "site/assets/brand-mark.svg").read_bytes())
+        self.assertEqual(source, (ROOT / "design/brand/app-icon.svg").read_bytes())
         text = source.decode("utf-8")
         self.assertNotIn("<text", text)
-        self.assertIn("#0A84FF", text)
-        self.assertIn("#30B38C", text)
-        self.assertIn("#F2B84B", text)
+        self.assertIn('data-symbol="praxis-dot"', text)
+        self.assertIn("#111113", text)
+        self.assertIn("#FFFFFF", text)
+        self.assertNotIn("#0A84FF", text)
+        self.assertNotIn("#30B38C", text)
+        self.assertNotIn("#F2B84B", text)
+
+    def test_every_product_surface_uses_the_original_round_mark(self) -> None:
+        source = (ROOT / "web/public/brand-mark.svg").read_bytes()
+        for relative in ("site/assets/brand-mark.svg", "site/assets/brand-mark-inverse.svg",
+                         "showcase/public/brand-mark.svg"):
+            self.assertEqual(source, (ROOT / relative).read_bytes(), relative)
 
     def test_required_public_assets_exist(self) -> None:
         for relative in (

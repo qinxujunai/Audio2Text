@@ -13,7 +13,8 @@ class LiveSmokeSamplesContractTestCase(unittest.TestCase):
 
         self.assertIsInstance(payload.get("success"), list)
         self.assertIsInstance(payload.get("failure"), list)
-        self.assertGreaterEqual(len(payload["success"]), 6)
+        self.assertIsInstance(payload.get("session_required"), list)
+        self.assertGreaterEqual(len(payload["success"]), 4)
 
     def test_default_live_smoke_samples_do_not_commit_share_tokens(self) -> None:
         sample_path = Path("tests/live_smoke_samples.json")
@@ -25,14 +26,17 @@ class LiveSmokeSamplesContractTestCase(unittest.TestCase):
         sample_path = Path("tests/live_smoke_samples.json")
         payload = load_live_smoke_samples(sample_path)
         xiaohongshu = [
-            item for item in payload["success"] if item["platform"] == "xiaohongshu"
+            item
+            for bucket in (payload["success"], payload["session_required"])
+            for item in bucket
+            if item["platform"] == "xiaohongshu"
         ]
         xiaohongshu[1]["url"] = xiaohongshu[0]["url"]
 
         from tests.live_smoke_helpers import validate_live_smoke_samples
 
         self.assertIn(
-            "xiaohongshu success variants must use distinct sample URLs",
+            "xiaohongshu live smoke variants must use distinct sample URLs",
             validate_live_smoke_samples(payload),
         )
 

@@ -36,6 +36,16 @@ function corsHeaders(request) {
   };
 }
 
+function applyProductCachePolicy(headers, pathname) {
+  if (pathname === "/" || pathname.startsWith("/c/") || pathname === "/health" || pathname === "/config") {
+    headers.set("Cache-Control", "no-store, max-age=0");
+    return;
+  }
+  if (pathname.startsWith("/assets/")) {
+    headers.set("Cache-Control", "public, max-age=31536000, immutable");
+  }
+}
+
 async function handleReverseProxy(request) {
   const url = new URL(request.url);
   url.protocol = "https:";
@@ -60,6 +70,7 @@ async function handleReverseProxy(request) {
   });
   const responseHeaders = new Headers(upstream.headers);
   for (const [name, value] of Object.entries(corsHeaders(request))) responseHeaders.set(name, value);
+  applyProductCachePolicy(responseHeaders, new URL(request.url).pathname);
   responseHeaders.set("X-Content-Type-Options", "nosniff");
   responseHeaders.set("Referrer-Policy", "strict-origin-when-cross-origin");
   return new Response(upstream.body, {
@@ -110,6 +121,7 @@ async function handleForwardProxy(request) {
     const body = await readBodyWithLimit(upstream.body, MAX_RELAY_BYTES);
     const responseHeaders = new Headers(corsHeaders(request));
     responseHeaders.set("Content-Type", contentType);
+    responseHeaders.set("Cache-Control", "no-store, max-age=0");
     responseHeaders.set("X-Proxied-Url", target.toString());
     responseHeaders.set("X-Content-Type-Options", "nosniff");
     return new Response(body, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
@@ -206,3 +218,5 @@ export default {
     return handleReverseProxy(request);
   },
 };
+
+export { applyProductCachePolicy };

@@ -1,4 +1,9 @@
-export type CaptureStatus = "queued" | "processing" | "done" | "failed";
+export type CaptureStatus =
+  | "queued"
+  | "processing"
+  | "done"
+  | "failed"
+  | "needs_user_action";
 
 export type CaptureListItem = {
   id: string;
@@ -41,6 +46,7 @@ export type Artifact = {
   type: string;
   label: string;
   download_url: string;
+  preview_url?: string | null;
   mime_type: string;
   size_bytes?: number | null;
   status: "pending" | "ready" | "failed";
@@ -51,13 +57,32 @@ export type CaptureSourceImage = {
   index: number;
   image_url: string;
   live_photo_video_url?: string | null;
+  delivery_status?: "pending" | "ready" | "failed";
+  preview_url?: string | null;
+  download_url?: string | null;
+  width?: number | null;
+  height?: number | null;
+  thumbnail_url?: string | null;
+};
+
+export type ResultSegment = {
+  kind: string;
+  origin: string;
+  text: string;
+  start_sec?: number | null;
+  end_sec?: number | null;
 };
 
 export type CaptureEnvelope = {
   capture: {
     id: string;
     status: CaptureStatus;
-    result_state: "processing" | "text_ready" | "complete" | "failed";
+    result_state:
+      | "processing"
+      | "text_ready"
+      | "complete"
+      | "failed"
+      | "awaiting_user";
     input_kind: "url" | "file";
     current_stage: string;
     progress_percent: number;
@@ -105,6 +130,7 @@ export type CaptureEnvelope = {
   result: {
     primary_text: string;
     extraction_path: string[];
+    segments: ResultSegment[];
     views: ResultViews;
     content_facts: ContentFactItem[];
   };

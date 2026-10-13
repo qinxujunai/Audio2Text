@@ -80,12 +80,6 @@ workspace/
 
 ## 平台运行时提示
 
-### YouTube
-
-- 字幕优先
-- 双语字幕默认原语种优先
-- 无可用字幕时再回退媒体下载与转写
-
 ### 哔哩哔哩
 
 - 主走 `yt-dlp`
@@ -117,7 +111,7 @@ workspace/
 .\.venv\Scripts\python.exe -m scripts.start_api
 ```
 
-启动入口会在 preflight 和 uvicorn 之前检查目标端口。默认端口 `8000` 被旧服务占用时，脚本会直接失败并输出占用 PID / 命令提示，避免前端误连到旧 API。临时端口：
+启动入口会在 preflight 和 uvicorn 之前检查目标端口，并校验 `frontend/dist/build-manifest.json` 的源码指纹。默认端口 `8000` 被旧服务占用时，脚本会直接失败并输出占用 PID / 命令提示，避免前端误连到旧 API；本地源码与 dist 不一致时会先自动执行一次前端构建，Node/npm 不可用或构建失败则拒绝启动，避免把旧 UI 提供给用户。Docker 的 `cloud_preview` 镜像在构建阶段已经生成前端，运行时没有 Node 时信任同镜像内的构建清单。临时端口：
 
 ```powershell
 $env:AUDIO2TEXT_API_PORT = "8001"
@@ -142,14 +136,27 @@ Docker 构建默认最多等 300 秒；超过后应停止并定位卡在 `npm ci
 .\.venv\Scripts\python.exe -m scripts.release_gate --docker-build-timeout 300
 ```
 
+Windows 桌面包必须通过带新鲜度校验的脚本构建，不能直接把 `web/src-tauri/target` 中的旧 exe 或旧安装包当成当前版本：
+
+```powershell
+.\scripts\build_desktop.ps1
+```
+
+该脚本会先比较 `frontend/dist/build-manifest.json` 与当前前端源码指纹；不一致就重新构建前端，然后构建并冒烟验证 sidecar，最后执行 Tauri 打包，并确认 exe 与 NSIS 安装包确实在本次构建后生成。`-Debug` 可用于本地调试包，`-SkipSidecar` 只适用于已经单独完成 sidecar 验证的场景。脚本需要本机已有 Node/npm、Rust `cargo`/`rustc`，不会自动安装系统工具链。
+
 最终上线前必须补跑：
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.release_gate `
   --final `
   --with-live-smoke `
-  --live-smoke-base-url "http://127.0.0.1:8000"
+  --live-smoke-base-url "http://127.0.0.1:8000" `
+  --deployment-contract-base-url "https://wanxiang.praxisai.online" `
+  --extraction-benchmark-report "workspace\\benchmarks\\extraction-release.json" `
+  --transcription-benchmark-report "workspace\\benchmarks\\transcription-release.json"
 ```
+
+`--final` 还会拒绝缺少 60 链接 / 72 音频片段三轮 benchmark 证据的发布；部署契约会检查 HTML 与深链接 `no-store`、hash 资源 `immutable`，以及前后端构建 ID 是否可读。
 
 ## Docker
 
@@ -192,7 +199,7 @@ docker run --rm --name praxis-audio2text -p 8000:8000 `
 - Docker 不依赖宿主机已有 `frontend/dist`。
 - 容器内默认使用镜像自带 `/usr/bin/ffmpeg`。
 - Docker context 应排除 `.venv`、`web/node_modules`、`frontend/dist`、`tests_runtime`、`workspace`。
-- 镜像默认按 `cloud_preview` 预览模式启动；未配置模型或 OpenAI-compatible provider 时，首页仍可访问，音视频转写会给出明确失败提示。
+- 镜像默认按 `cloud_preview` 预览模式启动；未配置模型或 OpenAI-compatible provider 时，首页仍可访问，音视频转写会给出明确的恢复提示。
 - Faster-Whisper 模型默认不内置在镜像中；要让本地转写可用，必须挂载模型目录。
 - `workspace` 挂载会覆盖容器内 `/app/workspace`，因此模型、Playwright Chromium、浏览器会话和 capture/artifact 数据都以宿主机挂载目录为准。
 
@@ -237,6 +244,7 @@ $env:AUDIO2TEXT_LOCAL_ONLY = "1"
 - `.venv` 缺失、损坏或 uv 托管 Python 路径漂移时，自动用 Python 3.11 重建虚拟环境。
 - 按 `requirements.txt` 的锁定版本安装依赖，减少换电脑或未来依赖漂移造成的故障。
 - 检查前端构建产物、模型、ffmpeg、Playwright Chromium、CUDA runtime 和端口。
+- 来源站点的瞬时网络或浏览器波动最多自动重试两次；失效链接、平台验证和需要用户操作的状态不会盲目重试。可通过 `AUDIO2TEXT_AUTOMATIC_RETRY_LIMIT` 下调或关闭。
 
 `scripts/start_cloudflare_tunnel.py` 和 `scripts/start_localtunnel.py` 只保留为内部 helper，供公网预览编排器自动调用，或排障时临时使用。不要把它们作为用户文档里的同级启动入口。
 
@@ -299,6 +307,7 @@ app_port: 8000
 ## 部署后检查
 
 - `/health` 返回 `status=ok`
+- `/health` 中的 `commit`、`frontend_git_sha` 与 `frontend_build_id` 可用于确认后端源码、前端源码和静态产物属于同一发布版本；本地启动未显式提供 `AUDIO2TEXT_COMMIT` 时会自动读取当前 Git 短 SHA。
 - `/config` 返回产品公开配置，不暴露内部绝对路径
 - 首页可访问，能正常进入处理中和结果页
 - 高波动平台在无浏览器会话时给出 warning，而不是静默卡死
