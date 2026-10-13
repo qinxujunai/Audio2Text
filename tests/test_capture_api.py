@@ -16,6 +16,20 @@ from app.schemas import ArtifactModel, ResultDocumentModel, ResultSegmentModel, 
 
 
 class CaptureApiTestCase(unittest.TestCase):
+    def test_retired_youtube_retry_does_not_queue_or_change_saved_result(self):
+        capture = capture_main.repository.create(input_type="url", source_platform="youtube",
+                                                 content_type="video", url="https://youtu.be/public")
+        capture_main.repository.update(capture.id, status="done",
+                                       result=ResultDocumentModel(primary_text="saved original"))
+        saved = (self.captures_dir / capture.id / "capture.json").read_bytes()
+        with patch.object(capture_main, "_queue_if_needed") as queued:
+            response = self.client.post(f"/v1/captures/{capture.id}/retry")
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("不再支持 YouTube", response.json()["detail"])
+            queued.assert_not_called()
+        self.assertEqual((self.captures_dir / capture.id / "capture.json").read_bytes(), saved)
+        self.assertEqual(self.client.get(f"/v1/captures/{capture.id}").status_code, 200)
+
     def setUp(self) -> None:
         self.root = Path.cwd() / "tests_runtime" / "api_runs" / uuid4().hex
         self.captures_dir = self.root / "captures"

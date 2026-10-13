@@ -20,7 +20,7 @@ import httpx
 from app.capture_diagnostics import CaptureDiagnostics, write_capture_event
 from app.extractors import ExtractionError, ExtractionOutcome
 from app.providers import TranscriptionResult, get_transcription_provider
-from app.resolver import resolve_file_type, resolve_url
+from app.resolver import resolve_file_type, resolve_url, RetiredSourceError, YOUTUBE_RETIRED_MESSAGE
 from app.schemas import (
     ArtifactModel,
     ContentFactItemModel,
@@ -1854,6 +1854,8 @@ EXPECTED_UNAVAILABLE_REASON_CODES = frozenset(
 
 
 def _public_error_message_with_reason(stage: str, reason_code: str | None = None, raw_message: str | None = None) -> str:
+    if reason_code == "source_unsupported":
+        return YOUTUBE_RETIRED_MESSAGE
     if reason_code and (
         reason_code.endswith("_network_failed")
         or reason_code.endswith("_server_unavailable")
@@ -2131,7 +2133,10 @@ def process_capture(capture_id: str) -> None:
         )
 
         if capture.input_type == "url":
-            resolved = resolve_url(capture.source.raw_input_text or capture.url or "")
+            try:
+                resolved = resolve_url(capture.source.raw_input_text or capture.url or "")
+            except RetiredSourceError as exc:
+                raise ExtractionError("resolve", str(exc), reason_code="source_unsupported", retryable=False) from None
             persist_capture(
                 title=capture.title or resolved.normalized_url,
                 url=resolved.normalized_url,

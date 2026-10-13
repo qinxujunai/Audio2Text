@@ -11,9 +11,22 @@ from scripts.validate_benchmark_reports import _sample_evidence, REQUIRED_SLICES
 
 
 class ValidateBenchmarkReportsTestCase(unittest.TestCase):
+    def test_retired_platform_rows_do_not_count_as_current_release_evidence(self):
+        platforms = sorted(REQUIRED_PLATFORMS)
+        rows = [{"id": f"link-{i}", "repeat": repeat,
+                 "source_identity": f"{platforms[i % len(platforms)]}:content-{i}",
+                 "platform": platforms[i % len(platforms)], "success": True, "complete": True}
+                for repeat in range(1, 4) for i in range(60)]
+        for row in rows:
+            if row["id"] == "link-1":
+                row["platform"] = "youtube"
+        result = _sample_evidence(rows, transcription=False)
+        self.assertFalse(result["valid"])
+        self.assertIn("unsupported_platform_in_current_evidence", result["reasons"])
+
     def test_failed_raw_records_cannot_be_overridden_by_success_summary(self):
         platforms = sorted(REQUIRED_PLATFORMS)
-        rows = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i%6]}:content-{i}", "platform": platforms[i%6], "success": False, "complete": False, "error_code": "platform_challenge"} for repeat in range(1,4) for i in range(60)]
+        rows = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i % len(platforms)]}:content-{i}", "platform": platforms[i % len(platforms)], "success": False, "complete": False, "error_code": "platform_challenge"} for repeat in range(1,4) for i in range(60)]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/"report.json"
             path.write_text(json.dumps({"summary": {"release_dataset_ready": True, "success_rate": 1.0}, "samples": rows}), encoding="utf-8")
@@ -45,9 +58,9 @@ class ValidateBenchmarkReportsTestCase(unittest.TestCase):
         for index, case in enumerate(cases):
             with self.subTest(index=index): self.assertFalse(_sample_evidence(case, transcription=True)["valid"])
 
-    def test_extraction_uses_content_identity_and_all_six_platforms(self):
+    def test_extraction_uses_content_identity_and_all_supported_platforms(self):
         platforms = sorted(REQUIRED_PLATFORMS)
-        rows = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i%6]}:content-{i}", "platform": platforms[i%6], "success": True, "complete": True} for repeat in range(1,4) for i in range(60)]
+        rows = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i % len(platforms)]}:content-{i}", "platform": platforms[i % len(platforms)], "success": True, "complete": True} for repeat in range(1,4) for i in range(60)]
         self.assertTrue(_sample_evidence(rows, transcription=False)["valid"])
         for row in rows:
             if row["id"] == "link-1": row["source_identity"] = rows[0]["source_identity"]
@@ -55,7 +68,7 @@ class ValidateBenchmarkReportsTestCase(unittest.TestCase):
 
     def test_reports_with_complete_raw_evidence_can_pass(self):
         platforms = sorted(REQUIRED_PLATFORMS)
-        links = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i%6]}:content-{i}", "platform": platforms[i%6], "success": True, "complete": True} for repeat in range(1,4) for i in range(60)]
+        links = [{"id": f"link-{i}", "repeat": repeat, "source_identity": f"{platforms[i % len(platforms)]}:content-{i}", "platform": platforms[i % len(platforms)], "success": True, "complete": True} for repeat in range(1,4) for i in range(60)]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root/'extraction.json').write_text(json.dumps({"summary": {"release_dataset_ready": True}, "samples": links}),encoding='utf-8')

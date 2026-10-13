@@ -14,7 +14,7 @@ class LiveSmokeSamplesContractTestCase(unittest.TestCase):
         self.assertIsInstance(payload.get("success"), list)
         self.assertIsInstance(payload.get("failure"), list)
         self.assertIsInstance(payload.get("session_required"), list)
-        self.assertGreaterEqual(len(payload["success"]), 5)
+        self.assertGreaterEqual(len(payload["success"]), 4)
 
     def test_default_live_smoke_samples_do_not_commit_share_tokens(self) -> None:
         sample_path = Path("tests/live_smoke_samples.json")

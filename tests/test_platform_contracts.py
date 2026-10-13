@@ -221,9 +221,6 @@ class PlatformContractsTestCase(unittest.TestCase):
 
     def test_resolve_url_routes_all_supported_platforms(self) -> None:
         cases = {
-            "https://youtu.be/dQw4w9WgXcQ": "youtube",
-            "https://music.youtube.com/watch?v=dQw4w9WgXcQ": "youtube",
-            "https://www.youtube.com:443/watch?v=dQw4w9WgXcQ": "youtube",
             "https://www.bilibili.com/video/BV1xx411c7mD": "bilibili",
             "https://www.xiaoyuzhoufm.com/episode/67f0146e64f12bfc04dca0d1": "xiaoyuzhou",
             "https://www.douyin.com/video/7482735026417366324": "douyin",

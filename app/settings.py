@@ -131,7 +131,6 @@ for folder in [
 
 
 URL_INPUT_PLATFORM_HINTS = {
-    "youtube": "YouTube",
     "bilibili": "\u54D4\u54E9\u54D4\u54E9",
     "xiaoyuzhou": "\u5C0F\u5B87\u5B99",
     "douyin": "\u6296\u97F3",
