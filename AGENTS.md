@@ -38,7 +38,7 @@
 - Windows hosted CI 常以管理员运行，WebView2 会忽略环境变量/HKCU 的调试参数；仅在受限的全新 CI runner 上临时设置并恢复 `wanxiang-chengwen.exe` 专用 HKLM 调试策略，不修改正式应用或本机策略。
 - 原生退出验收只对目标子进程的唯一 `Tauri Window` 发送关闭请求，随后确认退出码。`Tao Thread Event Target` 即使被 Win32 标为可见，也不是产品窗口；不得按 PID 遍历关闭所有可见窗口。DPI 与视口分别从真实窗口和 WebView 读取，不能用浏览器模拟 DPI 宣称系统 DPI 验收。
 - 后端构建指纹以 ordinal 顺序排列路径并规范化分隔符，不能依赖 `Sort-Object` 的区域/PowerShell 版本排序。父脚本与 Windows PowerShell sidecar 子脚本必须给出相同指纹；单文件变化必须使指纹失效。
-- 2026-10-13 用户明确移除 YouTube 支持和宣传；新输入在 DNS/短链请求前拒绝，也不可回退通用网页或重启 YouTube adapter。已有结果与原媒体保留。不得新增 VPN、代理端口、Cookie 或登录配置。历史 YouTube 诊断和基准仅作历史证据，不纳入当前能力宣传。
+- 2026-10-13 用户明确移除 YouTube 支持和宣传；新输入在 DNS/短链请求前拒绝，也不可回退通用网页或重启 YouTube adapter。已有结果与原媒体保留。不得新增 VPN、代理端口、Cookie 或登录配置。历史 YouTube 诊断和基准仅作历史证据，不纳入当前能力宣传。移除宣传须同时检查 README/官网截图及演示录像中的可见文字，不能只搜索 HTML/Markdown。
 
 - 修改前先读相关代码、配置、文档和测试，理解现状后再动手。
 - 默认最小改动，优先复用已有结构、命名、类型、脚本和目录约定。
