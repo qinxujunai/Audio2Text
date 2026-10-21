@@ -16,6 +16,7 @@ await mkdir(siteAssets, { recursive: true });
 await mkdir(docsAssets, { recursive: true });
 await Promise.all([
   copyFile(source, resolve(siteAssets, "brand-mark.svg")),
+  copyFile(source, resolve(siteAssets, "brand-mark-inverse.svg")),
   copyFile(source, resolve(root, "showcase", "public", "brand-mark.svg")),
   copyFile(resolve(web, "src-tauri", "icons", "32x32.png"), resolve(siteAssets, "favicon.png")),
   copyFile(resolve(web, "src-tauri", "icons", "icon.png"), resolve(docsAssets, "wanxiang-icon-1024.png")),
