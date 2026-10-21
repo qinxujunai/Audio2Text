@@ -14,9 +14,10 @@ Windows 安装包是主产品；云端用于限额演示。CPU 基础使用不�
 Python、uv、CUDA 或单独安装 Chromium。首次使用安装 FFmpeg 9.0
 Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 本机的 CUDA 路线另外配置了 SenseVoice Small FP32 与独立 GPU SDK，
-需可用的 NVIDIA CUDA/cuDNN 运行组件；这些不包含在约107MiB安装包中。
-YouTube 的完整 EJS 支持当前复用可用的 Node，不应据本机成功宣称干净电脑
-无需任何 JavaScript runtime 即可覆盖所有 YouTube 样例。
+需可用的 NVIDIA CUDA/cuDNN 运行组件；这些不包含在基础安装包中。
+安装包大小以对应 Release 资产为准。当前支持哔哩哔哩、小宇宙、抖音、
+小红书和微信公众号图文；YouTube 已移除，不再属于当前发布复验范围。
+历史结果与原媒体仍保留，不把旧平台诊断当作当前能力。
 
 ## 当前真实交付形态
 
@@ -76,18 +77,21 @@ YouTube 的完整 EJS 支持当前复用可用的 Node，不应据本机成功�
 - 云端未配置 OpenAI-compatible 转写服务时，首页仍应可用，本地音视频文件上传前必须给出明确提示
 - 最终发布前必须执行 `.\.venv\Scripts\python.exe -m scripts.release_gate --final --with-live-smoke --live-smoke-base-url "http://127.0.0.1:8000" --deployment-contract-base-url "https://wanxiang.praxisai.online" --extraction-benchmark-report "workspace\benchmarks\extraction-release.json" --transcription-benchmark-report "workspace\benchmarks\transcription-release.json"`
 
-本轮 2026-08-11 证据：哔哩哔哩、小宇宙、抖音、微信图文通过；
+历史 2026-08-11 证据（不是当前候选的验收）：哔哩哔哩、小宇宙、抖音、微信图文通过；
 小红书图文与 Live（15 图、14 个 Live 片段）通过。小红书视频样本触发
 平台会话验证，YouTube 在当前中国网络约 53 秒内明确失败，不得写成已通过。
 
 ## 建议发布前复验的平台样例
 
-- YouTube：1 条字幕视频
 - 哔哩哔哩：1 条字幕或简介明显的视频
 - 小宇宙：1 条口播 transcript 样例
 - 抖音：1 条公开视频样例
 - 小红书：1 条图文、1 条视频、1 条 Live 图样例
 - 微信公众号：1 条图文样例
+
+上述是功能类型冒烟，不替代当前五个平台至少 60 条独立链接、三轮、
+每个平台每轮完整成功及零基准超时的门槛。保留全部失败和历史报告，
+从逐条结果核算；不可通过缩减平台或删除失效链接把旧报告改成通过。
 
 ## 发布后仍应关注的边界
 
