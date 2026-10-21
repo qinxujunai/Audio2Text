@@ -18,6 +18,7 @@ class _FakeResponse:
     def __init__(self, *, url: str = "https://example.com/final", text: str = "<html></html>") -> None:
         self.url = url
         self.text = text
+        self.encoding = "utf-8"
         self.headers: dict[str, str] = {}
 
     def raise_for_status(self) -> None:
@@ -334,10 +335,12 @@ class DeliveryHardeningTestCase(unittest.TestCase):
             self.assertTrue(target.exists())
 
     def test_browser_provider_fetch_uses_default_tls_verification(self) -> None:
-        with patch.object(browser_provider.httpx, "Client", _FakeHttpxClient):
+        with patch.object(browser_provider.httpx, "Client", _FakeHttpxClient), patch.object(
+            _FakeResponse, "iter_bytes", side_effect=lambda: iter([b"<title>sample</title>"])
+        ):
             final_url, title, html = browser_provider._fetch_xiaohongshu_html("https://example.com/note")
 
-        self.assertEqual(final_url, "https://example.com/final")
+        self.assertEqual(final_url, "https://example.com/note")
         self.assertEqual(title, "sample")
         self.assertIn("<title>sample</title>", html)
         self.assertNotIn("verify", _FakeHttpxClient.last_kwargs)

@@ -1033,17 +1033,18 @@ def _best_xiaohongshu_live_photo_url(image: dict) -> str:
 
 def _extract_xiaohongshu_note_payload(html: str) -> dict | None:
     state = _extract_xiaohongshu_state(html)
-    if not state:
+    if not isinstance(state, dict):
         return None
 
-    note_map = ((state.get("note") or {}).get("noteDetailMap") or {})
+    desktop = state.get("note")
+    note_map = desktop.get("noteDetailMap") if isinstance(desktop, dict) else {}
     if not isinstance(note_map, dict):
-        return None
+        note_map = {}
 
     selected_note_id = ""
     selected_note: dict | None = None
     for note_id, wrapper in note_map.items():
-        note = (wrapper or {}).get("note") or {}
+        note = wrapper.get("note") if isinstance(wrapper, dict) else None
         if not isinstance(note, dict):
             continue
         if note.get("title") or note.get("desc") or note.get("imageList") or note.get("video"):
@@ -1051,6 +1052,16 @@ def _extract_xiaohongshu_note_payload(html: str) -> dict | None:
             selected_note = note
             break
 
+    if not selected_note:
+        # Anonymous H5 shares use a different state tree from PC pages.
+        mobile = state.get("noteData")
+        data = mobile.get("data") if isinstance(mobile, dict) else None
+        note = data.get("noteData") if isinstance(data, dict) else None
+        if isinstance(note, dict) and note.get("noteId") and any(
+            note.get(key) for key in ("title", "desc", "imageList", "video")
+        ):
+            selected_note_id = str(note["noteId"])
+            selected_note = note
     if not selected_note:
         return None
 
@@ -1191,22 +1202,63 @@ def _relay_fetch_html(url: str) -> tuple[str, str, str]:
 def _fetch_xiaohongshu_html(url: str) -> tuple[str, str, str]:
     if _browser_needs_relay("xiaohongshu"):
         return _relay_fetch_html(url)
-    client_kwargs = {
-        "follow_redirects": True,
-        "headers": {"User-Agent": DEFAULT_USER_AGENT},
-        "timeout": DEFAULT_TIMEOUT_SECONDS * 2,
-        "trust_env": False,
-    }
+    mobile_agent = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 "
+        "Mobile/15E148 Safari/604.1"
+    )
+    agents = [DEFAULT_USER_AGENT, mobile_agent]
+    if urlparse(url).path.startswith("/discovery/item/"):
+        agents.reverse()
+    deadline = time.monotonic() + DEFAULT_TIMEOUT_SECONDS * 2
+    first_result: tuple[str, str, str] | None = None
     proxy = _browser_proxy_for_platform("xiaohongshu")
-    if proxy:
-        client_kwargs["proxy"] = proxy
-    try:
-        with httpx.Client(**client_kwargs) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            return str(response.url), _extract_html_title(response.text), response.text
-    except httpx.HTTPError as exc:
-        raise _classify_http_error(exc) from exc
+    for agent in agents:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        client_kwargs = {
+            "follow_redirects": True,
+            "headers": {"User-Agent": agent},
+            "timeout": min(DEFAULT_TIMEOUT_SECONDS, remaining),
+            "trust_env": False,
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+        try:
+            with httpx.Client(**client_kwargs) as client:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if time.monotonic() >= deadline:
+                            raise httpx.ReadTimeout("Source read budget exceeded")
+                        if size > 8 * 1024 * 1024:
+                            raise _structured_browser_error(
+                                "来源页面过大，暂时无法读取。",
+                                reason_code="browser_request_failed", retryable=False,
+                            )
+                        chunks.append(chunk)
+                    if time.monotonic() >= deadline:
+                        raise httpx.ReadTimeout("Source read budget exceeded")
+                    html = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+                    result = str(response.url), _extract_html_title(html), html
+        except httpx.HTTPError as exc:
+            if first_result is None:
+                raise _classify_http_error(exc) from exc
+            break
+        if _extract_xiaohongshu_note_payload(result[2]):
+            return result
+        if first_result is None:
+            first_result = result
+    # Preserve the primary response for existing structured error handling.
+    if first_result is not None:
+        return first_result
+    raise _structured_browser_error(
+        "读取来源超时，请稍后重试。", reason_code="browser_timeout", retryable=True,
+    )
 
 
 def _fetch_xiaohongshu_relay_fallback(url: str) -> tuple[str, str, str]:
