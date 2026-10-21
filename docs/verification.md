@@ -8,7 +8,7 @@
 .\.venv\Scripts\python.exe -m unittest tests.ui_smoke_suite.UISmokeTestCase.test_result_workspace_uses_available_desktop_space
 ```
 
-该检查验证结果区随窗口展开、两栏等高、正文列宽度、底部信息可见且无大块闲置空间。它已纳入 `scripts.release_gate`。桌面壳在 Chromium 中用隔离 IPC 桩验证布局；已安装桌面程序仍需单独核对 exe 与新打包产物的哈希，前端构建成功不代表已安装程序更新。
+该检查验证外层宽度上限 1100px、正文/媒体工作区上限 980px、结果整组高度上限 820px 并垂直居中，两栏等高且底部信息可见。它已纳入 `scripts.release_gate`。桌面壳在 Chromium 中用隔离 IPC 桩验证布局；真实最大化原生窗口、系统 DPI、exe 与完整 sidecar 文件树仍需单独验收，浏览器模拟与前端构建成功不代表已安装程序更新。
 
 后端：
 
