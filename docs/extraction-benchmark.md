@@ -32,8 +32,12 @@ The release corpus must contain at least 60 unique links and every candidate mus
 The report also records content-completeness, media readiness, whether downstream transcription is required, fallback rate, text and image yield, attempt count, strategy, browser-runtime state, and sanitized error codes. Keep manifests and reports under `workspace/benchmarks/`; links may expire and should be refreshed before a release decision.
 
 Final evidence validation reads raw rows, not only the summary. Each of sixty
-distinct canonical content identities must have rounds 1, 2 and 3, with all six
-platforms covered. URL aliases and tracking parameters do not create new
+distinct canonical content identities must have rounds 1, 2 and 3, with all five
+currently supported platforms covered (Bilibili, Xiaoyuzhou, Douyin, Xiaohongshu,
+and WeChat articles). Each platform needs a complete success in every round,
+and benchmark timeouts must be zero. Historical six-platform reports retain
+all YouTube observations and failures; they are not rewritten as current evidence.
+URL aliases and tracking parameters do not create new
 content. Expired or challenged links remain failed observations; unidentified
 short links require resolved canonical identities before they can count.
 
