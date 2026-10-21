@@ -149,6 +149,7 @@ nav a { color: #424247; font-size: 14px; }
 .button.primary:hover { background: #29292d; }
 .text-link { color: var(--blue); font-weight: 560; }
 .compatibility { margin: 16px 0 0; color: var(--quiet); font-size: 14px; }
+.demo-note { max-width: 680px; margin: 16px auto 0; color: var(--quiet); font-size: 14px; line-height: 1.6; }
 
 .product-film {
   position: relative;
