@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import unittest
 from pathlib import Path
@@ -10,6 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BrandAndShowcaseTestCase(unittest.TestCase):
+    def test_mobile_home_is_the_reviewed_retirement_capture(self) -> None:
+        # Text scans cannot detect retired-platform copy inside public PNGs.
+        self.assertEqual(
+            hashlib.sha256((ROOT / 'docs/assets/home-mobile.png').read_bytes()).hexdigest(),
+            'd17f6d027f030da5a715294a8ea314c2b8646dca4d777996f8104851ecc9eab0',
+        )
+
     def test_product_app_uses_the_compact_praxis_mark(self) -> None:
         source = (ROOT / "web/public/brand-mark.svg").read_bytes()
         self.assertEqual(source, (ROOT / "design/brand/app-icon.svg").read_bytes())
