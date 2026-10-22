@@ -1,0 +1,30 @@
+{
+ "status_code": 0,
+ "aweme_details": [
+  {
+   "aweme_id": "7624387162426887464",
+   "desc": "示例视频描述",
+   "author": {
+    "nickname": "示例作者"
+   },
+   "share_url": "https://www.iesdouyin.com/share/video/7624387162426887464/",
+   "video": {
+    "duration": 116611,
+    "play_addr": {
+     "uri": "v0300fg10000d77k1cfog65pubv32ndg",
+     "url_list": [
+      "https://v3-dy-o.zjcdn.com/example/video/tos/cn/play.mp4",
+      "https://www.douyin.com/aweme/v1/playwm/?video_id=example"
+     ]
+    },
+    "cover": {
+     "url_list": [
+      "https://p3-sign.douyinpic.com/example-cover.jpeg"
+     ]
+    }
+   },
+   "images": null
+  }
+ ],
+ "filter_list": []
+}
