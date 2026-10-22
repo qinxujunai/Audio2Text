@@ -1,5 +1,6 @@
 import { FolderOpen, LogIn, RotateCcw } from "lucide-react";
 import { motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 
 type ProcessingPhase = "bootstrapping" | "processing" | "attention";
 
@@ -33,6 +34,52 @@ export function safeProgressDetail(raw: string | undefined): string {
   return text.length > 80 ? text.slice(0, 78) + "…" : text;
 }
 
+/** "1:05" or "1:02:05": elapsed time that keeps a long wait visibly alive. */
+export function formatElapsed(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const rest = String(s % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
+}
+
+/**
+ * Remaining time from the observed rate, rounded coarsely so it never jitters.
+ * Shown only once progress is meaningful and recent; hidden when it would be a guess.
+ */
+export function estimateRemaining(progress: number, elapsedSeconds: number, stalledSeconds: number): string {
+  if (progress < 8 || progress >= 99 || elapsedSeconds < 10 || stalledSeconds > 30) return "";
+  const remaining = (elapsedSeconds * (100 - progress)) / progress;
+  if (!Number.isFinite(remaining) || remaining > 90 * 60) return "";
+  if (remaining < 45) return "即将完成";
+  if (remaining < 90) return "预计还需约 1 分钟";
+  return `预计还需约 ${Math.round(remaining / 60)} 分钟`;
+}
+
+function useProcessingClock(active: boolean, progress: number) {
+  const startedAt = useRef<number>(Date.now());
+  const progressAt = useRef<{ value: number; at: number }>({ value: progress, at: Date.now() });
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!active) return;
+    startedAt.current = Date.now();
+    progressAt.current = { value: progress, at: Date.now() };
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+    // A new processing run restarts the clock; progress changes are tracked below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
+
+  if (progress !== progressAt.current.value) {
+    progressAt.current = { value: progress, at: Date.now() };
+  }
+  return {
+    elapsed: (now - startedAt.current) / 1000,
+    stalled: (now - progressAt.current.at) / 1000,
+  };
+}
+
 export function ProcessingStage({
   phase,
   eyebrow,
@@ -48,11 +95,14 @@ export function ProcessingStage({
   platformActionLabel,
   onDiagnostics,
 }: ProcessingStageProps) {
-  const normalizedProgress = Math.min(
-    100,
-    Math.max(phase === "bootstrapping" ? 18 : progressPercent || 0, 0),
-  );
+  const working = phase === "bootstrapping" || phase === "processing";
+  // While the app is still starting there is no real progress yet: show an indeterminate bar, not a made-up number.
+  const indeterminate = phase === "bootstrapping" || !progressPercent;
+  const normalizedProgress = Math.round(Math.min(100, Math.max(progressPercent || 0, 0)));
   const safeDetail = safeProgressDetail(progressDetail);
+  const { elapsed, stalled } = useProcessingClock(working, normalizedProgress);
+  const remaining = indeterminate ? "" : estimateRemaining(normalizedProgress, elapsed, stalled);
+  const reassurance = working && stalled > 30 ? "长内容需要更久，仍在处理" : "";
 
   return (
     <section
@@ -75,22 +125,30 @@ export function ProcessingStage({
           <p>{description}</p>
         </div>
 
-        {phase === "bootstrapping" || phase === "processing" ? (
+        {working ? (
           <div
             className="processing-meter"
-            aria-label={`当前进度 ${normalizedProgress}%`}
+            aria-label={indeterminate ? "正在准备" : `当前进度 ${normalizedProgress}%`}
           >
-            <div className="processing-meter-track">
-              <motion.span
-                className="processing-meter-fill"
-                initial={{ width: 0 }}
-                animate={{ width: `${normalizedProgress}%` }}
-                transition={{ duration: 0.45, ease: "easeOut" }}
-              />
+            <div className={indeterminate ? "processing-meter-track is-indeterminate" : "processing-meter-track"}>
+              {indeterminate ? (
+                <span className="processing-meter-sweep" />
+              ) : (
+                <motion.span
+                  className="processing-meter-fill"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${normalizedProgress}%` }}
+                  transition={{ duration: 0.45, ease: "easeOut" }}
+                />
+              )}
             </div>
             <div className="processing-meter-meta">
-              <span>{safeDetail || stageLabel || ""}</span>
-              <strong>{normalizedProgress}%</strong>
+              <span>{reassurance || safeDetail || stageLabel || ""}</span>
+              {indeterminate ? null : <strong>{normalizedProgress}%</strong>}
+            </div>
+            <div className="processing-meter-time" aria-live="off">
+              <span>已用 {formatElapsed(elapsed)}</span>
+              {remaining ? <span>{remaining}</span> : null}
             </div>
           </div>
         ) : null}
