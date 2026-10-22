@@ -15,6 +15,9 @@ app_port: 8000
 
 视频里的观点、播客里的对话、图文里的灵感，都可以留下来。万象成文把链接和本地音视频，整理为可阅读、可复制、可保存的文字与媒体。
 
+> 我想把一期两个小时的小宇宙播客转成文字，拿去跟 AI 聊。试了几个小程序，要么太长转不动，要么太贵。我不会写代码，那天晚上，还是按下了 Win+R。
+> —— 秦徐俊，为什么做万象成文
+
 [产品官网](https://qinxujunai.github.io/Audio2Text/) · [下载 Windows 版](https://github.com/qinxujunai/Audio2Text/releases/latest/download/Wanxiang-Windows-x64-Setup.exe) · [版本记录](https://github.com/qinxujunai/Audio2Text/releases)
 
 [![观看万象成文产品演示](docs/assets/wanxiang-demo-poster.jpg)](docs/assets/wanxiang-demo.mp4)
