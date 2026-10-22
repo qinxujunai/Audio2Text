@@ -14,7 +14,7 @@ app_port: 8000
 
 [![观看万象成文产品演示](docs/assets/wanxiang-demo-poster.jpg)](docs/assets/wanxiang-demo.mp4)
 
-*12 秒演示来自实际安装界面，使用专用示例与预置结果，不代表处理耗时。*
+*12 秒演示来自开发预览版的实际安装界面，使用专用示例与预置结果，等待过程已缩短；正式下载版本以 Release 标识为准。*
 
 ## 留下内容，随时回看
 

@@ -97,8 +97,20 @@ class PublicSiteBrowserTests(unittest.TestCase):
         page.get_by_role("button", name="EN").click()
         self.assertEqual(page.locator("html").get_attribute("lang"), "en")
         self.assertIn("Turn videos", page.locator(".hero-lede").inner_text())
+        self.assertIn("development preview", page.locator(".demo-note").inner_text())
         page.reload(wait_until="networkidle")
         self.assertEqual(page.locator("html").get_attribute("lang"), "en")
+        page.close()
+
+    def test_retired_platform_is_absent_and_preview_is_disclosed(self) -> None:
+        page = self._open(1440, 900, reduced_motion=True)
+        page.locator('[data-i18n="faqPlatforms"]').click()
+        supported = page.locator('[data-i18n="faqPlatformsBody"]').inner_text()
+        for platform in ("哔哩哔哩", "小宇宙", "抖音", "小红书", "微信公众号"):
+            self.assertIn(platform, supported)
+        self.assertNotIn("YouTube", page.locator("body").inner_text())
+        self.assertIn("开发预览版", page.locator(".demo-note").inner_text())
+        self.assertIn("v2.1.0", page.locator(".compatibility").inner_text())
         page.close()
 
     def test_reduced_motion_does_not_autoplay_video(self) -> None:

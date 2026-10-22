@@ -12,11 +12,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class BrandAndShowcaseTestCase(unittest.TestCase):
     def test_mobile_home_is_the_reviewed_retirement_capture(self) -> None:
-        # Text scans cannot detect retired-platform copy inside public PNGs.
+        # This public screenshot was visually reviewed with an empty history.
+        # Text-only checks cannot detect retired-platform copy inside a PNG.
         self.assertEqual(
             hashlib.sha256((ROOT / 'docs/assets/home-mobile.png').read_bytes()).hexdigest(),
             'd17f6d027f030da5a715294a8ea314c2b8646dca4d777996f8104851ecc9eab0',
         )
+
+    def test_public_promotion_excludes_retired_platform(self) -> None:
+        for relative in ("site/index.html", "site/app.js", "README.md"):
+            self.assertNotIn("youtube", (ROOT / relative).read_text(encoding="utf-8").lower(), relative)
+
+    def test_candidate_workflow_cannot_implicitly_publish_pages(self) -> None:
+        workflow = (ROOT / ".github/workflows/pages.yml").read_text(encoding="utf-8")
+        self.assertNotIn("workflow_run", workflow)
 
     def test_product_app_uses_the_compact_praxis_mark(self) -> None:
         source = (ROOT / "web/public/brand-mark.svg").read_bytes()
