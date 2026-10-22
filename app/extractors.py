@@ -2456,14 +2456,34 @@ def _download_bilibili_audio_first(
 
 
 def complete_deferred_bilibili_video(spec: dict, capture_dir: Path) -> Path | None:
-    """Fetch the picture stream for a text-first capture and merge it with the saved audio.
+    """Complete the original video without making the delivered text wait for it.
 
-    Play URLs expire, so the stream address is requested again here instead of being stored.
+    Preserve the existing progressive-first choice: anonymous DASH can expose a
+    lower resolution than the progressive original. Refresh expiring addresses,
+    download with ranges, and fall back to merging DASH with the saved audio.
     """
     audio_path = Path(str(spec.get("audio_path") or ""))
     if not audio_path.is_file():
         return None
+    output_path = capture_dir / "bilibili_source.mp4"
     with _httpx_client(headers=_bilibili_headers()) as client:
+        progressive_url = (
+            "https://api.bilibili.com/x/player/playurl"
+            f"?avid={spec.get('aid')}&cid={spec.get('cid')}&bvid={spec.get('bvid') or ''}"
+            "&fnver=0&fourk=1&qn=64&fnval=0"
+        )
+        try:
+            payload = _bilibili_api_json(client, progressive_url, reason_code="bilibili_playurl_failed")
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            original_url = _bilibili_progressive_media_url(data)
+            if original_url:
+                _download_large_file(original_url, output_path, platform="bilibili", headers=_bilibili_headers())
+                if output_path.is_file() and output_path.stat().st_size > 0:
+                    return output_path
+        except ExtractionError:
+            # The text remains available while the original provider is retried
+            # through its existing DASH fallback.
+            pass
         payload = _bilibili_api_json(
             client,
             _bilibili_dash_url(spec.get("aid"), spec.get("cid"), str(spec.get("bvid") or "")),
@@ -2474,7 +2494,6 @@ def complete_deferred_bilibili_video(spec: dict, capture_dir: Path) -> Path | No
     if not video_url:
         return None
     video_path = capture_dir / "bilibili_video.m4s"
-    output_path = capture_dir / "bilibili_source.mp4"
     _download_large_file(video_url, video_path, platform="bilibili", headers=_bilibili_headers())
     return _merge_media_streams(video_path, audio_path, output_path)
 
