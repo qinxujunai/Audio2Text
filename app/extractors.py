@@ -24,6 +24,8 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
+from app.platforms import douyin as douyin_platform
+from app.platforms import ranged as ranged_download
 from app.resolver import ResolvedSource
 from app.settings import BROWSER_PROFILE_DIR, CN_PLATFORM_PROXY, CN_PLATFORM_RELAY_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, DEPLOYMENT_MODE, FFMPEG_PATH, read_cookie_payload
 from app.url_safety import UnsafeExternalUrlError, assert_public_http_url
@@ -719,6 +721,34 @@ def _download_file(
             retryable=True,
         ) from None
     return target_path
+
+
+def _download_large_file(
+    url: str,
+    target_path: Path,
+    *,
+    platform: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> Path:
+    """Several Range connections when the server allows it (see app/platforms/ranged.py),
+    otherwise the plain single-connection download."""
+    try:
+        assert_public_http_url(url)
+    except UnsafeExternalUrlError as exc:
+        raise ExtractionError("download", str(exc), reason_code="unsafe_url", retryable=False) from exc
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    request_headers = _request_headers()
+    if headers:
+        request_headers.update(headers)
+    try:
+        done = ranged_download.download_in_parts(
+            lambda: _httpx_client(proxy=_proxy_for_platform(platform), headers=request_headers),
+            url,
+            target_path,
+        )
+    except httpx.HTTPError:
+        done = None
+    return done or _download_file(url, target_path, platform=platform, headers=headers)
 
 
 def _extract_meta_tags(html: str) -> dict[str, str]:
@@ -2034,13 +2064,19 @@ def _extract_douyin_aweme_id(url: str, html: str) -> str:
 
 
 def _fetch_douyin_item(aweme_id: str, *, deadline: float | None = None) -> dict:
-    headers = _request_headers()
-    headers["Referer"] = "https://www.douyin.com/"
-    candidates = [
-        f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={aweme_id}",
+    # The no-login share-page API comes first (see app/platforms/douyin.py); it answers
+    # empty now and then, so it is asked twice. The web detail API stays as a last try,
+    # although it usually needs an a_bogus signature and a session.
+    candidates = [*douyin_platform.slidesinfo_urls(aweme_id)] * 2 + [
         f"https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id={aweme_id}&aid=6383&device_platform=webapp",
     ]
     for url in candidates:
+        headers = _request_headers()
+        if "iesdouyin.com" in url:
+            headers["User-Agent"] = douyin_platform.MOBILE_USER_AGENT
+            headers["Referer"] = "https://www.iesdouyin.com/"
+        else:
+            headers["Referer"] = "https://www.douyin.com/"
         request_timeout = DEFAULT_TIMEOUT_SECONDS
         if deadline is not None:
             remaining = deadline - time.monotonic()
@@ -2060,6 +2096,9 @@ def _fetch_douyin_item(aweme_id: str, *, deadline: float | None = None) -> dict:
 
         if not isinstance(payload, dict):
             continue
+        item = douyin_platform.item_from_slidesinfo(payload)
+        if item:
+            return item
         item_list = payload.get("item_list")
         if isinstance(item_list, list) and item_list:
             return item_list[0]
@@ -2089,8 +2128,10 @@ def _collect_douyin_media_urls(item: dict) -> list[str]:
                 candidates.append(value)
         url_list = node.get("url_list") or []
         for value in url_list:
-            if isinstance(value, str) and value and value not in candidates:
-                candidates.append(value)
+            if isinstance(value, str) and value:
+                value = douyin_platform.no_watermark(value)
+                if value not in candidates:
+                    candidates.append(value)
         uri = node.get("uri")
         if isinstance(uri, str) and uri:
             play_url = f"https://www.douyin.com/aweme/v1/play/?video_id={uri}&ratio=720p&line=0"
@@ -2228,7 +2269,7 @@ def extract_douyin_direct(
         language="zh",
         thumbnail_url=thumbnail or None,
         duration_seconds=_douyin_duration_seconds(item),
-        strategy=["share_resolve", "douyin_item_api", "media_direct"],
+        strategy=["share_resolve", "douyin_share_api", "media_direct"],
         notes_text=description,
         primary_text="",
         media_file_path=str(media_path),
@@ -2434,7 +2475,7 @@ def complete_deferred_bilibili_video(spec: dict, capture_dir: Path) -> Path | No
         return None
     video_path = capture_dir / "bilibili_video.m4s"
     output_path = capture_dir / "bilibili_source.mp4"
-    _download_file(video_url, video_path, platform="bilibili", headers=_bilibili_headers())
+    _download_large_file(video_url, video_path, platform="bilibili", headers=_bilibili_headers())
     return _merge_media_streams(video_path, audio_path, output_path)
 
 
