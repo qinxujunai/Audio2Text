@@ -1,5 +1,10 @@
 # Third-Party Notices
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 This file records the direct dependencies shipped by the project. Release
 automation must generate an SBOM and preserve each dependency's complete
 license text in the installer artifact.

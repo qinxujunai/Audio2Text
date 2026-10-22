@@ -1,5 +1,10 @@
 # SenseVoice CUDA 人工参考测评
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 专项记录；原实测日期保留 · [最新状态](project-status.md) · [文档索引](README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 2026-10-12，RTX 3060 Laptop 6GB，SenseVoice Small FP32，固定模型和 CUDA SDK。使用 [ASCEND 官方项目](https://github.com/HLTCHKUST/ASCEND) 与其 [公开数据集](https://huggingface.co/datasets/CAiRE/ASCEND)，固定 revision `737e9800ae31be9932ba8464c80366559bd28424`。数据许可 CC BY-SA 4.0；参考为语料人工标注，不是另一个识别模型的输出。
 
 5735 段按音频哈希去重，总 4.587 小时，每段重复三轮，共 17205 次；无运行失败。

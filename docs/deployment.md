@@ -1,5 +1,10 @@
 # Praxis AI｜无界笃行 / 万象成文 部署说明
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 ## 部署定位
 
 这是一个单机、单实例、文件存储、单页交付型产品。
@@ -54,7 +59,11 @@ workspace/
 
 ## 推荐配置
 
-### 本地 Faster-Whisper
+### Windows 当前候选路线
+
+2.3 候选的基础本地转写使用 SenseVoice int8；本机 CUDA 为 SenseVoice Small FP32 与独立 sherpa-onnx GPU SDK。CPU 与 GPU 的权重不同，不用它们的耗时比宣称纯 CUDA 加速。GPU 准备与安装验证见 [实施记录](release-2.3.0.md)；不要覆盖 CPU venv，不修改驱动或全局环境。下述 Faster-Whisper 与 OpenAI-compatible 是可选部署示例，不是当前本机默认模型。
+
+### 可选本地 Faster-Whisper
 
 ```json
 {
