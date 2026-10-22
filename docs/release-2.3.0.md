@@ -1,7 +1,7 @@
 # 万象成文 2.3.0 实施与发布记录
 
 <!-- project-doc-status:start -->
-> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
+> 文档维护同步：**2026-10-23** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
 > v2.3.0 已于 2026-10-23 正式发布；历史验证仍以各自测试日期和安装包摘要为准。
 <!-- project-doc-status:end -->
 
@@ -13,7 +13,7 @@
 
 [v2.3.0](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.0)已正式发布，公开同一本机与[干净 Windows 验收](https://github.com/qinxujunai/Audio2Text/actions/runs/39811228460)安装包：109907373 字节，SHA-256 `a4a7a62ccf597210587bf2a4f837aa78c7ad62d2c4cf9813634c91a6b3d2b1a3`。本机安装目录仍为 `D:\Apps\万象成文`，回滚目录 `workspace/temp/product-rollback-20261022-235642/`。
 
-固定同一批 60 条三轮，141/180 完整、零超时，五个平台每轮都有完整成功，validator 通过；39 次失败全部保留。394 项后端（1 跳过）、32 项浏览器回归、TypeScript、构建、正式依赖审计和云端 Quality Gate 通过。实际安装版 CUDA/DeepSeek/原生保存、普通和最大化窗口、144 DPI、原 10 条历史及加密设置保留通过，正常重启后调试端口关闭。新 B 站样本 25.452 秒出文字、92.970 秒补齐并播放 1280×692 原视频。详见[本轮证据与限制](platform-benchmark-20261022.md)；官网回执见项目状态。
+固定同一批 60 条三轮，141/180 完整、零超时，五个平台每轮都有完整成功，validator 通过；39 次失败全部保留。394 项后端（1 跳过）、32 项浏览器回归、TypeScript、构建、正式依赖审计和云端 Quality Gate 通过。实际安装版 CUDA/DeepSeek/原生保存、普通和最大化窗口、144 DPI、原 10 条历史及加密设置保留通过，正常重启后调试端口关闭。新 B 站样本 25.452 秒出文字、92.970 秒补齐并播放 1280×692 原视频。默认分支合并 `6bd2265`，手动 Pages `39812322694` 成功，官网下载摘要与验收包一致；合并后 20 项文档、官网及品牌回归通过。详见[本轮证据与限制](platform-benchmark-20261022.md)。
 
 ## 已验证的源码功能
 

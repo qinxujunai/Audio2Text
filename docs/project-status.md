@@ -13,7 +13,7 @@
 | 本地安装版 | 2.3.0，安装来源 `a192250`，目录 `D:\Apps\万象成文`。真实 CUDA、DeepSeek 合成校对、普通/最大化窗口、原生保存、新 B 站流程及历史保留通过；已正常重启，9222 调试端口关闭。 |
 | 已验收安装包 | 109907373 字节；SHA-256 `a4a7a62ccf597210587bf2a4f837aa78c7ad62d2c4cf9813634c91a6b3d2b1a3`。本机与[干净 Windows 同文件验收](https://github.com/qinxujunai/Audio2Text/actions/runs/39811228460)通过，公开同一文件。 |
 | 公开 Release | [v2.3.0 正式版](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.0)，2026-10-23 发布，非草稿、非预发布；安装包与校验文件已上传且摘要一致。 |
-| 官网 | [GitHub Pages](https://qinxujunai.github.io/Audio2Text/) 待本轮 clean-main 合并推送后手动部署与官网下载摘要复核；此行不以源码合入推断上线。 |
+| 官网 | [GitHub Pages](https://qinxujunai.github.io/Audio2Text/) 手动部署 [39812322694](https://github.com/qinxujunai/Audio2Text/actions/runs/39812322694)成功。线上桌面/手机、中英文、品牌资源、12 秒演示播放通过；下载明确指向 v2.3.0。从官网链接重新下载 109907373 字节，SHA-256 与上述验收包一致。 |
 
 ## 本轮验证（2026-10-22）
 
@@ -31,7 +31,7 @@
 
 ## 后续工作边界
 
-本轮按用户明确授权完成源码、冻结构建、实际安装、干净 Windows 同文件验收与正式 Release；官网尚按上表复核。没有新依据时不重复整个基准或准确率测试，只补受影响部分。
+本轮按用户明确授权完成源码、冻结构建、实际安装、干净 Windows 同文件验收、正式 Release、默认分支合并、手动 Pages 与官网下载摘要闭环。官网不等同云端演示后端，未将后者宣称为本次新部署。没有新依据时不重复整个基准或准确率测试，只补受影响部分。
 
 原 10 条历史 Capture 与加密设置哈希不变；新增一条 B 站验收记录。实际系统 DPI 为 144，最大化外层 1100px、工作区 980px、整组高度 820px；正常退出码 0 后重新正常启动。安全审计 0 漏洞；[Quality Gate](https://github.com/qinxujunai/Audio2Text/actions/runs/39807590791)通过。安装包仍未签名，链接可见性限制见本轮失败逐项报告。
 
