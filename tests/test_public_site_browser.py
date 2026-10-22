@@ -104,7 +104,10 @@ class PublicSiteBrowserTests(unittest.TestCase):
 
     def test_retired_platform_is_absent_and_preview_is_disclosed(self) -> None:
         page = self._open(1440, 900, reduced_motion=True)
-        self.assertEqual(page.locator(".platform-list strong").count(), 5)
+        page.locator('[data-i18n="faqPlatforms"]').click()
+        supported = page.locator('[data-i18n="faqPlatformsBody"]').inner_text()
+        for platform in ("哔哩哔哩", "小宇宙", "抖音", "小红书", "微信公众号"):
+            self.assertIn(platform, supported)
         self.assertNotIn("YouTube", page.locator("body").inner_text())
         self.assertIn("开发预览版", page.locator(".demo-note").inner_text())
         self.assertIn("v2.1.0", page.locator(".compatibility").inner_text())

@@ -29,6 +29,57 @@ const copy = {
   }
 };
 
+Object.assign(copy.zh, {
+  navProof: "下载", demoNote: "演示使用开发预览版与预置示例，等待过程已缩短；正式下载版本见上方。",
+  workflowKicker: "从输入到保存", workflowBody: "粘贴链接或选择文件，查看正文与媒体，再复制或保存。已有正文或字幕时优先提取；需要识别时，在本机完成。",
+  localBody: "本地文件在电脑上识别，支持可选 CUDA 加速。",
+  scenariosKicker: "让有价值的内容，留得下来", scenariosTitle: "听过、看过。也能找回。",
+  scenarioVideo: "长视频", scenarioVideoBody: "留下完整文字，回看视频，复制值得保留的那一段。",
+  scenarioPodcast: "播客", scenarioPodcastBody: "把对话变成正文，让听到的内容也能被搜索和引用。",
+  scenarioFile: "本地音视频", scenarioFileBody: "选择自己的录音或视频，在电脑上完成语音识别。",
+  scenarioArticle: "图文", scenarioArticleBody: "正文与图片一起留下，阅读、查看与保存各得其所。",
+  localProofKicker: "识别在本地，修正由你决定", localProofTitle: "保留原话。只改明确的错。",
+  localProofBody: "AI 校对提出小范围修正，逐处确认后另存一份。原文一直保留，不润色、不总结、不删段。",
+  proofDemoLabel: "校对操作示例", proofDemoTitle: "确认每一处修正", exampleOnly: "示例文字",
+  demoOriginal: "这里有一个错别宇。金额三百元。保留所有原话。", demoCorrected: "这里有一个错别字。金额三百元。保留所有原话。",
+  demoReason: "仅修正错别字", demoPreserved: "勾选建议预览校对版，原文保持不变。",
+  gpuBody: "支持 NVIDIA CUDA 加速，实际运行设备在本地设置中可查看。也可选择 CPU。",
+  privacyBody: "本地识别不上传音频。启用远程 AI 校对时，会把待校对文字发送给你配置的模型服务；费用由该服务收取。",
+  proofKicker: "下载与版本", proofTitle: "在自己的电脑上，开始整理。",
+  proofBody: "下载来自 GitHub Release，版本与校验值自动同步。当前安装包尚未代码签名，Windows 可能显示安全提示。",
+  faqTitle: "开始之前，了解这些。", faqSystem: "需要什么电脑？",
+  faqSystemBody: "Windows 10 / 11，64 位。CPU 可完成本地识别；NVIDIA 显卡可使用可选 CUDA 组件。首次启动需要联网准备模型与运行组件，之后本地文件可离线识别。",
+  faqSize: "为什么首次启动还要下载？", faqSizeBody: "安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。",
+  faqPlatforms: "哪些链接可以整理？", faqPlatformsBody: "支持哔哩哔哩、小宇宙、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。",
+  faqAI: "AI 校对能保证正确吗？", faqAIBody: "不能。模型只提出建议，你逐处确认后才能保存。数字与单位有额外保护，但人名、事实和语义仍需自己核对；原文与校对版始终分别保留。",
+  faqSafety: "Windows 为什么提示安全警告？", faqSafetyBody: "当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。"
+});
+Object.assign(copy.en, {
+  navProof: "Download", demoNote: "The demo uses a development preview with prepared examples and shortened waits. The public download version is shown above.",
+  workflowKicker: "From input to saved result", workflowBody: "Paste a link or choose a file. Read the text, preview the media, then copy or save. Existing text and captions come first; local recognition handles the rest.",
+  localBody: "Recognize local files on your PC, with optional CUDA acceleration.",
+  scenariosKicker: "Keep what matters", scenariosTitle: "Heard it. Seen it. Find it again.",
+  scenarioVideo: "Long videos", scenarioVideoBody: "Keep the full transcript, revisit the video, and copy the passage that matters.",
+  scenarioPodcast: "Podcasts", scenarioPodcastBody: "Turn conversations into text you can search and quote.",
+  scenarioFile: "Local recordings", scenarioFileBody: "Choose your audio or video and recognize speech on your own computer.",
+  scenarioArticle: "Visual articles", scenarioArticleBody: "Keep text and images together, ready to read, view, and save.",
+  localProofKicker: "Local recognition. Your corrections.", localProofTitle: "Keep the words. Correct clear errors.",
+  localProofBody: "AI suggests small corrections. Review each one and save a separate copy. The original stays intact, without rewriting, summaries, or omitted passages.",
+  proofDemoLabel: "Proofreading interaction example", proofDemoTitle: "Review each correction", exampleOnly: "Example text",
+  demoOriginal: "A Chinese typo: 错别宇. Amount: 三百元. Keep every word.", demoCorrected: "A Chinese typo: 错别字. Amount: 三百元. Keep every word.",
+  demoReason: "Typo correction only", demoPreserved: "Select the suggestion to preview a corrected copy. The original stays unchanged.",
+  gpuBody: "Optional NVIDIA CUDA acceleration. View the actual execution device in local settings, or choose CPU.",
+  privacyBody: "Local recognition does not upload audio. Remote AI proofreading sends transcript text to your configured model service; that service determines the cost.",
+  proofKicker: "Download and version", proofTitle: "Start on your own computer.",
+  proofBody: "Downloads come from GitHub Releases, with synchronized versions and checksums. The installer is currently unsigned; Windows may show a security prompt.",
+  faqTitle: "Before you start.", faqSystem: "What computer do I need?",
+  faqSystemBody: "Windows 10 / 11, 64-bit. CPU recognition is supported; NVIDIA GPUs can use optional CUDA components. Initial setup downloads models and runtime components. Local files can then be recognized offline.",
+  faqSize: "Why are there first-run downloads?", faqSizeBody: "The installer contains the base app. Models and media components are downloaded separately and checked against their hashes. GPU models and components are optional; the app does not change drivers or system settings.",
+  faqPlatforms: "Which links are supported?", faqPlatformsBody: "Bilibili, Xiaoyuzhou, Douyin, Xiaohongshu, and WeChat articles. Access depends on your network, login, and platform rules. Support does not guarantee every link will work.",
+  faqAI: "Are AI corrections always right?", faqAIBody: "No. Review each suggestion before saving. Numbers and units have extra guards, but names, facts, and meaning still need your judgment. Original and corrected versions remain separate.",
+  faqSafety: "Why does Windows show a warning?", faqSafetyBody: "The installer is currently unsigned. Download from this page's GitHub Release and check the SHA-256 above. Use the feedback link if you encounter a problem."
+});
+
 const languageButtons = [...document.querySelectorAll("[data-language]")];
 const film = document.querySelector("video");
 const filmControl = document.querySelector(".film-control");
@@ -52,12 +103,19 @@ function applyLanguage(nextLanguage) {
   languageButtons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.language === language)));
   if (filmControlText) filmControlText.textContent = film && !film.paused ? selected.pause : selected.play;
   localStorage.setItem("wanxiang-language", language);
+  updateCorrectionDemo();
 }
+
+function updateCorrectionDemo() {
+  const result = document.querySelector(".demo-result");
+  if (result) result.textContent = copy[language][document.querySelector("#demo-correction")?.checked ? "demoCorrected" : "demoOriginal"];
+}
+document.querySelector("#demo-correction")?.addEventListener("change", updateCorrectionDemo);
 
 languageButtons.forEach((button) => button.addEventListener("click", () => applyLanguage(button.dataset.language)));
 filmControl?.addEventListener("click", async () => {
   if (!film) return;
-  if (film.paused) await film.play(); else film.pause();
+  if (film.paused) { try { await film.play(); } catch { return; } } else film.pause();
   filmControl.setAttribute("aria-pressed", String(!film.paused));
   filmControlText.textContent = film.paused ? copy[language].play : copy[language].pause;
 });

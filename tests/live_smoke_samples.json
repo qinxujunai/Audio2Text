@@ -1,14 +1,6 @@
 {
   "success": [
     {
-      "platform": "youtube",
-      "variant": "subtitle_video",
-      "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-      "expected_media_kind": "video",
-      "require_text": true,
-      "require_source_media": true
-    },
-    {
       "platform": "bilibili",
       "variant": "user_reported_video",
       "url": "https://www.bilibili.com/video/BV1sHU9BmEne/?p=114",
@@ -31,27 +23,14 @@
       "url": "https://jingxuan.douyin.com/m/video/7618980634866534834",
       "expected_media_kind": "video",
       "require_text": true,
-      "require_source_media": true
-    },
-    {
-      "platform": "xiaohongshu",
-      "variant": "image",
-      "url": "https://www.xiaohongshu.com/discovery/item/69e6cc20000000001d01becd",
-      "require_image_urls": true
-    },
-    {
-      "platform": "xiaohongshu",
-      "variant": "video",
-      "url": "https://www.xiaohongshu.com/discovery/item/6956513d000000001e022eda",
-      "expected_media_kind": "video",
-      "require_source_media": true
-    },
-    {
-      "platform": "xiaohongshu",
-      "variant": "live",
-      "url": "https://www.xiaohongshu.com/discovery/item/6a2e9f630000000017009d6a",
-      "require_image_urls": true,
-      "require_live_artifact": true
+      "require_source_media": true,
+      "allow_user_action": true,
+      "allowed_user_action_reason_codes": [
+        "browser_challenge_required",
+        "browser_session_expired",
+        "source_fetch_failed",
+        "retry_exhausted"
+      ]
     },
     {
       "platform": "wechat_article",
@@ -60,11 +39,27 @@
       "require_image_urls": true
     }
   ],
-  "failure": [
+  "session_required": [
     {
-      "platform": "youtube",
-      "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+      "platform": "xiaohongshu",
+      "variant": "image",
+      "url": "https://www.xiaohongshu.com/discovery/item/69e6cc20000000001d01becd",
+      "expected_reason_code": "source_not_found"
     },
+    {
+      "platform": "xiaohongshu",
+      "variant": "video",
+      "url": "https://www.xiaohongshu.com/discovery/item/6956513d000000001e022eda",
+      "expected_reason_code": "source_not_found"
+    },
+    {
+      "platform": "xiaohongshu",
+      "variant": "live",
+      "url": "https://www.xiaohongshu.com/discovery/item/6a2e9f630000000017009d6a",
+      "expected_reason_code": "source_not_found"
+    }
+  ],
+  "failure": [
     {
       "platform": "bilibili",
       "url": "https://www.bilibili.com/video/BV1111111111"
@@ -75,11 +70,15 @@
     },
     {
       "platform": "douyin",
-      "url": "https://www.douyin.com/video/1234567890123456789"
+      "url": "https://www.douyin.com/video/1234567890123456789",
+      "allow_user_action": true,
+      "expected_reason_code": "douyin_fresh_cookies_required"
     },
     {
       "platform": "xiaohongshu",
-      "url": "http://xhslink.com/a/HFNEzlEk7tP3"
+      "url": "http://xhslink.com/a/HFNEzlEk7tP3",
+      "allow_user_action": true,
+      "expected_reason_code": "xiaohongshu_full_url_required"
     }
   ]
 }

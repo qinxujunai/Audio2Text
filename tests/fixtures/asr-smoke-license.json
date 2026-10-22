@@ -1,0 +1,12 @@
+{
+  "dataset": "ASCEND",
+  "revision": "737e9800ae31be9932ba8464c80366559bd28424",
+  "sample": "ascend_test_00206",
+  "reference": "不过这样子你就之后找工作也蛮辛苦的如果你要图深圳的也要图香港的话要两边跑",
+  "source": "CAiRE/ASCEND@737e9800ae31be9932ba8464c80366559bd28424/test/00206",
+  "license": "CC-BY-SA-4.0",
+  "homepage": "https://github.com/HLTCHKUST/ASCEND",
+  "authors": "Holy Lovenia, Samuel Cahyawijaya, Genta Winata, Peng Xu, Yan Xu, Zihan Liu, Rita Frieske, Tiezheng Yu, Wenliang Dai, Elham J. Barezi, Qifeng Chen, Xiaojuan Ma, Bertram Shi, Pascale Fung",
+  "note": "Public human-annotated speech, used only for installation smoke. Not user audio or an accuracy benchmark.",
+  "publication": "https://aclanthology.org/2022.lrec-1.788"
+}
