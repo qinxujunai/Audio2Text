@@ -1,25 +1,71 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.store_fs import now_iso
 from scripts.config import LOGS_DIR
 
 
 TRACE_DIR = LOGS_DIR / "capture_traces"
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?:token|secret|password|passwd|cookie|authorization|api[_-]?key|access[_-]?key|signature|sig)",
+    re.IGNORECASE,
+)
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?P<key>token|secret|password|passwd|cookie|authorization|api[_-]?key|access[_-]?key|signature|sig)"
+    r"(?P<separator>\s*[=:]\s*)(?P<value>[^\s&,;]+)",
+    re.IGNORECASE,
+)
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
-def _safe_detail(value: Any) -> Any:
+def _redact_url_query(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        raw_url = match.group(0)
+        trailing = ""
+        while raw_url and raw_url[-1] in ".,;:!?)]}":
+            trailing = raw_url[-1] + trailing
+            raw_url = raw_url[:-1]
+        try:
+            parsed = urlsplit(raw_url)
+            if not parsed.query:
+                return raw_url + trailing
+            query = urlencode(
+                [
+                    (key, "[redacted]" if _SENSITIVE_KEY_RE.search(key) else item)
+                    for key, item in parse_qsl(parsed.query, keep_blank_values=True)
+                ]
+            )
+            return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, parsed.fragment)) + trailing
+        except ValueError:
+            return raw_url + trailing
+
+    return _URL_RE.sub(replace, value)
+
+
+def _redact_string(value: str) -> str:
+    value = _redact_url_query(value)
+    return _SENSITIVE_ASSIGNMENT_RE.sub(
+        lambda match: f"{match.group('key')}={match.group('value') and '[redacted]'}",
+        value,
+    )
+
+
+def _safe_detail(value: Any, *, key: str | None = None) -> Any:
+    if key and _SENSITIVE_KEY_RE.search(key):
+        return "[redacted]"
     if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
+        return _redact_string(value) if isinstance(value, str) else value
     if isinstance(value, (list, tuple)):
         return [_safe_detail(item) for item in value]
     if isinstance(value, dict):
-        return {str(key): _safe_detail(item) for key, item in value.items()}
-    return str(value)
+        return {str(item_key): _safe_detail(item, key=str(item_key)) for item_key, item in value.items()}
+    return _redact_string(str(value))
 
 
 class CaptureDiagnostics:
@@ -37,7 +83,7 @@ class CaptureDiagnostics:
         record = {
             "at": now_iso(),
             "capture_id": self.capture_id,
-            **{key: _safe_detail(value) for key, value in payload.items()},
+            **{key: _safe_detail(value, key=key) for key, value in payload.items()},
         }
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
@@ -65,10 +111,24 @@ class CaptureDiagnostics:
 
     def finish_capture(self, *, status: str, recovery_seconds: float = 0.0, **fields: Any) -> None:
         total_seconds = max(time.perf_counter() - self._started_at, 0.0)
+        # Whole-capture failures are no longer a product state.  Keep old
+        # callers readable in the trace, but make the diagnostic terminal
+        # stage agree with the actionable API/storage boundary instead of
+        # reintroducing a dead-end ``failed`` label.
+        terminal_stage = (
+            "done"
+            if status == "done"
+            else "awaiting_user"
+            if status in {"needs_user_action", "failed"}
+            else "queued"
+            if status in {"queued", "processing"}
+            else "awaiting_user"
+        )
+        public_status = "needs_user_action" if status == "failed" else status
         self.event(
             "capture_finished",
-            stage="done" if status == "done" else "failed",
-            status=status,
+            stage=terminal_stage,
+            status=public_status,
             total_seconds=round(total_seconds, 3),
             recovery_seconds=round(max(recovery_seconds, 0.0), 3),
             stage_durations={key: round(value, 3) for key, value in sorted(self.stage_durations.items())},

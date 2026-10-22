@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -149,6 +150,8 @@ class LocalFasterWhisperProvider:
             output_stem=output_stem,
             progress_callback=progress_callback,
         ).get("result", {})
+        _transcription_runtime.update(active_provider=self.name, fallback_active=False,
+                                      actual_device=payload.get("device"), compute_type=payload.get("compute_type"))
         transcript_path = Path(payload.get("txt_file") or "")
         timeline_path = Path(payload.get("timestamp_file") or "")
         transcript_text = transcript_path.read_text(encoding="utf-8", errors="ignore") if transcript_path.exists() else ""
@@ -355,6 +358,34 @@ class LocalSenseVoiceProvider:
             chunks.append(samples[start:total])
         return chunks
 
+    @classmethod
+    def _iter_audio_chunks(cls, path: Path):
+        """Decode long media with at most ~29 seconds of resident PCM."""
+        import numpy as np
+        frames, buffered = [], 0
+        threshold = (cls.max_chunk_seconds + 0.5) * cls.sample_rate
+        with av.open(str(path)) as container:
+            if not container.streams.audio:
+                raise RuntimeError("媒体文件中没有可识别的音轨。")
+            resampler = av.AudioResampler(format="flt", layout="mono", rate=cls.sample_rate)
+            def consume(converted):
+                nonlocal frames, buffered
+                for frame in converted:
+                    samples = frame.to_ndarray().reshape(-1)
+                    frames.append(samples)
+                    buffered += len(samples)
+                    if buffered >= threshold:
+                        combined = np.concatenate(frames).astype("float32", copy=False)
+                        first = cls._split_audio(combined)[0]
+                        yield first
+                        remaining = combined[len(first):].copy()
+                        frames, buffered = [remaining], len(remaining)
+            for frame in container.decode(audio=0):
+                yield from consume(resampler.resample(frame))
+            yield from consume(resampler.resample(None))
+        if buffered:
+            yield from cls._split_audio(np.concatenate(frames).astype("float32", copy=False))
+
     def transcribe(
         self,
         media_file_path: str,
@@ -374,6 +405,8 @@ class LocalSenseVoiceProvider:
         chunks = self._split_audio(samples)
         recognizer = self._recognizer()
         transcript_parts = []
+        timeline_parts = []
+        start_sample = 0
         for index, chunk in enumerate(chunks):
             stream = recognizer.create_stream()
             stream.accept_waveform(self.sample_rate, chunk)
@@ -381,17 +414,72 @@ class LocalSenseVoiceProvider:
             text = str(stream.result.text or "").strip()
             if text:
                 transcript_parts.append(text)
+                start_sec = start_sample / self.sample_rate
+                end_sec = (start_sample + len(chunk)) / self.sample_rate
+                timeline_parts.append(f"{start_sec:.3f}s -> {end_sec:.3f}s {text}")
+            start_sample += len(chunk)
             if progress_callback is not None:
                 ratio = 0.1 + (0.9 * (index + 1) / len(chunks))
                 progress_callback(ratio, f"正在识别音频片段 {index + 1}/{len(chunks)}。")
         transcript = "\n".join(transcript_parts)
+        _transcription_runtime.update(active_provider=self.name, fallback_active=False,
+                                      actual_device="cpu", compute_type="int8")
         return TranscriptionResult(
             provider=self.name,
             transcript_text=transcript,
-            timeline_text="",
+            timeline_text="\n".join(timeline_parts),
             language=None,
             segment_count=len(transcript_parts),
         )
+
+
+class LocalSenseVoiceCudaProvider(LocalSenseVoiceProvider):
+    name = "local_sensevoice_cuda"
+
+    def __init__(self, model_dir: Path, sdk_path: Path):
+        super().__init__(model_dir)
+        from app.sensevoice_cuda import get_worker
+        self.worker = get_worker(model_dir, sdk_path)
+
+    def transcribe(self, media_file_path: str, *, capture_id: str, output_folder: str | Path,
+                   output_stem: str = "raw_transcript", source_url: str | None = None,
+                   progress_callback: TranscriptionProgressCallback | None = None) -> TranscriptionResult:
+        path = Path(media_file_path)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        if progress_callback:
+            progress_callback(0.02, "正在准备本地显卡识别。")
+        self.worker.warm()
+        from itertools import islice
+        chunks = iter(self._iter_audio_chunks(path))
+        try:
+            duration = _probe_audio_duration(path)
+        except RuntimeError:
+            duration = 0
+        texts, timeline = [], []
+        offset, processed = 0, 0
+        while batch := list(islice(chunks, 4)):
+            results = self.worker.decode(batch)
+            if len(results) != len(batch):
+                raise RuntimeError("显卡转写返回不完整，请重试。")
+            for chunk, text in zip(batch, results):
+                end = offset + len(chunk)
+                if text:
+                    texts.append(text)
+                    timeline.append(f"{offset/self.sample_rate:.3f}s -> {end/self.sample_rate:.3f}s {text}")
+                offset = end
+            if progress_callback:
+                processed += len(batch)
+                ratio = min(0.99, 0.1 + 0.9 * offset / self.sample_rate / duration) if duration else 0.5
+                progress_callback(ratio, f"正在使用显卡识别，已完成 {processed} 个片段。")
+        if not offset:
+            raise RuntimeError("媒体文件中没有可识别的音频内容。")
+        if progress_callback:
+            progress_callback(1.0, "显卡识别完成，正在整理原文。")
+        _transcription_runtime.update(active_provider=self.name, fallback_active=False,
+                                      actual_device="cuda", compute_type="float32")
+        return TranscriptionResult(provider=self.name, transcript_text="\n".join(texts),
+                                   timeline_text="\n".join(timeline), segment_count=len(texts))
 
 
 class UnavailableTranscriptionProvider:
@@ -418,15 +506,80 @@ class FallbackTranscriptionProvider:
 
     def transcribe(self, media_file_path: str, **kwargs) -> TranscriptionResult:
         try:
-            return self.primary.transcribe(media_file_path, **kwargs)
+            result = self.primary.transcribe(media_file_path, **kwargs)
+            _transcription_runtime["active_provider"] = self.primary.name
+            _transcription_runtime["fallback_active"] = False
+            return result
         except Exception:
             progress_callback = kwargs.get("progress_callback")
             if progress_callback is not None:
                 progress_callback(0.05, "加速引擎暂不可用，已切换兼容模式。")
-            return self.fallback.transcribe(media_file_path, **kwargs)
+            result = self.fallback.transcribe(media_file_path, **kwargs)
+            _transcription_runtime["active_provider"] = self.fallback.name
+            _transcription_runtime["fallback_active"] = True
+            return result
+
+
+_transcription_runtime: dict[str, object] = {
+    "active_provider": None,
+    "fallback_active": False,
+    "actual_device": None,
+    "compute_type": None,
+}
+
+
+def _installed_version(distribution: str) -> str | None:
+    try:
+        return package_version(distribution)
+    except PackageNotFoundError:
+        return None
+
+
+def transcription_runtime_status(*, platform: str = "") -> dict[str, object]:
+    from app.local_preferences import transcription_options
+    from scripts.config import COMPUTE_TYPE
+    import os
+    options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
+                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") == "windows_desktop")
+    provider = get_transcription_provider(platform=platform)
+    primary = provider.primary if isinstance(provider, FallbackTranscriptionProvider) else provider
+    fallback = provider.fallback if isinstance(provider, FallbackTranscriptionProvider) else None
+    if isinstance(primary, LocalFasterWhisperProvider):
+        model = options["model_path"].name
+        engine_version = _installed_version("faster-whisper")
+    elif isinstance(primary, LocalSenseVoiceProvider):
+        model = "SenseVoiceSmall-fp32" if isinstance(primary, LocalSenseVoiceCudaProvider) else "SenseVoiceSmall-int8"
+        engine_version = _installed_version("sherpa-onnx")
+    elif isinstance(primary, OpenAICompatibleTranscriptionProvider):
+        model = primary.model
+        engine_version = "api"
+    elif isinstance(primary, CloudflareWorkersAIWhisperProvider):
+        model = "@cf/openai/whisper"
+        engine_version = "workers-ai"
+    else:
+        model = None
+        engine_version = None
+    return {
+        "configured_provider": TRANSCRIPTION_PROVIDER,
+        "selected_provider": primary.name,
+        "active_provider": _transcription_runtime["active_provider"] or primary.name,
+        "model": model,
+        "engine_version": engine_version,
+        "fallback_provider": getattr(fallback, "name", None),
+        "fallback_active": bool(_transcription_runtime["fallback_active"]),
+        "selected_device": options["device"],
+        "actual_device": _transcription_runtime["actual_device"],
+        "compute_type": _transcription_runtime["compute_type"],
+    }
 
 
 def get_transcription_provider(*, platform: str = "") -> TranscriptionProvider:
+    from app.local_preferences import transcription_options
+    from scripts.config import COMPUTE_TYPE
+    import os
+    options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
+                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") == "windows_desktop")
+    device = options.get("execution_device", options["device"])
     if TRANSCRIPTION_PROVIDER == "openai_compatible" and OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY and OPENAI_COMPATIBLE_MODEL:
         return OpenAICompatibleTranscriptionProvider(
             base_url=OPENAI_COMPATIBLE_BASE_URL,
@@ -441,15 +594,18 @@ def get_transcription_provider(*, platform: str = "") -> TranscriptionProvider:
     sensevoice_ready = (SENSEVOICE_MODEL_DIR / "model.int8.onnx").is_file() and (
         SENSEVOICE_MODEL_DIR / "tokens.txt"
     ).is_file()
-    faster_whisper_ready = MODEL_PATH.is_dir()
+    faster_whisper_ready = options["model_path"].is_dir()
+    if device == "cuda":
+        if options.get("engine") == "sensevoice":
+            return LocalSenseVoiceCudaProvider(options["model_path"], options["sdk_path"])
+        return LocalFasterWhisperProvider()
+    if options.get("engine") == "sensevoice":
+        return LocalSenseVoiceProvider(options["model_path"])
     if TRANSCRIPTION_PROVIDER == "local_sensevoice" and sensevoice_ready:
         return LocalSenseVoiceProvider()
     if TRANSCRIPTION_PROVIDER == "auto":
-        chinese_first_platforms = {"bilibili", "xiaoyuzhou", "douyin", "xiaohongshu"}
-        gpu_ready = DEVICE in {"auto", "cuda"} and _nvidia_gpu_memory_mb() >= 4096
-        prefer_faster_whisper = faster_whisper_ready and gpu_ready and (
-            DEVICE == "cuda" or platform not in chinese_first_platforms
-        )
+        gpu_ready = device == "auto" and _nvidia_gpu_memory_mb() >= 4096
+        prefer_faster_whisper = faster_whisper_ready and gpu_ready
         if prefer_faster_whisper:
             primary = LocalFasterWhisperProvider()
             return FallbackTranscriptionProvider(primary, LocalSenseVoiceProvider()) if sensevoice_ready else primary
@@ -462,3 +618,12 @@ def get_transcription_provider(*, platform: str = "") -> TranscriptionProvider:
     if TRANSCRIPTION_AVAILABLE:
         return LocalFasterWhisperProvider()
     return UnavailableTranscriptionProvider()
+
+
+def warm_desktop_transcription():
+    """Called on a background thread; API/window startup must remain responsive."""
+    provider = get_transcription_provider()
+    if isinstance(provider, LocalSenseVoiceCudaProvider):
+        provider.worker.warm()
+        _transcription_runtime.update(active_provider=provider.name, actual_device="cuda",
+                                      compute_type="float32", fallback_active=False)

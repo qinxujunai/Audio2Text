@@ -1,15 +1,15 @@
 # 文档索引与接手顺序
 
 <!-- project-doc-status:start -->
-> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
-> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+> 文档维护同步：**2026-10-23** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
+> v2.3.0 已正式发布；历史验证仍以各自测试日期和安装包摘要为准。
 <!-- project-doc-status:end -->
 
-先读 [项目最新状态](project-status.md)，再读 [AGENTS.md](../AGENTS.md)。本批文档同步日期为 **2026-10-22**；这不是对历史测试的重新执行日期。
+先读 [项目最新状态](project-status.md)，再读 [AGENTS.md](../AGENTS.md)。本批交付更新日期为 **2026-10-23**；这不是对历史测试的重新执行日期。
 
 ## 先确认所在分支
 
-2.3 升级实现位于 `codex/wanxiang-platform-audio-ui`（[PR #2](https://github.com/qinxujunai/Audio2Text/pull/2)，仍为草稿）。默认分支收到的是最新文档快照，不表示应用实现已经合并。已安装本地版本为 2.3.0 候选，正式公开下载仍为 2.1.0；官网品牌维护已上线，完整发布仍受阻。
+默认分支 `clean-main` 已合入通过本机和干净 Windows 同文件验收的 2.3，实现历史保留在 `codex/wanxiang-platform-audio-ui`（[PR #2](https://github.com/qinxujunai/Audio2Text/pull/2)）。正式 v2.3.0 和当前安装版来源为冻结 `a192250`；后续文档与合并提交不代表新安装来源。三轮结果与剩余链接限制见[本轮验证](platform-benchmark-20261022.md)，官网下载回执见[项目状态](project-status.md)。
 
 ## 文档清单
 
@@ -19,6 +19,7 @@
 | [万象成文](../README.md) | 当前指南或协作约定；先核对分支与最新状态 |
 | [Security Policy](../SECURITY.md) | 当前指南或协作约定；先核对分支与最新状态 |
 | [Third-Party Notices](../THIRD_PARTY_NOTICES.md) | 当前指南或协作约定；先核对分支与最新状态 |
+| [2026-10-22 三轮与原视频复核](platform-benchmark-20261022.md) | 141/180 完整、零超时、失败逐项说明及 2.3 正式包验收 |
 | [SenseVoice CUDA 人工参考测评](ascend-accuracy-20261012.md) | 专项历史/实测证据，保留原日期 |
 | [ASR 模型量化审计（2026-10-11）](asr-model-quantitative-audit-20261011.md) | 专项历史/实测证据，保留原日期 |
 | [Praxis AI｜无界笃行 / 万象成文 部署说明](deployment.md) | 当前指南或协作约定；先核对分支与最新状态 |

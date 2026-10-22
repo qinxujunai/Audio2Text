@@ -5,8 +5,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-CaptureStatus = Literal["queued", "processing", "done", "failed"]
-CaptureResultState = Literal["processing", "text_ready", "complete", "failed"]
+CaptureStatus = Literal["queued", "processing", "done", "failed", "needs_user_action"]
+PublicCaptureStatus = Literal["queued", "processing", "done", "needs_user_action"]
+CaptureResultState = Literal["processing", "text_ready", "complete", "failed", "awaiting_user"]
+PublicCaptureResultState = Literal["processing", "text_ready", "complete", "awaiting_user"]
 ArtifactStatus = Literal["pending", "ready", "failed"]
 InputType = Literal["url", "file"]
 ContentType = Literal["video", "audio", "article", "image_article", "webpage", "unknown"]
@@ -24,26 +26,41 @@ class ArtifactModel(BaseModel):
     label: str
     path: str
     download_url: str
+    preview_url: str | None = None
     mime_type: str = "application/octet-stream"
     size_bytes: int | None = None
     status: ArtifactStatus = "ready"
     optional: bool = False
+    width: int | None = None
+    height: int | None = None
+    thumbnail_path: str | None = None
 
 
 class ArtifactPayloadModel(BaseModel):
     type: str
     label: str
     download_url: str
+    preview_url: str | None = None
     mime_type: str = "application/octet-stream"
     size_bytes: int | None = None
     status: ArtifactStatus = "ready"
     optional: bool = False
 
 
+class BrowserSessionRequest(BaseModel):
+    url: str | None = None
+
+
 class CaptureSourceImagePayloadModel(BaseModel):
     index: int
     image_url: str
     live_photo_video_url: str | None = None
+    delivery_status: ArtifactStatus = "pending"
+    preview_url: str | None = None
+    download_url: str | None = None
+    width: int | None = None
+    height: int | None = None
+    thumbnail_url: str | None = None
 
 
 class ContentFactItemModel(BaseModel):
@@ -175,7 +192,7 @@ class CaptureModel(BaseModel):
 
 class CaptureListItemModel(BaseModel):
     id: str
-    status: CaptureStatus
+    status: PublicCaptureStatus
     title: str | None = None
     source_platform: str
     content_type: str
@@ -197,8 +214,8 @@ class CaptureCreateUrlRequest(BaseModel):
 
 class CaptureStatePayloadModel(BaseModel):
     id: str
-    status: CaptureStatus
-    result_state: CaptureResultState = "processing"
+    status: PublicCaptureStatus
+    result_state: PublicCaptureResultState = "processing"
     input_kind: InputType
     current_stage: str = "queued"
     progress_percent: int = 0

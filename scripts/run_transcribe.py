@@ -1,6 +1,7 @@
 ﻿from pathlib import Path
 
 import argparse
+from faster_whisper import BatchedInferencePipeline
 import json
 from typing import Callable
 
@@ -72,21 +73,26 @@ def transcribe_file(
         progress_callback(0.02, "正在加载本地转写模型。")
 
     requested_language = _normalize_requested_language(LANGUAGE)
-    segments, info = model.transcribe(
+    runtime = get_model_runtime()
+    engine = BatchedInferencePipeline(model=model) if runtime["device"] == "cuda" else model
+    extra_options = {"batch_size": 4} if runtime["device"] == "cuda" else {}
+    segment_iterator, info = engine.transcribe(
         str(file_path),
         language=requested_language,
         task="transcribe",
         beam_size=BEAM_SIZE,
         vad_filter=VAD_FILTER,
+        **extra_options,
     )
     if progress_callback is not None:
         progress_callback(0.08, "本地转写已开始，正在逐段识别。")
     duration_seconds = float(getattr(info, "duration", 0.0) or 0.0)
-    segments = list(segments)
+    segments = []
     detected_language = str(getattr(info, "language", "") or "").strip().lower()
     convert_to_simplified = _should_convert_to_simplified(detected_language or requested_language)
     plain_segments: list[str] = []
-    for segment in segments:
+    for segment in segment_iterator:
+        segments.append(segment)
         plain_segments.append(_normalize_segment_text(segment.text, convert_to_simplified=convert_to_simplified))
         if progress_callback is None:
             continue

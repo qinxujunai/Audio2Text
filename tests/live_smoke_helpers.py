@@ -6,11 +6,9 @@ from urllib.parse import parse_qsl, urlsplit
 
 
 REQUIRED_SUCCESS_PLATFORMS = {
-    "youtube",
     "bilibili",
     "xiaoyuzhou",
     "douyin",
-    "xiaohongshu",
     "wechat_article",
 }
 REQUIRED_XIAOHONGSHU_VARIANTS = {"image", "video", "live"}
@@ -38,12 +36,16 @@ def validate_live_smoke_samples(payload: object) -> list[str]:
 
     success_items = payload.get("success")
     failure_items = payload.get("failure")
+    session_required_items = payload.get("session_required", [])
     if not isinstance(success_items, list):
         errors.append("success must be a list")
         success_items = []
     if not isinstance(failure_items, list):
         errors.append("failure must be a list")
         failure_items = []
+    if not isinstance(session_required_items, list):
+        errors.append("session_required must be a list")
+        session_required_items = []
 
     def validate_sample(bucket: str, index: int, sample: object) -> None:
         if not isinstance(sample, dict):
@@ -73,6 +75,8 @@ def validate_live_smoke_samples(payload: object) -> list[str]:
         validate_sample("success", index, sample)
     for index, sample in enumerate(failure_items):
         validate_sample("failure", index, sample)
+    for index, sample in enumerate(session_required_items):
+        validate_sample("session_required", index, sample)
 
     success_platforms = {
         str(sample.get("platform", "")).strip()
@@ -85,27 +89,27 @@ def validate_live_smoke_samples(payload: object) -> list[str]:
 
     xiaohongshu_variants = {
         str(sample.get("variant", "")).strip()
-        for sample in success_items
+        for sample in [*success_items, *session_required_items]
         if isinstance(sample, dict) and str(sample.get("platform", "")).strip() == "xiaohongshu"
     }
     missing_variants = sorted(item for item in REQUIRED_XIAOHONGSHU_VARIANTS if item not in xiaohongshu_variants)
     if missing_variants:
-        errors.append("xiaohongshu success samples are missing variants: " + ", ".join(missing_variants))
+        errors.append("xiaohongshu live smoke samples are missing variants: " + ", ".join(missing_variants))
 
     xiaohongshu_urls = [
         str(sample.get("url", "")).strip()
-        for sample in success_items
+        for sample in [*success_items, *session_required_items]
         if isinstance(sample, dict) and str(sample.get("platform", "")).strip() == "xiaohongshu"
     ]
     if len(xiaohongshu_urls) != len(set(xiaohongshu_urls)):
-        errors.append("xiaohongshu success variants must use distinct sample URLs")
+        errors.append("xiaohongshu live smoke variants must use distinct sample URLs")
 
     return errors
 
 
 def find_committed_sample_url_hygiene_issues(payload: dict) -> list[str]:
     issues: list[str] = []
-    for bucket in ("success", "failure"):
+    for bucket in ("success", "failure", "session_required"):
         samples = payload.get(bucket, [])
         if not isinstance(samples, list):
             continue

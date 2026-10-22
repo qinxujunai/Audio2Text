@@ -100,7 +100,7 @@ def _check_transcription_provider(result: PreflightResult) -> None:
         if missing:
             message = "OpenAI-compatible 转写模式未配置完整，缺少: " + ", ".join(missing)
             if ALLOW_DEGRADED_START:
-                result.warnings.append(message + "。当前按云端预览模式启动，转写任务会给出明确失败提示。")
+                result.warnings.append(message + "。当前按云端预览模式启动，转写任务会给出明确的恢复提示。")
             else:
                 result.fatal_errors.append(message)
         return

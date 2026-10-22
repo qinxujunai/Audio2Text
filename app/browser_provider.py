@@ -2,16 +2,28 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from html import unescape
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
-from app.settings import BROWSER_PROFILE_DIR, CN_PLATFORM_PROXY, CN_PLATFORM_RELAY_URL, DEFAULT_TIMEOUT_SECONDS, DEFAULT_USER_AGENT, DEPLOYMENT_MODE
+from app.settings import (
+    BROWSER_PROFILE_DIR,
+    BROWSER_RUNTIME_IDLE_SECONDS,
+    BROWSER_RUNTIME_MAX_TASKS,
+    CN_PLATFORM_PROXY,
+    CN_PLATFORM_RELAY_URL,
+    DEFAULT_TIMEOUT_SECONDS,
+    DEFAULT_USER_AGENT,
+    DEPLOYMENT_MODE,
+)
 
 
 class BrowserProviderError(RuntimeError):
@@ -38,6 +50,9 @@ BROWSER_NETWORK_IDLE_TIMEOUT_MS = 2500
 BrowserFailureCode = Literal[
     "browser_runtime_missing",
     "browser_timeout",
+    "browser_network_failed",
+    "browser_rate_limited",
+    "browser_server_unavailable",
     "browser_challenge_required",
     "browser_network_risk",
     "browser_session_expired",
@@ -46,6 +61,197 @@ BrowserFailureCode = Literal[
     "browser_request_failed",
     "browser_provider_failed",
 ]
+
+
+class BrowserRuntime:
+    """Serial, persistent Playwright runtime shared by capture tasks in this process."""
+
+    def __init__(self, *, max_tasks: int, idle_seconds: int) -> None:
+        self.max_tasks = max_tasks
+        self.idle_seconds = idle_seconds
+        self._lock = threading.RLock()
+        self._playwright = None
+        self._context = None
+        self._owner_thread_id: int | None = None
+        self._channel = ""
+        self._started_monotonic = 0.0
+        self._last_used_monotonic = 0.0
+        self._task_count = 0
+        self._restart_count = 0
+        self._active = False
+        self._needs_restart = False
+        self._last_error_code = ""
+
+    def _stop_locked(self) -> None:
+        context, playwright = self._context, self._playwright
+        self._context = None
+        self._playwright = None
+        self._owner_thread_id = None
+        self._channel = ""
+        if context is not None:
+            try:
+                context.close()
+            except Exception:
+                pass
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception:
+                pass
+
+    def _start_locked(self) -> None:
+        self._stop_locked()
+        playwright = sync_playwright().start()
+        last_exc: Exception | None = None
+        context = None
+        selected_channel = "bundled"
+        base_options = {
+            "user_data_dir": str(BROWSER_PROFILE_DIR),
+            "headless": True,
+            "viewport": {"width": 1360, "height": 920},
+            "args": [
+                "--no-sandbox",
+                "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+            ],
+        }
+        for channel in ("msedge", "chrome", None):
+            launch_options = dict(base_options)
+            if channel:
+                launch_options["channel"] = channel
+            try:
+                context = playwright.chromium.launch_persistent_context(**launch_options)
+                selected_channel = channel or "bundled"
+                break
+            except Exception as exc:
+                last_exc = exc
+        if context is None:
+            playwright.stop()
+            self._last_error_code = "browser_runtime_missing"
+            raise _normalize_browser_exception(last_exc or RuntimeError("browser launch failed"))
+
+        self._playwright = playwright
+        self._context = context
+        self._owner_thread_id = threading.get_ident()
+        self._channel = selected_channel
+        self._started_monotonic = time.monotonic()
+        self._last_used_monotonic = self._started_monotonic
+        self._task_count = 0
+        self._needs_restart = False
+        self._last_error_code = ""
+
+    def _should_recycle_locked(self, now: float) -> bool:
+        if self._context is None or self._needs_restart:
+            return True
+        if self._task_count >= self.max_tasks:
+            return True
+        return bool(
+            self._last_used_monotonic
+            and now - self._last_used_monotonic >= self.idle_seconds
+        )
+
+    @contextmanager
+    def lease(self):
+        with self._lock:
+            now = time.monotonic()
+            if self._context is not None and self._owner_thread_id != threading.get_ident():
+                self._needs_restart = True
+                self._last_error_code = "browser_thread_changed"
+            if self._should_recycle_locked(now):
+                if self._context is not None:
+                    self._restart_count += 1
+                self._start_locked()
+
+            context = self._context
+            if context is None:
+                raise _structured_browser_error(
+                    "浏览器运行时未能启动。",
+                    reason_code="browser_runtime_missing",
+                    retryable=True,
+                )
+            for existing_page in list(context.pages):
+                try:
+                    existing_page.close()
+                except Exception:
+                    pass
+            context.new_page()
+            self._active = True
+            try:
+                yield context
+            except Exception as exc:
+                lowered = str(exc).lower()
+                if any(token in lowered for token in ("browser has been closed", "target closed", "connection closed")):
+                    self._needs_restart = True
+                    self._last_error_code = "browser_runtime_crashed"
+                raise
+            finally:
+                for page in list(context.pages):
+                    try:
+                        page.close()
+                    except Exception:
+                        self._needs_restart = True
+                self._task_count += 1
+                self._last_used_monotonic = time.monotonic()
+                self._active = False
+
+    def status(self) -> dict[str, object]:
+        with self._lock:
+            now = time.monotonic()
+            state = "restarting" if self._needs_restart else ("ready" if self._context is not None else "idle")
+            return {
+                "state": state,
+                "active": self._active,
+                "channel": self._channel or None,
+                "tasks_since_restart": self._task_count,
+                "restart_count": self._restart_count,
+                "uptime_seconds": round(now - self._started_monotonic, 3) if self._started_monotonic else 0.0,
+                "idle_seconds": round(now - self._last_used_monotonic, 3) if self._last_used_monotonic else None,
+                "max_tasks": self.max_tasks,
+                "last_error_code": self._last_error_code or None,
+            }
+
+    def shutdown(self) -> None:
+        with self._lock:
+            self._stop_locked()
+            self._active = False
+            self._needs_restart = False
+
+    def refresh(self) -> None:
+        """Drop the project session so the next lease starts a clean context.
+
+        Platform challenges are tied to a browser context as well as to the
+        page.  Marking the context for recycling is not enough when a caller
+        needs an immediate retry, so this method closes it synchronously and
+        leaves the profile on disk intact.
+        """
+        with self._lock:
+            if self._context is not None:
+                self._restart_count += 1
+            self._stop_locked()
+            self._active = False
+            self._needs_restart = False
+            self._last_error_code = "manual_refresh"
+
+
+_browser_runtime = BrowserRuntime(
+    max_tasks=BROWSER_RUNTIME_MAX_TASKS,
+    idle_seconds=BROWSER_RUNTIME_IDLE_SECONDS,
+)
+
+
+def browser_runtime_status() -> dict[str, object]:
+    return _browser_runtime.status()
+
+
+def shutdown_browser_runtime() -> None:
+    _browser_runtime.shutdown()
+
+
+def refresh_browser_runtime() -> None:
+    """Refresh the isolated browser context without deleting its profile."""
+    _browser_runtime.refresh()
 
 
 def _normalize_text(value: str) -> str:
@@ -64,10 +270,22 @@ def _prefer_https(url: str) -> str:
 
 
 def _looks_like_xiaohongshu_full_url(url: str) -> bool:
-    lowered = (url or "").lower()
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = (parsed.path or "").lower()
     return (
-        lowered.startswith("https://www.xiaohongshu.com/")
-        and any(token in lowered for token in ("/explore/", "/discovery/item/", "/note/"))
+        host.endswith("xiaohongshu.com")
+        and any(path.startswith(token) for token in ("/explore/", "/discovery/item/", "/note/"))
+    )
+
+
+def _is_xiaohongshu_note_less_landing(url: str) -> bool:
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower().rstrip(".")
+    path = (parsed.path or "/").rstrip("/").lower() or "/"
+    return (
+        (host == "xiaohongshu.com" or host.endswith(".xiaohongshu.com"))
+        and path in {"", "/", "/login", "/explore", "/discovery", "/404"}
     )
 
 
@@ -106,6 +324,13 @@ def _page_state_error(final_url: str, title: str, body_text: str) -> BrowserProv
         "ip存在风险",
         "安全限制",
         "error_code=300012",
+    )
+    unavailable_markers = (
+        "error_code=300031",
+        "当前笔记暂时无法浏览",
+        "当前内容暂时无法浏览",
+        "内容暂时无法浏览",
+        "笔记不存在",
     )
     challenge_markers = (
         "captcha",
@@ -153,6 +378,12 @@ def _page_state_error(final_url: str, title: str, body_text: str) -> BrowserProv
             reason_code="browser_network_risk",
             retryable=True,
         )
+    if any(marker in combined for marker in unavailable_markers):
+        return _structured_browser_error(
+            "当前内容已经失效或暂时不可浏览，请换一条公开内容再试。",
+            reason_code="source_not_found",
+            retryable=False,
+        )
     if any(marker in combined for marker in challenge_markers):
         return _structured_browser_error(
             "当前页面触发了平台验证，请刷新项目级浏览器会话后再试。",
@@ -183,6 +414,8 @@ def _page_state_error(final_url: str, title: str, body_text: str) -> BrowserProv
 def _normalize_browser_exception(exc: Exception, *, timeout_message: str = "浏览器会话超时，请稍后重试。") -> BrowserProviderError:
     if isinstance(exc, BrowserProviderError):
         return exc
+    if isinstance(exc, httpx.HTTPError):
+        return _classify_http_error(exc)
     if isinstance(exc, PlaywrightTimeoutError):
         return _structured_browser_error(timeout_message, reason_code="browser_timeout", retryable=True)
 
@@ -200,8 +433,27 @@ def _normalize_browser_exception(exc: Exception, *, timeout_message: str = "浏�
             reason_code="browser_request_failed",
             retryable=True,
         )
+    if any(
+        marker in lowered
+        for marker in (
+            "net::err_",
+            "connection reset",
+            "connection refused",
+            "connection aborted",
+            "unexpected eof",
+            "eof occurred",
+            "remote protocol",
+            "ssl",
+            "broken pipe",
+        )
+    ):
+        return _structured_browser_error(
+            "来源站点的网络连接暂时不稳定，已自动尝试恢复。",
+            reason_code="browser_network_failed",
+            retryable=True,
+        )
     return _structured_browser_error(
-        f"浏览器会话提取失败：{message}",
+        "浏览器会话暂时没有稳定拿到页面结果，已自动尝试备用路径。",
         reason_code="browser_provider_failed",
         retryable=True,
     )
@@ -445,9 +697,44 @@ def _classify_http_error(exc: httpx.HTTPError, *, timeout_reason: BrowserFailure
                 reason_code="source_access_restricted",
                 retryable=False,
             )
+        if response.status_code == 429:
+            return _structured_browser_error(
+                "来源站点当前请求较多，已自动稍后重试。",
+                reason_code="browser_rate_limited",
+                retryable=True,
+            )
+        if response.status_code in {500, 502, 503, 504}:
+            return _structured_browser_error(
+                "来源站点暂时没有稳定响应，已自动尝试恢复。",
+                reason_code="browser_server_unavailable",
+                retryable=True,
+            )
+
+    lowered = str(exc).lower()
+    if isinstance(exc, httpx.NetworkError) or any(
+        marker in lowered
+        for marker in (
+            "connection reset",
+            "connection refused",
+            "connection aborted",
+            "remote protocol",
+            "unexpected eof",
+            "eof occurred",
+            "name or service not known",
+            "temporary failure in name resolution",
+            "getaddrinfo failed",
+            "ssl",
+            "broken pipe",
+        )
+    ):
+        return _structured_browser_error(
+            "来源站点的网络连接暂时不稳定，已自动尝试恢复。",
+            reason_code="browser_network_failed",
+            retryable=True,
+        )
 
     return _structured_browser_error(
-        f"页面请求失败：{exc}",
+        "来源页面暂时没有稳定响应，已自动尝试恢复。",
         reason_code="browser_request_failed",
         retryable=True,
     )
@@ -455,55 +742,77 @@ def _classify_http_error(exc: httpx.HTTPError, *, timeout_reason: BrowserFailure
 
 @contextmanager
 def _launch_context():
-    with sync_playwright() as playwright:
-        last_exc: Exception | None = None
-        context = None
-        base_options = {
-            "user_data_dir": str(BROWSER_PROFILE_DIR),
-            "headless": True,
-            "user_agent": DEFAULT_USER_AGENT,
-            "viewport": {"width": 1360, "height": 920},
-            "args": [
-                "--no-sandbox",
-                "--disable-gpu",
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-first-run",
-            ],
-        }
-        for channel in ("msedge", "chrome", None):
-            launch_options = dict(base_options)
-            if channel:
-                launch_options["channel"] = channel
-            try:
-                context = playwright.chromium.launch_persistent_context(**launch_options)
-                break
-            except Exception as exc:
-                last_exc = exc
-                continue
-
-        if context is None:
-            raise _normalize_browser_exception(last_exc or RuntimeError("browser launch failed"))
-
-        try:
-            yield context
-        finally:
-            context.close()
+    with _browser_runtime.lease() as context:
+        yield context
 
 
-def _capture_page(url: str) -> tuple[str, str, str, str, list[str]]:
+def _page_http_status_error(status: int | None) -> BrowserProviderError | None:
+    """Map a browser navigation HTTP status to a safe, retryable error."""
+    if status == 404:
+        return _structured_browser_error(
+            "当前页面已经失效或不可访问。",
+            reason_code="source_not_found",
+            retryable=False,
+        )
+    if status in {401, 403}:
+        return _structured_browser_error(
+            "当前页面受访问限制，暂时无法直接请求成功。",
+            reason_code="source_access_restricted",
+            retryable=False,
+        )
+    if status is not None and status >= 400:
+        return _structured_browser_error(
+            "来源页面暂时没有稳定响应，请稍后重试。",
+            reason_code="browser_request_failed",
+            retryable=True,
+        )
+    return None
+
+
+def _capture_page(
+    url: str,
+    *,
+    check_state: bool = True,
+) -> tuple[str, str, str, str, list[str]]:
     try:
         with _launch_context() as context:
             page = context.pages[0] if context.pages else context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_GOTO_TIMEOUT_MS)
+            response = page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_GOTO_TIMEOUT_MS)
+            response_status = getattr(response, "status", None)
+            try:
+                response_status = int(response_status) if response_status is not None else None
+            except (TypeError, ValueError):
+                response_status = None
+            status_error = _page_http_status_error(response_status)
+            if status_error is not None:
+                raise status_error
             _settle_page(page)
             final_url = page.url
             title = page.title()
 
             media_url = ""
             try:
-                if page.locator("video").count():
-                    media_url = page.eval_on_selector("video", "el => el.currentSrc || el.src || ''")
+                media_url = page.evaluate(
+                    """
+                    () => {
+                      const elements = Array.from(document.querySelectorAll('video, audio, source'));
+                      for (const element of elements) {
+                        const candidates = [
+                          element.currentSrc,
+                          element.src,
+                          element.getAttribute('src'),
+                          element.getAttribute('data-src'),
+                        ];
+                        for (const candidate of candidates) {
+                          if (typeof candidate === 'string' && /^https?:\\/\\//i.test(candidate)) {
+                            return candidate;
+                          }
+                        }
+                      }
+                      return '';
+                    }
+                    """
+                ) or ""
             except Exception:
                 media_url = ""
 
@@ -592,20 +901,52 @@ def _capture_page(url: str) -> tuple[str, str, str, str, list[str]]:
                 and isinstance(item.get("url"), str)
                 and not _is_noise_image(item["url"], str(item.get("marker") or ""))
             ]
-            state_error = _page_state_error(final_url, title, body_text)
-            if state_error is not None:
-                raise state_error
+            if check_state:
+                state_error = _page_state_error(final_url, title, body_text)
+                if state_error is not None:
+                    raise state_error
             return final_url, title, media_url, _normalize_text(body_text), filtered_images
     except Exception as exc:  # noqa: BLE001
         raise _normalize_browser_exception(exc, timeout_message="浏览器打开页面超时，请稍后重试。") from exc
 
 
+def fetch_generic_page(url: str) -> BrowserMediaResult:
+    """Read a public webpage through the shared browser runtime.
+
+    The HTTP extractor remains the fast path.  This bounded browser fallback
+    is for pages that reject the plain client or only render their content in
+    JavaScript; it deliberately reuses the same persistent runtime as the
+    platform adapters instead of starting a second browser per request.
+    """
+    # Generic pages may legitimately contain words such as "login" or
+    # "not found" in their article copy.  Platform state markers are only
+    # meaningful for adapters that know the platform's error screens; the
+    # navigation HTTP status above still rejects an actual 4xx/5xx response.
+    final_url, title, media_url, body_text, image_urls = _capture_page(url, check_state=False)
+    if not body_text and not image_urls and not media_url:
+        raise BrowserProviderError(
+            "网页已打开，但没有拿到可用正文或媒体地址。",
+            reason_code="browser_request_failed",
+            retryable=True,
+        )
+    return BrowserMediaResult(
+        final_url=final_url,
+        title=title or final_url,
+        media_url=media_url,
+        body_text=body_text,
+        image_urls=image_urls,
+        live_photo_video_urls=[],
+    )
+
+
 def _extract_xiaohongshu_state(html: str) -> dict | None:
-    match = re.search(r"window\.__INITIAL_STATE__=(.*?)</script>", html, re.DOTALL)
+    match = re.search(r"window\.__INITIAL_STATE__\s*=\s*(.*?)</script>", html, re.DOTALL)
     if not match:
         return None
 
     payload = match.group(1).strip()
+    if payload.endswith(";"):
+        payload = payload[:-1].strip()
     payload = re.sub(r"\bundefined\b", "null", payload)
     payload = re.sub(r"\bNaN\b", "null", payload)
     payload = re.sub(r"\bInfinity\b", "null", payload)
@@ -692,17 +1033,18 @@ def _best_xiaohongshu_live_photo_url(image: dict) -> str:
 
 def _extract_xiaohongshu_note_payload(html: str) -> dict | None:
     state = _extract_xiaohongshu_state(html)
-    if not state:
+    if not isinstance(state, dict):
         return None
 
-    note_map = ((state.get("note") or {}).get("noteDetailMap") or {})
+    desktop = state.get("note")
+    note_map = desktop.get("noteDetailMap") if isinstance(desktop, dict) else {}
     if not isinstance(note_map, dict):
-        return None
+        note_map = {}
 
     selected_note_id = ""
     selected_note: dict | None = None
     for note_id, wrapper in note_map.items():
-        note = (wrapper or {}).get("note") or {}
+        note = wrapper.get("note") if isinstance(wrapper, dict) else None
         if not isinstance(note, dict):
             continue
         if note.get("title") or note.get("desc") or note.get("imageList") or note.get("video"):
@@ -710,6 +1052,16 @@ def _extract_xiaohongshu_note_payload(html: str) -> dict | None:
             selected_note = note
             break
 
+    if not selected_note:
+        # Anonymous H5 shares use a different state tree from PC pages.
+        mobile = state.get("noteData")
+        data = mobile.get("data") if isinstance(mobile, dict) else None
+        note = data.get("noteData") if isinstance(data, dict) else None
+        if isinstance(note, dict) and note.get("noteId") and any(
+            note.get(key) for key in ("title", "desc", "imageList", "video")
+        ):
+            selected_note_id = str(note["noteId"])
+            selected_note = note
     if not selected_note:
         return None
 
@@ -736,17 +1088,37 @@ def _extract_xiaohongshu_note_payload(html: str) -> dict | None:
     }
 
 
-def _extract_xiaohongshu_full_url_from_html(html: str) -> str:
+def _normalize_xiaohongshu_url_candidate(candidate: str, *, base_url: str = "") -> str:
+    value = unquote(unescape(str(candidate or "")).strip().strip("\"'"))
+    value = value.replace(r"\u002F", "/").replace(r"\/", "/")
+    if value.startswith("//"):
+        value = "https:" + value
+    elif value.startswith("/"):
+        parsed_base = urlparse(base_url or "")
+        base_host = (parsed_base.hostname or "").lower().rstrip(".")
+        safe_base = (
+            base_url
+            if base_host == "xiaohongshu.com" or base_host.endswith(".xiaohongshu.com")
+            else "https://www.xiaohongshu.com/"
+        )
+        value = urljoin(safe_base, value)
+    value = _prefer_https(value)
+    return value if _looks_like_xiaohongshu_full_url(value) else ""
+
+
+def _extract_xiaohongshu_full_url_from_html(html: str, *, base_url: str = "") -> str:
+    decoded_html = unquote(unescape(str(html or ""))).replace(r"\u002F", "/").replace(r"\/", "/")
     patterns = (
-        r"https://www\.xiaohongshu\.com/explore/[^\"'\s<]+",
-        r"https://www\.xiaohongshu\.com/discovery/item/[^\"'\s<]+",
-        r"https://www\.xiaohongshu\.com/note/[^\"'\s<]+",
+        r"https://(?:www\.|m\.)?xiaohongshu\.com/explore/[^\"'\s<]+",
+        r"https://(?:www\.|m\.)?xiaohongshu\.com/discovery/item/[^\"'\s<]+",
+        r"https://(?:www\.|m\.)?xiaohongshu\.com/note/[^\"'\s<]+",
+        r"(?:/)(?:explore|discovery/item|note)/[^\"'\s<]+",
     )
     for pattern in patterns:
-        matches = re.findall(pattern, html, re.IGNORECASE)
+        matches = re.findall(pattern, decoded_html, re.IGNORECASE)
         for match in matches:
-            cleaned = _prefer_https(match.replace("\\u002F", "/").replace("&amp;", "&"))
-            if _looks_like_xiaohongshu_full_url(cleaned):
+            cleaned = _normalize_xiaohongshu_url_candidate(match, base_url=base_url)
+            if cleaned:
                 return cleaned
     return ""
 
@@ -830,22 +1202,79 @@ def _relay_fetch_html(url: str) -> tuple[str, str, str]:
 def _fetch_xiaohongshu_html(url: str) -> tuple[str, str, str]:
     if _browser_needs_relay("xiaohongshu"):
         return _relay_fetch_html(url)
-    client_kwargs = {
-        "follow_redirects": True,
-        "headers": {"User-Agent": DEFAULT_USER_AGENT},
-        "timeout": DEFAULT_TIMEOUT_SECONDS * 2,
-        "trust_env": False,
-    }
+    mobile_agent = (
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) "
+        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 "
+        "Mobile/15E148 Safari/604.1"
+    )
+    agents = [DEFAULT_USER_AGENT, mobile_agent]
+    if urlparse(url).path.startswith("/discovery/item/"):
+        agents.reverse()
+    deadline = time.monotonic() + DEFAULT_TIMEOUT_SECONDS * 2
+    first_result: tuple[str, str, str] | None = None
     proxy = _browser_proxy_for_platform("xiaohongshu")
-    if proxy:
-        client_kwargs["proxy"] = proxy
-    try:
-        with httpx.Client(**client_kwargs) as client:
-            response = client.get(url)
-            response.raise_for_status()
-            return str(response.url), _extract_html_title(response.text), response.text
-    except httpx.HTTPError as exc:
-        raise _classify_http_error(exc) from exc
+    for agent in agents:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        client_kwargs = {
+            "follow_redirects": True,
+            "headers": {"User-Agent": agent},
+            "timeout": min(DEFAULT_TIMEOUT_SECONDS, remaining),
+            "trust_env": False,
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+        try:
+            with httpx.Client(**client_kwargs) as client:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    chunks: list[bytes] = []
+                    size = 0
+                    for chunk in response.iter_bytes():
+                        size += len(chunk)
+                        if time.monotonic() >= deadline:
+                            raise httpx.ReadTimeout("Source read budget exceeded")
+                        if size > 8 * 1024 * 1024:
+                            raise _structured_browser_error(
+                                "来源页面过大，暂时无法读取。",
+                                reason_code="browser_request_failed", retryable=False,
+                            )
+                        chunks.append(chunk)
+                    if time.monotonic() >= deadline:
+                        raise httpx.ReadTimeout("Source read budget exceeded")
+                    html = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+                    result = str(response.url), _extract_html_title(html), html
+        except httpx.HTTPError as exc:
+            if first_result is None:
+                raise _classify_http_error(exc) from exc
+            break
+        if _extract_xiaohongshu_note_payload(result[2]):
+            return result
+        if first_result is None:
+            first_result = result
+    # Preserve the primary response for existing structured error handling.
+    if first_result is not None:
+        return first_result
+    raise _structured_browser_error(
+        "读取来源超时，请稍后重试。", reason_code="browser_timeout", retryable=True,
+    )
+
+
+def _fetch_xiaohongshu_relay_fallback(url: str) -> tuple[str, str, str]:
+    """Use the configured edge relay only after the local public path misses.
+
+    Local runs should stay direct and fast for the normal case.  A relay is a
+    recovery path for platforms that challenge the local IP while still
+    serving public SSR data from another edge location.
+    """
+    if not CN_PLATFORM_RELAY_URL:
+        raise _structured_browser_error(
+            "当前没有可用的平台恢复链路。",
+            reason_code="browser_request_failed",
+            retryable=True,
+        )
+    return _relay_fetch_html(url)
 
 
 def resolve_xiaohongshu_share_url(url: str) -> str:
@@ -853,9 +1282,11 @@ def resolve_xiaohongshu_share_url(url: str) -> str:
         final_url, _, html = _fetch_xiaohongshu_html(url)
         if _looks_like_xiaohongshu_full_url(final_url):
             return final_url
-        extracted = _extract_xiaohongshu_full_url_from_html(html)
+        extracted = _extract_xiaohongshu_full_url_from_html(html, base_url=final_url or url)
         if extracted:
             return extracted
+        if _is_xiaohongshu_note_less_landing(final_url):
+            return ""
     except BrowserProviderError:
         pass
 
@@ -880,7 +1311,7 @@ def resolve_xiaohongshu_share_url(url: str) -> str:
                 return final_url
 
             html = page.content()
-            extracted = _extract_xiaohongshu_full_url_from_html(html)
+            extracted = _extract_xiaohongshu_full_url_from_html(html, base_url=final_url or url)
             if extracted:
                 return extracted
 
@@ -894,8 +1325,8 @@ def resolve_xiaohongshu_share_url(url: str) -> str:
             )
             for href in hrefs:
                 if isinstance(href, str):
-                    candidate = _prefer_https(href.replace("\\u002F", "/").replace("&amp;", "&"))
-                    if _looks_like_xiaohongshu_full_url(candidate):
+                    candidate = _normalize_xiaohongshu_url_candidate(href, base_url=final_url or url)
+                    if candidate:
                         return candidate
 
             for candidate in observed_urls:
@@ -907,7 +1338,11 @@ def resolve_xiaohongshu_share_url(url: str) -> str:
     return ""
 
 
-def fetch_douyin_media(url: str) -> BrowserMediaResult:
+def fetch_douyin_media(
+    url: str,
+    *,
+    goto_timeout_ms: int = BROWSER_GOTO_TIMEOUT_MS,
+) -> BrowserMediaResult:
     try:
         with _launch_context() as context:
             page = context.pages[0] if context.pages else context.new_page()
@@ -938,7 +1373,7 @@ def fetch_douyin_media(url: str) -> BrowserMediaResult:
                     return
 
             page.on("response", _capture_response)
-            page.goto(url, wait_until="domcontentloaded", timeout=BROWSER_GOTO_TIMEOUT_MS)
+            page.goto(url, wait_until="domcontentloaded", timeout=max(1_000, int(goto_timeout_ms)))
             _settle_page(page)
             page.wait_for_timeout(2200)
 
@@ -1160,13 +1595,14 @@ def fetch_wechat_page(url: str) -> BrowserMediaResult:
         raise _normalize_browser_exception(exc, timeout_message="浏览器打开微信公众号页面超时，请稍后重试。") from exc
 
 
-def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
+def _fetch_xiaohongshu_page_once(url: str) -> BrowserMediaResult:
     """Extract Xiaohongshu note data.
 
     Strategy: try HTTP relay first (static HTML has SSR data for real notes),
     fall back to Playwright browser only if relay HTML lacks note data.
     """
     # Method 1: HTTP relay — static HTML has SSR __INITIAL_STATE__ with note data
+    direct_error: BrowserProviderError | None = None
     try:
         final_url, page_title, html = _fetch_xiaohongshu_html(url)
         note_payload = _extract_xiaohongshu_note_payload(html)
@@ -1180,8 +1616,45 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
                 image_urls=[_prefer_https(item) for item in note_payload["image_urls"]],
                 live_photo_video_urls=[_prefer_https(item) if item else "" for item in note_payload.get("live_photo_video_urls") or []],
             )
-    except BrowserProviderError:
-        pass
+        # The platform uses a successful HTTP response for its error shell.
+        # Inspect the redirected URL before spending time on browser recovery.
+        direct_error = _page_state_error(final_url, page_title, "")
+        if direct_error is not None and direct_error.reason_code in {
+            "source_not_found",
+            "source_access_restricted",
+        }:
+            raise direct_error
+    except BrowserProviderError as exc:
+        direct_error = exc
+
+    # If the direct path was challenged or otherwise returned no note data,
+    # try the already-configured edge relay before opening another browser
+    # page.  This is deliberately one bounded fallback, not a retry loop.
+    if not _browser_needs_relay("xiaohongshu"):
+        try:
+            final_url, page_title, html = _fetch_xiaohongshu_relay_fallback(url)
+            note_payload = _extract_xiaohongshu_note_payload(html)
+            if note_payload:
+                title = (note_payload["title"] or page_title or "").strip()
+                return BrowserMediaResult(
+                    final_url=final_url,
+                    title=title or "Xiaohongshu content",
+                    media_url=_prefer_https((note_payload["video_url"] or "").strip()) if note_payload["video_url"] else "",
+                    body_text=_normalize_text(note_payload["desc"] or ""),
+                    image_urls=[_prefer_https(item) for item in note_payload["image_urls"]],
+                    live_photo_video_urls=[_prefer_https(item) if item else "" for item in note_payload.get("live_photo_video_urls") or []],
+                )
+            relay_error = _page_state_error(final_url, page_title, "")
+            if relay_error is not None and relay_error.reason_code in {
+                "source_not_found",
+                "source_access_restricted",
+            }:
+                raise relay_error
+        except BrowserProviderError as exc:
+            if exc.reason_code in {"source_not_found", "source_access_restricted"}:
+                raise
+            # Keep the direct error for the browser path when the optional
+            # relay is unavailable or times out.
 
     # Method 2: Playwright browser — fallback for SPA-only pages
     try:
@@ -1208,18 +1681,30 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
                 page.wait_for_function(
                     """
                     () => {
-                      const el = document.querySelector('script');
-                      if (!el) return false;
-                      const m = el.textContent?.match(/window\\.__INITIAL_STATE__\\s*=\\s*(.*?)<\\/script>/s);
-                      if (!m) return false;
-                      try {
-                        const s = JSON.parse(m[1].replace(/undefined/g, 'null').replace(/NaN/g, 'null'));
+                      const parseInitialState = (text) => {
+                        const marker = 'window.__INITIAL_STATE__';
+                        const start = text.indexOf(marker);
+                        if (start < 0) return null;
+                        const equals = text.indexOf('=', start + marker.length);
+                        if (equals < 0) return null;
+                        let payload = text.slice(equals + 1).trim();
+                        const end = payload.lastIndexOf('}');
+                        if (end >= 0) payload = payload.slice(0, end + 1);
+                        try {
+                          return JSON.parse(payload.replace(/undefined/g, 'null').replace(/NaN/g, 'null'));
+                        } catch {
+                          return null;
+                        }
+                      };
+                      for (const el of document.querySelectorAll('script')) {
+                        const s = parseInitialState(el.textContent || '');
+                        if (!s) continue;
                         const notes = s?.note?.noteDetailMap || {};
                         for (const w of Object.values(notes)) {
                           const n = w?.note;
                           if (n && (n.title || n.desc || n.imageList?.length || n.video)) return true;
                         }
-                      } catch {}
+                      }
                       return false;
                     }
                     """,
@@ -1235,12 +1720,26 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
             raw = page.evaluate(
                 """
                 () => {
+                  const parseInitialState = (text) => {
+                    const marker = 'window.__INITIAL_STATE__';
+                    const start = text.indexOf(marker);
+                    if (start < 0) return null;
+                    const equals = text.indexOf('=', start + marker.length);
+                    if (equals < 0) return null;
+                    let payload = text.slice(equals + 1).trim();
+                    const end = payload.lastIndexOf('}');
+                    if (end >= 0) payload = payload.slice(0, end + 1);
+                    try {
+                      return JSON.parse(payload.replace(/undefined/g, 'null').replace(/NaN/g, 'null'));
+                    } catch {
+                      return null;
+                    }
+                  };
                   const scripts = [...document.querySelectorAll('script')];
                   for (const s of scripts) {
-                    const m = s.textContent?.match(/window\\.__INITIAL_STATE__\\s*=\\s*(.*?)<\\/script>/s);
-                    if (!m) continue;
                     try {
-                      const state = JSON.parse(m[1].replace(/undefined/g, 'null').replace(/NaN/g, 'null'));
+                      const state = parseInitialState(s.textContent || '');
+                      if (!state) continue;
                       const notes = state?.note?.noteDetailMap || {};
                       for (const [, wrapper] of Object.entries(notes)) {
                         const note = wrapper?.note;
@@ -1280,6 +1779,49 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
                 """
             )
 
+            # XHS currently hydrates noteDetailMap through a follow-up API call.
+            # In that case the initial-state script exists but is empty while
+            # the rendered note DOM already contains the title, description,
+            # and primary images. Use that stable, user-visible surface as a
+            # read-only fallback instead of treating a valid page as empty.
+            if not raw:
+                raw = page.evaluate(
+                    """
+                    () => {
+                      const root = document.querySelector('#noteContainer, .note-container');
+                      if (!root) return null;
+                      const title = (root.querySelector('#detail-title, h1')?.textContent || '').trim();
+                      const desc = (root.querySelector('#detail-desc, .desc')?.textContent || '').trim();
+                      const images = [];
+                      const seen = new Set();
+                      for (const image of root.querySelectorAll('img')) {
+                        const src = image.currentSrc || image.src || image.getAttribute('data-src') || '';
+                        const width = image.naturalWidth || 0;
+                        const height = image.naturalHeight || 0;
+                        const mainImage = image.closest('.note-slider-img, .swiper-slide, .live-photo-contain');
+                        const marker = `${image.className || ''} ${src}`;
+                        if (!src || !mainImage || width < 200 || height < 200) continue;
+                        if (/(avatar|emoji|icon|logo|comment\\/)/i.test(marker)) continue;
+                        if (seen.has(src)) continue;
+                        seen.add(src);
+                        images.push(src);
+                      }
+                      const videoUrl = [...root.querySelectorAll('video')]
+                        .map(video => video.currentSrc || video.src || '')
+                        .find(src => /^https?:\\/\\//i.test(src)) || '';
+                      if (!title && !desc && !images.length && !videoUrl) return null;
+                      return {
+                        title,
+                        desc,
+                        type: videoUrl ? 'video' : '',
+                        images,
+                        livePhotos: [],
+                        videoUrl,
+                      };
+                    }
+                    """
+                )
+
             title = page_title
             body_text = ""
             media_url = ""
@@ -1309,3 +1851,20 @@ def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
         image_urls=[_prefer_https(item) for item in image_urls],
         live_photo_video_urls=[_prefer_https(item) if item else "" for item in live_photo_video_urls],
     )
+
+
+def fetch_xiaohongshu_page(url: str) -> BrowserMediaResult:
+    """Fetch a note and recycle the isolated session once after a challenge.
+
+    A stale persistent context can retain a platform challenge even after the
+    page is closed.  Retry once with a fresh context before surfacing the
+    recoverable error; this keeps the normal fast path unchanged and avoids an
+    unbounded retry loop when the platform is actively blocking the request.
+    """
+    try:
+        return _fetch_xiaohongshu_page_once(url)
+    except BrowserProviderError as exc:
+        if exc.reason_code not in {"browser_challenge_required", "browser_session_expired"}:
+            raise
+        refresh_browser_runtime()
+        return _fetch_xiaohongshu_page_once(url)

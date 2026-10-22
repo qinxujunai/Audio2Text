@@ -94,7 +94,25 @@ WORKSPACE_DIR = _path_setting(
 )
 OUTPUT_DIR = WORKSPACE_DIR / "output"
 TEMP_DIR = WORKSPACE_DIR / "temp"
-LOGS_DIR = WORKSPACE_DIR / "logs"
+
+
+def _running_under_unittest() -> bool:
+    """Keep synthetic test failures out of the operator's runtime logs."""
+
+    if os.environ.get("AUDIO2TEXT_LOGS_DIR"):
+        return False
+    command = " ".join(str(item).lower() for item in sys.argv)
+    return "unittest" in command
+
+
+if _running_under_unittest():
+    LOGS_DIR = TEMP_DIR / "unittest-logs" / str(os.getpid())
+else:
+    LOGS_DIR = _path_setting(
+        "logs_dir",
+        "AUDIO2TEXT_LOGS_DIR",
+        WORKSPACE_DIR / "logs",
+    )
 RUNTIME_DIR = WORKSPACE_DIR / "runtime"
 MODELS_DIR = RUNTIME_DIR / "models"
 PLAYWRIGHT_BROWSERS_DIR = RUNTIME_DIR / "playwright-browsers"
@@ -127,7 +145,18 @@ _configured_ffmpeg_path = _optional_path_setting("ffmpeg_path", "AUDIO2TEXT_FFMP
 FFMPEG_PATH = _configured_ffmpeg_path or DEFAULT_FFMPEG_PATH
 FFMPEG_PATH_SOURCE = "explicit" if _configured_ffmpeg_path is not None else "workspace_default"
 
-SUPPORTED_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".mp4", ".mov", ".mkv"}
+SUPPORTED_EXTENSIONS = {
+    ".mp3",
+    ".m4a",
+    ".wav",
+    ".flac",
+    ".aac",
+    ".ogg",
+    ".opus",
+    ".mp4",
+    ".mov",
+    ".mkv",
+}
 MAX_UPLOAD_SIZE_MB = _int_setting(
     "max_upload_size_mb",
     "AUDIO2TEXT_MAX_UPLOAD_SIZE_MB",

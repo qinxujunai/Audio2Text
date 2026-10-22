@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$OutputRoot = "web\src-tauri\sidecar",
     [switch]$Clean
 )
@@ -9,8 +9,32 @@ $outputRootPath = Join-Path $projectRoot $OutputRoot
 $distPath = Join-Path $outputRootPath "wanxiang-api"
 $workPath = Join-Path $projectRoot "tests_runtime\pyinstaller"
 $specPath = Join-Path $projectRoot "tests_runtime\pyinstaller-spec"
+$buildPython = Join-Path $projectRoot ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $buildPython)) { throw "Project Python runtime is missing." }
+$buildPythonVersion = & $buildPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+if ($LASTEXITCODE -ne 0 -or $buildPythonVersion -ne "3.11") {
+    throw "The pinned SenseVoice CUDA SDK requires CPython 3.11; refusing an incompatible sidecar."
+}
+
+function Get-BackendSourceFingerprint {
+    $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $projectRoot 'app'), (Join-Path $projectRoot 'scripts') -Filter '*.py' -Recurse -File)
+    $sourceFiles += Get-Item -LiteralPath (Join-Path $projectRoot 'requirements.txt')
+    [string[]]$sourcePaths = @($sourceFiles | ForEach-Object { $_.FullName })
+    [Array]::Sort($sourcePaths, [StringComparer]::Ordinal)
+    $lines = foreach ($sourcePath in $sourcePaths) {
+        $relative = $sourcePath.Substring($projectRoot.Length).Replace('\', '/')
+        $relative + ':' + (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash
+    }
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes(($lines -join "`n"))))).Replace('-', '').ToLowerInvariant() }
+    finally { $algorithm.Dispose() }
+}
+$backendFingerprint = Get-BackendSourceFingerprint
 
 if ($Clean) {
+    $resolvedDist = [IO.Path]::GetFullPath($distPath)
+    $resolvedProject = [IO.Path]::GetFullPath($projectRoot).TrimEnd('\') + '\'
+    if (-not $resolvedDist.StartsWith($resolvedProject, [StringComparison]::OrdinalIgnoreCase)) { throw "Sidecar cleanup target escapes project." }
     Remove-Item -LiteralPath $distPath -Recurse -Force -ErrorAction SilentlyContinue
 }
 
@@ -19,11 +43,13 @@ New-Item -ItemType Directory -Force -Path $outputRootPath, $workPath, $specPath 
 Push-Location $projectRoot
 try {
     $pyInstallerArguments = @(
-        "--from", "pyinstaller",
+        "--python", $buildPython,
+        "--from", "pyinstaller==6.22.3",
         "--with-requirements", "requirements.txt",
         "pyinstaller",
         "--noconfirm",
         "--clean",
+        "--noconsole",
         "--onedir",
         "--name", "wanxiang-api",
         "--distpath", $outputRootPath,
@@ -111,3 +137,11 @@ try {
 }
 
 Write-Host "Sidecar ready: $executable"
+if ((Get-BackendSourceFingerprint) -ne $backendFingerprint) {
+    throw 'Backend sources changed during packaging; refusing to label the sidecar current. Rebuild after edits stop.'
+}
+$resourceJson = & $buildPython (Join-Path $PSScriptRoot 'build_fingerprint.py') --resources $distPath
+if ($LASTEXITCODE -ne 0) { throw 'Could not fingerprint complete sidecar resources.' }
+$resources = $resourceJson | ConvertFrom-Json
+@{source_fingerprint=$backendFingerprint; python_version=$buildPythonVersion; generated_at=(Get-Date).ToUniversalTime().ToString('o'); executable_sha256=(Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant(); resource_tree_sha256=$resources.resource_tree_sha256; resource_files=$resources.resource_files} |
+    ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $distPath 'sidecar-build-manifest.json') -Encoding utf8

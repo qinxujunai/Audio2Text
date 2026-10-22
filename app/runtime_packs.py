@@ -172,7 +172,7 @@ class RuntimePackManager:
             except (httpx.RequestError, OSError) as exc:
                 if attempt == attempts - 1:
                     raise RuntimePackError(
-                        "运行组件下载失败，请检查网络后重试；已下载的进度会继续保留。"
+                        "运行组件暂未完成下载，请检查网络后重试；已下载的进度会继续保留。"
                     ) from exc
             time.sleep(min(2**attempt, 8))
 
@@ -207,7 +207,7 @@ class RuntimePackManager:
                     destination.unlink(missing_ok=True)
                     existing = 0
                 elif existing and response.status_code != 206:
-                    raise RuntimePackError("运行组件断点续传失败。")
+                    raise RuntimePackError("运行组件暂未完成续传，请稍后重试。")
                 response.raise_for_status()
                 mode = "ab" if existing else "wb"
                 with destination.open(mode) as handle:
@@ -226,7 +226,7 @@ class RuntimePackManager:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
         if not hmac.compare_digest(digest.hexdigest(), pack.sha256):
-            raise RuntimePackError("运行组件校验失败，已拒绝安装。")
+            raise RuntimePackError("运行组件校验未通过，已停止安装；请重新下载后再试。")
 
     def _unpack(self, pack: RuntimePack, archive_path: Path, stage: Path) -> None:
         if pack.archive_format == "raw":

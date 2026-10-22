@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import os
+import re
 import shutil
+import subprocess
 import sys
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +19,26 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 
 from app.store_fs import CaptureStoreUnavailableError
-from app.pipeline import enqueue_capture, ensure_worker_started, recover_pending_captures
-from app.resolver import infer_source_item_id, resolve_url
+from app.pipeline import (
+    enqueue_capture,
+    ensure_capture_cover,
+    ensure_worker_started,
+    recover_pending_captures,
+    repair_legacy_audio_artifact,
+    retry_capture_image,
+)
+from app.resolver import infer_source_item_id, resolve_url, _reject_retired_source, RetiredSourceError, YOUTUBE_RETIRED_MESSAGE
 from app.runtime_packs import RuntimePackError, RuntimePackManager
 from app.runtime_preflight import browser_runtime_available
+from app.browser_provider import (
+    browser_runtime_status,
+    refresh_browser_runtime,
+    shutdown_browser_runtime,
+)
+from app.providers.transcription import transcription_runtime_status
 from app.schemas import (
     ArtifactPayloadModel,
+    BrowserSessionRequest,
     CaptureCreateUrlRequest,
     CaptureEnvelopeModel,
     CaptureEventEnvelopeModel,
@@ -48,12 +66,14 @@ from app.settings import (
     FRONTEND_DIR,
     MAX_UPLOAD_SIZE_MB,
     MAX_VIDEO_DURATION_MINUTES,
+    PROJECT_ROOT,
     PRODUCT_FEATURE_NAME,
     PRODUCT_NAME,
     PRODUCT_SLOGAN,
     PRODUCT_SUMMARY,
     DEPLOYMENT_MODE,
     FFMPEG_PATH,
+    FRONTEND_BUILD_MANIFEST,
     MODEL_PATH,
     PLAYWRIGHT_BROWSERS_DIR,
     PUBLIC_PREVIEW_MODE,
@@ -76,6 +96,8 @@ runtime_pack_manager = RuntimePackManager(RUNTIME_PACK_MANIFEST, RUNTIME_DIR)
 UPLOAD_CHUNK_SIZE = 1024 * 1024
 
 app = FastAPI(title=APP_DISPLAY_NAME)
+from app.local_tools_api import router as local_tools_router
+app.include_router(local_tools_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -89,6 +111,70 @@ DESKTOP_ALLOWED_ORIGINS = {
     "https://tauri.localhost",
     "tauri://localhost",
 }
+_browser_session_process: subprocess.Popen | None = None
+_BROWSER_SESSION_STATE_FILE = RUNTIME_DIR / "browser-session-state.json"
+LEGACY_PERMANENT_REASON_CODES = frozenset(
+    {
+        "source_not_found",
+        "source_access_restricted",
+        "youtube_video_unavailable",
+        "bilibili_video_invalid",
+        "xiaohongshu_placeholder_page",
+        "xiaoyuzhou_audio_missing",
+        "image_assets_missing",
+        "media_or_subtitle_missing",
+        "text_or_images_missing",
+    }
+)
+
+
+def _browser_session_status() -> dict[str, Any]:
+    """Expose only the lifecycle state of the user-led browser helper."""
+    global _browser_session_process
+    process = _browser_session_process
+    if process is not None:
+        exit_code = process.poll()
+        if exit_code is None:
+            return {"state": "open"}
+        _browser_session_process = None
+        _BROWSER_SESSION_STATE_FILE.unlink(missing_ok=True)
+        return {"state": "exited", "exit_code": int(exit_code)}
+
+    # The API process can restart while the user-led helper is still open.
+    # Keep only a local PID marker so a second profile-locking browser is not
+    # started; no URL, cookie, or account data is persisted here.
+    try:
+        payload = json.loads(_BROWSER_SESSION_STATE_FILE.read_text(encoding="utf-8"))
+        pid = int(payload.get("pid", 0)) if isinstance(payload, dict) else 0
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        pid = 0
+    if pid > 0:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            _BROWSER_SESSION_STATE_FILE.unlink(missing_ok=True)
+        else:
+            return {"state": "open"}
+    return {"state": "idle"}
+
+
+def _validated_browser_session_url(value: str | None) -> str | None:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > 4096:
+        raise HTTPException(status_code=400, detail="平台链接过长，暂时无法打开。")
+    parsed = urlparse(cleaned)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    allowed = (
+        host == "xiaohongshu.com"
+        or host.endswith(".xiaohongshu.com")
+        or host == "douyin.com"
+        or host.endswith(".douyin.com")
+    )
+    if parsed.scheme != "https" or not allowed:
+        raise HTTPException(status_code=400, detail="这里只能打开受支持平台的安全链接。")
+    return cleaned
 
 
 @app.middleware("http")
@@ -152,13 +238,58 @@ def _install_asyncio_connection_reset_filter() -> None:
 
 
 def _dist_available() -> bool:
-    return WEB_DIST_DIR.exists() and (WEB_DIST_DIR / "index.html").exists()
+    return _frontend_build_status()["status"] == "ready"
+
+
+def _frontend_build_status() -> dict[str, Any]:
+    if not WEB_DIST_DIR.exists() or not (WEB_DIST_DIR / "index.html").is_file():
+        return {"status": "missing", "build_id": None, "git_sha": None}
+    if not FRONTEND_BUILD_MANIFEST.is_file():
+        return {"status": "manifest_missing", "build_id": None, "git_sha": None}
+    try:
+        payload = json.loads(FRONTEND_BUILD_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "manifest_invalid", "build_id": None, "git_sha": None}
+    if payload.get("schema_version") != 1 or not payload.get("build_id"):
+        return {"status": "manifest_invalid", "build_id": None, "git_sha": None}
+    output_files = payload.get("output_files")
+    if not isinstance(output_files, list) or not output_files or not all(
+        isinstance(item, str)
+        and item
+        and not Path(item).is_absolute()
+        and ".." not in Path(item).parts
+        for item in output_files
+    ):
+        return {"status": "manifest_invalid", "build_id": None, "git_sha": None}
+    missing_outputs = [item for item in output_files if not (WEB_DIST_DIR / item).is_file()]
+    if missing_outputs:
+        return {
+            "status": "outputs_missing",
+            "build_id": str(payload.get("build_id")),
+            "git_sha": str(payload.get("git_sha") or "unknown"),
+        }
+    return {
+        "status": "ready",
+        "build_id": str(payload.get("build_id")),
+        "git_sha": str(payload.get("git_sha") or "unknown"),
+    }
 
 
 if _dist_available():
     assets_dir = WEB_DIST_DIR / "assets"
     if assets_dir.exists():
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="capture-assets")
+
+
+@app.middleware("http")
+async def set_frontend_asset_cache_policy(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path or "/"
+    if path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif path in {"/", "/health", "/config"} or path.startswith("/c/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 def _normalized_result(result):
@@ -235,48 +366,166 @@ def _fallback_content_facts(capture, source, result) -> list[ContentFactItemMode
 
 
 def _public_artifact(artifact) -> ArtifactPayloadModel:
+    status = getattr(artifact, "status", "ready")
+    preview_url = getattr(artifact, "preview_url", None)
+    if status == "ready" and not preview_url:
+        preview_url = f"{artifact.download_url}/preview"
     return ArtifactPayloadModel(
         type=artifact.type,
         label=artifact.label,
         download_url=artifact.download_url,
+        preview_url=preview_url,
         mime_type=artifact.mime_type,
         size_bytes=artifact.size_bytes,
-        status=getattr(artifact, "status", "ready"),
+        status=status,
         optional=bool(getattr(artifact, "optional", False)),
     )
 
 
+def _public_capture_status(capture) -> str:
+    """Project legacy whole-capture failures into the actionable public state.
+
+    ``failed`` remains readable internally for old files and artifact-level
+    compatibility, but it is not a user-facing whole-capture state. Keeping
+    this projection separate from the mutating legacy repair gives every
+    response builder a final defense-in-depth boundary.
+    """
+    return "needs_user_action" if capture.status == "failed" else capture.status
+
+
 def _result_state(capture, result) -> str:
-    if capture.status == "failed":
-        return "failed"
+    public_status = _public_capture_status(capture)
+    if public_status == "needs_user_action":
+        return "awaiting_user"
     has_text = bool(result and (result.views.primary or result.primary_text).strip())
     declared_state = str(getattr(capture, "result_state", "processing") or "processing")
     if declared_state == "text_ready" and has_text:
         return "text_ready"
-    if capture.status == "done" and bool(getattr(capture, "asset_preparation_pending", False)) and has_text:
+    if public_status == "done" and bool(getattr(capture, "asset_preparation_pending", False)) and has_text:
         return "text_ready"
-    if capture.status == "done":
+    if public_status == "done":
         return "complete"
     return "processing"
 
 
-def _public_source_images(source) -> list[CaptureSourceImagePayloadModel]:
+def _normalize_legacy_user_action_capture(capture):
+    """Expose all pre-migration terminal captures as actionable states.
+
+    Older records were persisted as ``failed`` before the product used a calm,
+    actionable terminal surface. Normalize them at every API boundary so the
+    web UI, desktop client, history and SSE consumers agree on the state
+    without rewriting the user's local record in the background.
+    """
+    reason_code = str(getattr(capture.processing, "failure_reason_code", "") or "")
+    if capture.status != "failed":
+        return capture
+    capture.status = "needs_user_action"
+    capture.result_state = "awaiting_user"
+    capture.processing.current_stage = "awaiting_user"
+    capture.processing.progress_percent = max(18, capture.processing.progress_percent or 0)
+    if not reason_code:
+        capture.processing.failure_reason_code = "internal_error"
+    if reason_code not in LEGACY_PERMANENT_REASON_CODES:
+        capture.processing.retryable = True
+    return capture
+
+
+def _public_source_images(source, result=None) -> list[CaptureSourceImagePayloadModel]:
     image_urls = list(source.image_urls or [])
     live_urls = list(getattr(source, "live_photo_video_urls", []) or [])
+    artifacts = list(getattr(result, "artifacts", []) or [])
+    image_artifacts = {
+        int(item.type.removeprefix("image_")): item
+        for item in artifacts
+        if re.fullmatch(r"image_\d+", item.type)
+    }
     items: list[CaptureSourceImagePayloadModel] = []
     for index, image_url in enumerate(image_urls, start=1):
         cleaned_image_url = (image_url or "").strip()
         if not cleaned_image_url:
             continue
         live_url = (live_urls[index - 1] if index - 1 < len(live_urls) else "").strip() or None
+        artifact = image_artifacts.get(index)
+        status = getattr(artifact, "status", "pending") if artifact is not None else "pending"
+        preview_url = None
+        download_url = None
+        width = None
+        height = None
+        thumbnail_url = None
+        if artifact is not None and status == "ready":
+            download_url = artifact.download_url
+            preview_url = getattr(artifact, "preview_url", None) or f"{artifact.download_url}/preview"
+            width = getattr(artifact, "width", None)
+            height = getattr(artifact, "height", None)
+            thumbnail_path_value = getattr(artifact, "thumbnail_path", None)
+            if thumbnail_path_value:
+                thumbnail_path = Path(thumbnail_path_value)
+                if thumbnail_path.is_file():
+                    stat = thumbnail_path.stat()
+                    version = f"{stat.st_mtime_ns:x}{stat.st_size:x}"
+                    capture_base = str(artifact.download_url).rsplit("/artifacts/", 1)[0]
+                    thumbnail_url = f"{capture_base}/images/{index}/thumbnail?v={version}"
         items.append(
             CaptureSourceImagePayloadModel(
                 index=index,
                 image_url=cleaned_image_url,
                 live_photo_video_url=live_url,
+                delivery_status=status,
+                preview_url=preview_url,
+                download_url=download_url,
+                width=width,
+                height=height,
+                thumbnail_url=thumbnail_url,
             )
         )
     return items
+
+
+_SOURCE_WARNING_TECHNICAL_PATTERNS = re.compile(
+    r"(?:traceback|exception|filenotfound|keyerror|yt[- ]?dlp|no video formats|"
+    r"http error|error:\s*\[|file [\"']|[a-z]:\\|https?://|\\\\)",
+    re.IGNORECASE,
+)
+
+
+def _public_capture_error_message(capture) -> str | None:
+    """Keep raw extraction failures out of every public capture envelope.
+
+    The worker keeps detailed diagnostics locally, but the web and desktop
+    clients should receive a calm, actionable sentence.  This boundary also
+    protects clients that do not run the React copy normalizer.
+    """
+
+    cleaned = " ".join(str(getattr(capture, "error_message", "") or "").split()).strip()
+    if not cleaned:
+        return None
+    if _SOURCE_WARNING_TECHNICAL_PATTERNS.search(cleaned) or len(cleaned) > 240:
+        return "处理暂时中断，已经自动尝试恢复。你可以重新处理这条内容。"
+    return (
+        cleaned
+        .replace("处理失败", "处理暂未完成")
+        .replace("操作失败", "操作暂未完成")
+        .replace("上传失败", "上传暂未完成")
+        .replace("下载失败", "下载暂未完成")
+        .replace("失败", "暂未完成")
+        .replace("出错", "暂时中断")
+    )
+
+
+def _public_source_warnings(source) -> list[str]:
+    """Expose only short, user-safe source warnings through the API envelope."""
+
+    public: list[str] = []
+    for warning in list(getattr(source, "warnings", []) or []):
+        cleaned = " ".join(str(warning or "").split()).strip()
+        if not cleaned:
+            continue
+        if _SOURCE_WARNING_TECHNICAL_PATTERNS.search(cleaned) or len(cleaned) > 240:
+            cleaned = "部分提取路径暂未就绪，已自动切换备用路径。"
+        cleaned = cleaned.replace("失败", "暂未就绪")
+        if cleaned not in public:
+            public.append(cleaned)
+    return public[:6]
 
 
 def _preview_without_title(title: str | None, text: str | None, *, limit: int = 160) -> str:
@@ -290,6 +539,8 @@ def _preview_without_title(title: str | None, text: str | None, *, limit: int = 
 
 
 def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
+    _normalize_legacy_user_action_capture(capture)
+    public_status = _public_capture_status(capture)
     result = _display_result(capture, _normalized_result(capture.result))
     source = capture.source
     content_facts = (
@@ -301,7 +552,7 @@ def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
     return CaptureEnvelopeModel(
         capture=CaptureStatePayloadModel(
             id=capture.id,
-            status=capture.status,
+            status=public_status,
             result_state=_result_state(capture, result),
             input_kind=capture.input_type,
             current_stage=capture.processing.current_stage,
@@ -313,7 +564,7 @@ def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
             started_at=capture.started_at,
             finished_at=capture.finished_at,
             error_stage=capture.error_stage,
-            error_message=capture.error_message,
+            error_message=_public_capture_error_message(capture),
             retry_count=capture.processing.retry_count,
             retryable=capture.processing.retryable,
             failure_reason_code=getattr(capture.processing, "failure_reason_code", None),
@@ -330,8 +581,8 @@ def _to_capture_envelope(capture) -> CaptureEnvelopeModel:
             description=_display_source_description(capture, result),
             detected_urls=source.detected_urls,
             image_urls=source.image_urls,
-            images=_public_source_images(source),
-            warnings=source.warnings,
+            images=_public_source_images(source, result),
+            warnings=_public_source_warnings(source),
             extractor_used=source.extractor_used,
             fallback_used=source.fallback_used,
         ),
@@ -388,6 +639,7 @@ def _transition_event_names(
 
 
 def _public_capture(capture) -> CaptureListItemModel:
+    public_status = _public_capture_status(capture)
     result = _display_result(capture, _normalized_result(capture.result))
     platform = getattr(capture, "source_platform", "") or getattr(getattr(capture, "source", None), "platform", "")
     preview = ""
@@ -399,7 +651,7 @@ def _public_capture(capture) -> CaptureListItemModel:
         preview = capture.title[:160]
     return CaptureListItemModel(
         id=capture.id,
-        status=capture.status,
+        status=public_status,
         title=capture.title,
         source_platform=capture.source_platform,
         content_type=capture.content_type,
@@ -411,7 +663,7 @@ def _public_capture(capture) -> CaptureListItemModel:
 
 
 def _should_expose_capture_in_recent(capture) -> bool:
-    if capture.status == "failed":
+    if capture.status in {"failed", "needs_user_action"}:
         return False
 
     title = (capture.title or "").strip().lower()
@@ -421,6 +673,21 @@ def _should_expose_capture_in_recent(capture) -> bool:
     ):
         return False
     return True
+
+
+def _selected_transcription_available() -> bool:
+    if DEPLOYMENT_MODE != "local" or TRANSCRIPTION_PROVIDER == "openai_compatible":
+        return TRANSCRIPTION_AVAILABLE
+    from app.local_preferences import transcription_options
+    from scripts.config import COMPUTE_TYPE, DEVICE, MODEL_PATH
+    options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
+                                    desktop=RUNTIME_TARGET == "windows_desktop")
+    if options["engine"] != "sensevoice":
+        return TRANSCRIPTION_AVAILABLE
+    directory = options["model_path"]
+    gpu = options["execution_device"] == "cuda"
+    ready = (directory / ("model.onnx" if gpu else "model.int8.onnx")).is_file() and (directory / "tokens.txt").is_file()
+    return ready and (not gpu or (options["sdk_path"] / "sherpa_onnx/lib/onnxruntime_providers_cuda.dll").is_file())
 
 
 def _config_payload() -> dict[str, Any]:
@@ -436,7 +703,7 @@ def _config_payload() -> dict[str, Any]:
         "free_duration_minutes": FREE_DURATION_MINUTES,
         "deployment_mode": DEPLOYMENT_MODE,
         "public_preview_mode": PUBLIC_PREVIEW_MODE,
-        "transcription_available": TRANSCRIPTION_AVAILABLE,
+        "transcription_available": _selected_transcription_available(),
         "transcription_provider": TRANSCRIPTION_PROVIDER,
         "runtime_target": RUNTIME_TARGET,
         "capabilities": {
@@ -452,14 +719,15 @@ def _config_payload() -> dict[str, Any]:
 
 def _component_status() -> dict[str, str]:
     local_runtime = RUNTIME_TARGET in {"local_web", "windows_desktop"}
+    transcription_ready = _selected_transcription_available()
     return {
         "api": "ready",
-        "frontend": "ready" if _dist_available() else "missing",
+        "frontend": "embedded" if RUNTIME_TARGET == "windows_desktop" else ("ready" if _dist_available() else "missing"),
         "storage": "ready" if repository is not None else "unavailable",
-        "transcription": "ready" if TRANSCRIPTION_AVAILABLE else "unavailable",
+        "transcription": "ready" if transcription_ready else "unavailable",
         "ffmpeg": "ready" if FFMPEG_PATH.exists() else ("missing" if local_runtime else "not_required"),
         "browser": "ready" if browser_runtime_available() else ("missing" if local_runtime else "not_required"),
-        "model": "ready" if local_runtime and TRANSCRIPTION_AVAILABLE else ("missing" if local_runtime else "not_required"),
+        "model": "ready" if local_runtime and transcription_ready else ("missing" if local_runtime else "not_required"),
     }
 
 
@@ -624,7 +892,7 @@ async def handle_capture_store_unavailable(request: Request, exc: CaptureStoreUn
     logger.warning("Capture storage temporarily unavailable: %s %s | %s", request.method, request.url.path, exc)
     if _is_api_request(request):
         return JSONResponse(status_code=503, content={"detail": PUBLIC_INTERNAL_ERROR_MESSAGE})
-    return HTMLResponse("Service temporarily unavailable.", status_code=503)
+    return HTMLResponse("本地服务暂时不可用，请稍后再试。", status_code=503)
 
 
 @app.exception_handler(Exception)
@@ -632,32 +900,71 @@ async def handle_unexpected_exception(request: Request, exc: Exception):
     logger.exception("Unhandled API exception: %s %s", request.method, request.url.path)
     if _is_api_request(request):
         return JSONResponse(status_code=500, content={"detail": PUBLIC_INTERNAL_ERROR_MESSAGE})
-    return HTMLResponse("Service temporarily unavailable.", status_code=500)
+    return HTMLResponse("本地服务暂时不可用，请稍后再试。", status_code=500)
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
     _install_asyncio_connection_reset_filter()
     repository.init()
+    for capture in repository.list(limit=500):
+        try:
+            if repair_legacy_audio_artifact(capture):
+                repository.update(capture.id, result=capture.result)
+        except Exception:
+            logger.warning(
+                "Could not repair legacy audio artifact for capture %s.",
+                capture.id,
+                exc_info=True,
+            )
     recover_pending_captures()
     ensure_worker_started()
+    if RUNTIME_TARGET == "windows_desktop":
+        import threading
+        def warm_local_engine():
+            from app.providers.transcription import warm_desktop_transcription
+            try:
+                warm_desktop_transcription()
+            except Exception:
+                logger.warning("Local GPU warmup incomplete; explicit CUDA tasks will report the error without CPU fallback.")
+        threading.Thread(target=warm_local_engine, name="local-asr-warmup", daemon=True).start()
     logger.info("Capture API startup complete.")
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    shutdown_browser_runtime()
+    from app.sensevoice_cuda import _worker
+    if _worker:
+        _worker.close()
 
 
 @app.get("/", response_class=HTMLResponse, response_model=None)
 async def serve_root():
     if _dist_available():
-        return FileResponse(WEB_DIST_DIR / "index.html")
+        return FileResponse(
+            WEB_DIST_DIR / "index.html",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
     if (FRONTEND_DIR / "capture.html").exists():
         return RedirectResponse(url="/capture.html")
-    return HTMLResponse("<h1>Capture API</h1><p>Frontend build not found.</p>", status_code=200)
+    return HTMLResponse("<h1>万象成文</h1><p>页面正在准备中，请稍后再试。</p>", status_code=200)
 
 
 @app.get("/brand-mark.svg", include_in_schema=False, response_model=None)
 async def serve_brand_mark():
     brand_mark = WEB_DIST_DIR / "brand-mark.svg"
     if not brand_mark.is_file():
-        raise HTTPException(status_code=404, detail="Brand asset not found.")
+        raise HTTPException(status_code=404, detail="品牌资源暂时不可用。")
+    return FileResponse(brand_mark, media_type="image/svg+xml")
+
+
+@app.get("/favicon.ico", include_in_schema=False, response_model=None)
+async def serve_favicon():
+    """Keep browser fallback favicon requests from becoming noisy 404s."""
+    brand_mark = WEB_DIST_DIR / "brand-mark.svg"
+    if not brand_mark.is_file():
+        raise HTTPException(status_code=404, detail="品牌图标暂时不可用。")
     return FileResponse(brand_mark, media_type="image/svg+xml")
 
 
@@ -667,21 +974,27 @@ async def serve_legacy_capture():
         return RedirectResponse(url="/")
     legacy = FRONTEND_DIR / "capture.html"
     if not legacy.exists():
-        raise HTTPException(status_code=404, detail="Frontend fallback page not found.")
+        raise HTTPException(status_code=404, detail="页面暂时不可用，请返回首页。")
     return FileResponse(legacy)
 
 
 @app.get("/c/{capture_id}", response_class=HTMLResponse, response_model=None)
 async def serve_capture_result(capture_id: str):
-    if repository.get(capture_id) is None:
-        raise HTTPException(status_code=404, detail="Capture not found.")
+    # Let the SPA own deep-link recovery, including an expired or mistyped
+    # capture id. Returning a server 404 here used to bypass React entirely,
+    # leaving the browser on a raw error page and preventing the UI from
+    # offering its calm "return home" recovery action.
     if _dist_available():
-        return FileResponse(WEB_DIST_DIR / "index.html")
+        return FileResponse(
+            WEB_DIST_DIR / "index.html",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
     return RedirectResponse(url="/capture.html")
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    frontend_status = _frontend_build_status()
     return {
         "status": "ok",
         "product_name": PRODUCT_NAME,
@@ -690,13 +1003,105 @@ async def health() -> dict[str, Any]:
         "runtime_target": RUNTIME_TARGET,
         "version": APP_VERSION,
         "commit": APP_COMMIT,
+        "frontend_build_id": frontend_status["build_id"],
+        "frontend_git_sha": frontend_status["git_sha"],
+        "asset_manifest_status": frontend_status["status"],
         "components": _component_status(),
+        "browser_runtime": browser_runtime_status(),
+        "browser_session": _browser_session_status(),
+        "transcription_runtime": transcription_runtime_status(),
     }
 
 
 @app.get("/config")
 async def config() -> dict[str, Any]:
     return _config_payload()
+
+
+@app.post("/v1/runtime/browser/refresh")
+async def refresh_v1_browser_runtime() -> dict[str, Any]:
+    """Refresh only the isolated browser context, preserving its profile."""
+    if RUNTIME_TARGET not in {"local_web", "windows_desktop"}:
+        raise HTTPException(status_code=404, detail="该功能仅在本地运行时可用。")
+    try:
+        await asyncio.to_thread(refresh_browser_runtime)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="项目级浏览器会话暂时无法刷新。") from exc
+    return {"status": "ready", "browser_runtime": browser_runtime_status()}
+
+
+@app.post("/v1/runtime/browser/session")
+async def open_v1_browser_session(payload: BrowserSessionRequest | None = None) -> dict[str, Any]:
+    """Open the isolated browser profile for a user-led platform check."""
+    global _browser_session_process
+    if RUNTIME_TARGET not in {"local_web", "windows_desktop"}:
+        raise HTTPException(status_code=404, detail="该功能仅在本地运行时可用。")
+    script = PROJECT_ROOT / "scripts" / "refresh_browser_session.py"
+    if not script.is_file():
+        raise HTTPException(status_code=503, detail="项目级浏览器会话工具还没有准备好。")
+    if _browser_session_status()["state"] == "open":
+        return {"status": "already_opened"}
+    target_url = _validated_browser_session_url(payload.url if payload else None)
+    target_file: Path | None = None
+    if target_url:
+        target_file = TEMP_DIR / f"browser-session-{uuid.uuid4().hex}.json"
+        try:
+            target_file.write_text(
+                json.dumps({"url": target_url}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            raise HTTPException(status_code=503, detail="本地会话准备目录暂时不可用。") from exc
+    try:
+        await asyncio.to_thread(refresh_browser_runtime)
+    except Exception as exc:  # noqa: BLE001
+        if target_file:
+            target_file.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail="项目级浏览器会话暂时无法刷新。") from exc
+    creation_flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    session_log_path = PROJECT_ROOT / "workspace" / "logs" / "browser_session.log"
+    session_log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with session_log_path.open("a", encoding="utf-8") as session_log:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-u",
+                    "-m",
+                    "scripts.refresh_browser_session",
+                    *(["--target-file", str(target_file)] if target_file else []),
+                    "--state-file",
+                    str(_BROWSER_SESSION_STATE_FILE),
+                ],
+                cwd=str(PROJECT_ROOT),
+                stdin=subprocess.DEVNULL,
+                stdout=session_log,
+                stderr=subprocess.STDOUT,
+                creationflags=creation_flags,
+            )
+    except OSError as exc:
+        if target_file:
+            target_file.unlink(missing_ok=True)
+        raise HTTPException(status_code=503, detail="项目级浏览器会话暂时无法打开。") from exc
+    await asyncio.sleep(0.5)
+    if process.poll() is not None:
+        if target_file:
+            target_file.unlink(missing_ok=True)
+        _BROWSER_SESSION_STATE_FILE.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=503,
+            detail="项目级浏览器会话暂未启动，请查看本地诊断后再试。",
+        )
+    _browser_session_process = process
+    try:
+        _BROWSER_SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _BROWSER_SESSION_STATE_FILE.write_text(
+            json.dumps({"pid": int(process.pid), "state": "open"}),
+            encoding="utf-8",
+        )
+    except (OSError, TypeError, ValueError):
+        _BROWSER_SESSION_STATE_FILE.unlink(missing_ok=True)
+    return {"status": "opened"}
 
 
 @app.get("/v1/runtime/packs")
@@ -725,7 +1130,10 @@ async def list_v1_captures(request: Request) -> CaptureListResponse:
     captures = repository.list(limit=max(CAPTURE_HISTORY_LIMIT * 3, 30), client_ip=client_ip)
     for capture in captures:
         _revive_capture_if_needed(capture)
+        _normalize_legacy_user_action_capture(capture)
     captures = repository.list(limit=max(CAPTURE_HISTORY_LIMIT * 3, 30), client_ip=client_ip)
+    for capture in captures:
+        _normalize_legacy_user_action_capture(capture)
     items = [_public_capture(item) for item in captures if _should_expose_capture_in_recent(item)]
     items = items[:CAPTURE_HISTORY_LIMIT]
     return CaptureListResponse(count=len(items), items=items)
@@ -752,7 +1160,7 @@ async def delete_v1_capture(capture_id: str) -> dict[str, Any]:
 async def get_v1_capture(capture_id: str) -> CaptureEnvelopeModel:
     capture = repository.get(capture_id)
     if capture is None:
-        raise HTTPException(status_code=404, detail="Capture not found.")
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
     _revive_capture_if_needed(capture)
     capture = repository.get(capture_id) or capture
     return _to_capture_envelope(capture)
@@ -761,7 +1169,7 @@ async def get_v1_capture(capture_id: str) -> CaptureEnvelopeModel:
 @app.get("/v1/captures/{capture_id}/events")
 async def stream_v1_capture_events(capture_id: str) -> StreamingResponse:
     if repository.get(capture_id) is None:
-        raise HTTPException(status_code=404, detail="Capture not found.")
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
 
     async def event_stream():
         last_version = None
@@ -774,7 +1182,9 @@ async def stream_v1_capture_events(capture_id: str) -> StreamingResponse:
                 yield f"event: deleted\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
                 break
             _revive_capture_if_needed(capture)
+            _normalize_legacy_user_action_capture(capture)
             capture = repository.get(capture_id) or capture
+            _normalize_legacy_user_action_capture(capture)
 
             envelope = _to_capture_envelope(capture)
             version = envelope.capture.updated_at
@@ -796,7 +1206,9 @@ async def stream_v1_capture_events(capture_id: str) -> StreamingResponse:
                 last_version = version
                 previous_result_state = envelope.capture.result_state
 
-            if capture.status == "failed" or (capture.status == "done" and not capture.asset_preparation_pending):
+            if capture.status in {"failed", "needs_user_action"} or (
+                capture.status == "done" and not capture.asset_preparation_pending
+            ):
                 break
             await asyncio.sleep(1.1)
 
@@ -807,16 +1219,103 @@ async def stream_v1_capture_events(capture_id: str) -> StreamingResponse:
 async def download_v1_artifact(capture_id: str, artifact_type: str) -> FileResponse:
     capture = repository.get(capture_id)
     if capture is None or capture.result is None:
-        raise HTTPException(status_code=404, detail="Capture not found.")
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
 
     artifact = next((item for item in capture.result.artifacts if item.type == artifact_type), None)
     if artifact is None:
-        raise HTTPException(status_code=404, detail="Artifact not found.")
+        raise HTTPException(status_code=404, detail="这个下载项暂时不可用，请重新处理内容。")
 
     target = Path(artifact.path)
     if not target.exists():
-        raise HTTPException(status_code=404, detail="Artifact file missing.")
+        raise HTTPException(status_code=404, detail="下载文件暂时未准备好，请稍后再试。")
     return FileResponse(target, filename=target.name, media_type=artifact.mime_type)
+
+
+@app.get("/v1/captures/{capture_id}/artifacts/{artifact_type}/preview")
+async def preview_v1_artifact(capture_id: str, artifact_type: str) -> FileResponse:
+    capture = repository.get(capture_id)
+    if capture is None or capture.result is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
+
+    artifact = next((item for item in capture.result.artifacts if item.type == artifact_type), None)
+    if artifact is None or getattr(artifact, "status", "ready") != "ready":
+        raise HTTPException(status_code=404, detail="这个下载项暂时不可用，请重新处理内容。")
+
+    target = Path(artifact.path)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail="下载文件暂时未准备好，请稍后再试。")
+    return FileResponse(
+        target,
+        media_type=artifact.mime_type,
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/v1/captures/{capture_id}/images/{image_index}/thumbnail")
+async def preview_v1_capture_image_thumbnail(capture_id: str, image_index: int) -> FileResponse:
+    capture = repository.get(capture_id)
+    if capture is None or capture.result is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
+    artifact_type = f"image_{image_index:02d}"
+    artifact = next(
+        (item for item in capture.result.artifacts if item.type == artifact_type),
+        None,
+    )
+    thumbnail_path_value = getattr(artifact, "thumbnail_path", None) if artifact is not None else None
+    if not thumbnail_path_value:
+        raise HTTPException(status_code=404, detail="图片预览暂时不可用，请稍后再试。")
+    target = Path(thumbnail_path_value)
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="图片预览暂时不可用，请稍后再试。")
+    return FileResponse(
+        target,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/v1/captures/{capture_id}/images/{image_index}/retry")
+async def retry_v1_capture_image(capture_id: str, image_index: int) -> CaptureEnvelopeModel:
+    capture = repository.get(capture_id)
+    if capture is None or capture.result is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
+    if capture.source.content_type != "image_article":
+        raise HTTPException(status_code=409, detail="这条内容暂时没有可展示的图片。")
+    try:
+        result = retry_capture_image(capture, image_index)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="这张图片暂时未能重新获取，请稍后再试。") from exc
+    updated = repository.update(capture_id, result=result)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
+    return _to_capture_envelope(updated)
+
+
+@app.post("/v1/captures/{capture_id}/cover")
+async def ensure_v1_capture_cover(capture_id: str) -> CaptureEnvelopeModel:
+    capture = repository.get(capture_id)
+    if capture is None or capture.result is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
+    if capture.source.content_type != "audio":
+        raise HTTPException(status_code=409, detail="这期内容暂时没有可用封面。")
+    try:
+        result = await asyncio.to_thread(ensure_capture_cover, capture)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="节目封面暂时未能获取，请稍后再试。") from exc
+    updated = repository.update(capture_id, result=result)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
+    return _to_capture_envelope(updated)
 
 
 @app.post("/v1/captures")
@@ -940,23 +1439,33 @@ async def create_v1_capture(request: Request, file: UploadFile | None = File(def
 async def retry_v1_capture(capture_id: str) -> dict[str, Any]:
     capture = repository.get(capture_id)
     if capture is None:
-        raise HTTPException(status_code=404, detail="Capture not found.")
+        raise HTTPException(status_code=404, detail="这条内容已经不存在或暂未准备好，请返回首页重新处理。")
     if capture.status == "processing":
-        raise HTTPException(status_code=409, detail="Capture is already processing.")
+        raise HTTPException(status_code=409, detail="这条内容正在处理中，请稍候。")
     if capture.status == "queued":
-        raise HTTPException(status_code=409, detail="Capture is already queued.")
+        raise HTTPException(status_code=409, detail="这条内容已在准备中，请稍候。")
+
+    if capture.input_type == "url":
+        if capture.source_platform == "youtube":
+            raise HTTPException(status_code=400, detail=YOUTUBE_RETIRED_MESSAGE)
+        try:
+            _reject_retired_source(capture.url or "")
+        except RetiredSourceError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     updated = repository.update(
         capture.id,
         status="queued",
         error_stage=None,
         error_message=None,
-        processing=capture.processing.model_copy(
+            processing=capture.processing.model_copy(
             update={
                 "current_stage": "queued",
                 "progress_percent": 2,
                 "progress_detail": "任务已重新加入队列。",
                 "retry_count": capture.processing.retry_count + 1,
+                "failure_reason_code": None,
+                "retryable": False,
             }
         ),
     )

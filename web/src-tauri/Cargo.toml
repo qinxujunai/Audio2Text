@@ -1,6 +1,6 @@
 [package]
 name = "wanxiang-chengwen"
-version = "2.1.0"
+version = "2.3.0"
 description = "Wanxiang Chengwen Windows desktop application"
 authors = ["Praxis AI"]
 license = "Apache-2.0"
@@ -17,8 +17,12 @@ tauri-build = { version = "2.5.3", features = [] }
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tauri = { version = "2.11.5", features = ["tray-icon"] }
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-opener = "2.5.4"
 uuid = { version = "1", features = ["v4"] }
+url = "2.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }

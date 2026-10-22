@@ -25,7 +25,7 @@
       </a>
       <nav aria-label="主要导航" data-i18n-aria="primaryNav">
         <a href="#workflow" data-i18n="navWorkflow">产品</a>
-        <a href="#proof" data-i18n="navProof">验证</a>
+        <a href="#proof" data-i18n="navProof">下载</a>
         <a href="https://github.com/qinxujunai/Audio2Text">GitHub</a>
       </nav>
       <div class="language-switch" role="group" aria-label="语言" data-i18n-aria="languageSwitch">
@@ -58,6 +58,19 @@
       <p class="demo-note" data-i18n="demoNote">演示使用开发预览版与预置示例，等待过程已缩短；正式下载版本见上方。</p>
     </section>
 
+    <section class="scenarios section" id="scenarios">
+      <div class="section-heading">
+        <p class="section-kicker" data-i18n="scenariosKicker">让有价值的内容，留得下来</p>
+        <h2 data-i18n="scenariosTitle">听过、看过。也能找回。</h2>
+      </div>
+      <div class="scenario-grid">
+        <article><span aria-hidden="true">↗</span><h3 data-i18n="scenarioVideo">长视频</h3><p data-i18n="scenarioVideoBody">留下完整文字，回看视频，复制值得保留的那一段。</p></article>
+        <article><span aria-hidden="true">◌</span><h3 data-i18n="scenarioPodcast">播客</h3><p data-i18n="scenarioPodcastBody">把对话变成正文，让听到的内容也能被搜索和引用。</p></article>
+        <article><span aria-hidden="true">＋</span><h3 data-i18n="scenarioFile">本地音视频</h3><p data-i18n="scenarioFileBody">选择自己的录音或视频，在电脑上完成语音识别。</p></article>
+        <article><span aria-hidden="true">≡</span><h3 data-i18n="scenarioArticle">图文</h3><p data-i18n="scenarioArticleBody">正文与图片一起留下，阅读、查看与保存各得其所。</p></article>
+      </div>
+    </section>
+
     <section class="workflow section" id="workflow">
       <div class="section-heading">
         <p class="section-kicker" data-i18n="workflowKicker">一个入口</p>
@@ -78,19 +91,20 @@
       </div>
     </section>
 
-    <section class="platforms section" id="platforms">
+    <section class="local-proof section" id="local-proof">
       <div class="section-heading compact">
-        <p class="section-kicker" data-i18n="platformKicker">支持的平台</p>
-        <h2 data-i18n="platformTitle">来自你熟悉的平台。</h2>
+        <p class="section-kicker" data-i18n="localProofKicker">识别在本地，修正由你决定</p>
+        <h2 data-i18n="localProofTitle">保留原话。只改明确的错。</h2>
+        <p data-i18n="localProofBody">AI 校对提出小范围修正，逐处确认后另存一份。原文一直保留，不润色、不总结、不删段。</p>
       </div>
-      <div class="platform-list">
-        <div><strong>哔哩哔哩</strong><span class="status stable" data-i18n="stable">已验证</span></div>
-        <div><strong>小宇宙</strong><span class="status stable" data-i18n="stable">已验证</span></div>
-        <div><strong>抖音</strong><span class="status variable" data-i18n="variable">高波动</span></div>
-        <div><strong>小红书</strong><span class="status variable" data-i18n="variable">高波动</span></div>
-        <div><strong>微信公众号</strong><span class="status stable" data-i18n="stable">已验证</span></div>
+      <div class="proof-demo" aria-label="校对操作示例" data-i18n-aria="proofDemoLabel">
+        <div class="demo-toolbar"><span data-i18n="proofDemoTitle">确认每一处修正</span><span class="demo-caption" data-i18n="exampleOnly">示例文字</span></div>
+        <p class="demo-original" data-i18n="demoOriginal">这里有一个错别宇。金额三百元。保留所有原话。</p>
+        <label class="demo-suggestion"><input id="demo-correction" type="checkbox"><span><del>错别宇</del> <span aria-hidden="true">→</span> <strong>错别字</strong></span><small data-i18n="demoReason">仅修正错别字</small></label>
+        <p class="demo-result" aria-live="polite" data-i18n="demoOriginal">这里有一个错别宇。金额三百元。保留所有原话。</p>
+        <p class="demo-caption" data-i18n="demoPreserved">勾选建议预览校对版，原文保持不变。</p>
       </div>
-      <p class="platform-note" data-i18n="platformNote">平台内容和访问条件会变化。遇到无法读取的链接时，应用会说明下一步。</p>
+      <div class="local-notes"><p data-i18n="gpuBody">支持 NVIDIA CUDA 加速，实际运行设备在本地设置中可查看。也可选择 CPU。</p><p data-i18n="privacyBody">本地识别不上传音频。启用远程 AI 校对时，会把待校对文字发送给你配置的模型服务；费用由该服务收取。</p></div>
     </section>
 
     <section class="proof section" id="proof">
@@ -104,6 +118,15 @@
         <div><dt data-i18n="size">安装包</dt><dd>__WANXIANG_INSTALLER_SIZE__</dd></div>
         <div class="hash"><dt>SHA-256</dt><dd>__WANXIANG_SHA256__</dd></div>
       </dl>
+    </section>
+
+    <section class="faq section" id="faq">
+      <div class="section-heading compact"><h2 data-i18n="faqTitle">开始之前，了解这些。</h2></div>
+      <details><summary data-i18n="faqSystem">需要什么电脑？</summary><p data-i18n="faqSystemBody">Windows 10 / 11，64 位。CPU 可完成本地识别；NVIDIA 显卡可使用可选 CUDA 组件。首次启动需要联网准备模型与运行组件，之后本地文件可离线识别。</p></details>
+      <details><summary data-i18n="faqSize">为什么首次启动还要下载？</summary><p data-i18n="faqSizeBody">安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。</p></details>
+      <details><summary data-i18n="faqPlatforms">哪些链接可以整理？</summary><p data-i18n="faqPlatformsBody">支持哔哩哔哩、小宇宙、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。</p></details>
+      <details><summary data-i18n="faqAI">AI 校对能保证正确吗？</summary><p data-i18n="faqAIBody">不能。模型只提出建议，你逐处确认后才能保存。数字与单位有额外保护，但人名、事实和语义仍需自己核对；原文与校对版始终分别保留。</p></details>
+      <details><summary data-i18n="faqSafety">Windows 为什么提示安全警告？</summary><p data-i18n="faqSafetyBody">当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。</p></details>
     </section>
 
     <section class="closing section">
