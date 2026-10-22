@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import mimetypes
 import queue
 import re
@@ -18,7 +19,7 @@ import av
 import httpx
 
 from app.capture_diagnostics import CaptureDiagnostics, write_capture_event
-from app.extractors import ExtractionError, ExtractionOutcome
+from app.extractors import ExtractionError, ExtractionOutcome, complete_deferred_bilibili_video
 from app.providers import TranscriptionResult, get_transcription_provider
 from app.resolver import resolve_file_type, resolve_url, RetiredSourceError, YOUTUBE_RETIRED_MESSAGE
 from app.schemas import (
@@ -1357,6 +1358,7 @@ def _persist_result_artifacts(
     include_images: bool = True,
     image_preview_limit: int = 0,
     progress_callback: Callable[[int, str], None] | None = None,
+    video_deferred: bool = False,
 ) -> ResultDocumentModel:
     artifact_dir = ARTIFACTS_DIR / capture.id
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -1387,7 +1389,8 @@ def _persist_result_artifacts(
     if markdown_artifact is not None:
         artifacts.append(markdown_artifact)
 
-    source_media_artifact = _persist_source_media_artifact(capture, media_file_path)
+    # A text-first capture holds only the audio track so far: it is not the original video.
+    source_media_artifact = None if video_deferred else _persist_source_media_artifact(capture, media_file_path)
     if source_media_artifact is not None:
         artifacts.append(source_media_artifact)
     source_audio_artifact = _persist_source_audio_artifact(capture, artifact_dir, media_file_path)
@@ -1396,7 +1399,7 @@ def _persist_result_artifacts(
     cover_artifact = _persist_cover_artifact(capture, artifact_dir)
     if cover_artifact is not None:
         artifacts.append(cover_artifact)
-    preview_media_artifact = _persist_preview_media_artifact(capture, artifact_dir, media_file_path)
+    preview_media_artifact = None if video_deferred else _persist_preview_media_artifact(capture, artifact_dir, media_file_path)
     if preview_media_artifact is not None:
         artifacts.append(preview_media_artifact)
 
@@ -1500,6 +1503,46 @@ def _should_prepare_images_async(source: SourceMetaModel) -> bool:
     return bool(source.image_urls)
 
 
+DEFERRED_VIDEO_FILE = "deferred_video.json"
+
+
+def _save_deferred_video(capture_id: str, spec: dict) -> None:
+    path = ARTIFACTS_DIR / capture_id / DEFERRED_VIDEO_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_deferred_video(capture_id: str) -> dict | None:
+    path = ARTIFACTS_DIR / capture_id / DEFERRED_VIDEO_FILE
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return spec if isinstance(spec, dict) else None
+
+
+def _complete_deferred_video(capture, result: ResultDocumentModel, spec: dict) -> ResultDocumentModel:
+    """Download the original video of a text-first capture and add it to the result."""
+    artifact_dir = ARTIFACTS_DIR / capture.id
+    if spec.get("platform") != "bilibili":
+        raise ExtractionError("download", "不支持的后台视频来源。", reason_code="download_failed", retryable=True)
+    video_path = complete_deferred_bilibili_video(spec, artifact_dir)
+    if video_path is None or not Path(video_path).is_file():
+        raise ExtractionError("download", "原视频暂未下载完成。", reason_code="download_failed", retryable=True)
+    added = [
+        artifact
+        for artifact in (
+            _persist_source_media_artifact(capture, str(video_path)),
+            _persist_preview_media_artifact(capture, artifact_dir, str(video_path)),
+        )
+        if artifact is not None
+    ]
+    kinds = {artifact.type for artifact in added}
+    result.artifacts = [artifact for artifact in result.artifacts if artifact.type not in kinds] + added
+    (artifact_dir / DEFERRED_VIDEO_FILE).unlink(missing_ok=True)
+    return result
+
+
 def _start_asset_preparation(capture_id: str) -> None:
     with worker_lock:
         if capture_id in asset_preparation_capture_ids:
@@ -1527,19 +1570,26 @@ def _prepare_image_assets_in_background(capture_id: str) -> None:
             )
         )
 
+    deferred_video = None
     try:
         capture = repository.get(capture_id)
         if capture is None or not capture.asset_preparation_pending or capture.result is None:
             return
 
-        if capture.source.image_urls:
-            update_pending_progress(97, f"正文已整理完成，正在下载图片（0/{min(len(capture.source.image_urls), 20)}）。")
-
-        persisted_result = _persist_result_image_artifacts(
-            capture,
-            capture.result,
-            progress_callback=update_pending_progress,
-        )
+        deferred_video = _load_deferred_video(capture_id)
+        if deferred_video is not None:
+            update_pending_progress(97, "文字已可查看，正在后台下载原视频。")
+            persisted_result = _complete_deferred_video(capture, capture.result, deferred_video)
+            done_trace = _make_trace("compose", "原视频已在后台补齐。", provider="artifact_pipeline")
+        else:
+            if capture.source.image_urls:
+                update_pending_progress(97, f"正文已整理完成，正在下载图片（0/{min(len(capture.source.image_urls), 20)}）。")
+            persisted_result = _persist_result_image_artifacts(
+                capture,
+                capture.result,
+                progress_callback=update_pending_progress,
+            )
+            done_trace = _make_trace("compose", "图片下载与打包已补齐。", provider="artifact_pipeline")
         current = repository.get(capture_id) or capture
         persist_capture(
             asset_preparation_pending=False,
@@ -1551,11 +1601,11 @@ def _prepare_image_assets_in_background(capture_id: str) -> None:
                 progress_percent=100,
                 progress_detail="处理完成，结果已可查看和下载。",
                 reset_failure_state=True,
-                trace=[_make_trace("compose", "图片下载与打包已补齐。", provider="artifact_pipeline")],
+                trace=[done_trace],
             ),
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Image asset preparation failed for %s: %s", capture_id, exc)
+        logger.warning("Asset preparation failed for %s: %s", capture_id, exc)
         current = repository.get(capture_id)
         if current is not None and current.asset_preparation_pending:
             persist_capture(
@@ -1565,8 +1615,16 @@ def _prepare_image_assets_in_background(capture_id: str) -> None:
                     current,
                     current_stage="completed",
                     progress_percent=100,
-                    progress_detail="结果已可查看，部分下载文件暂未准备完成。",
-                    warnings=["部分图片下载文件暂未准备完成。"],
+                    progress_detail=(
+                        "文字已可查看，原视频暂未下载完成，可以重新获取。"
+                        if deferred_video is not None
+                        else "结果已可查看，部分下载文件暂未准备完成。"
+                    ),
+                    warnings=[
+                        "原视频暂未下载完成，已先交付文字结果。"
+                        if deferred_video is not None
+                        else "部分图片下载文件暂未准备完成。"
+                    ],
                     trace=[
                         _make_trace(
                             "compose",
@@ -2339,12 +2397,16 @@ def process_capture(capture_id: str) -> None:
         diagnostics.finish("compose", result_type=result.primary_result_type, text_source=result.text_source)
 
         diagnostics.start("artifact")
-        prepare_images_async = _should_prepare_images_async(source)
-        preview_image_limit = 4 if prepare_images_async else 0
+        deferred_video = getattr(extraction, "deferred_video", None) if source.content_type == "video" else None
+        if deferred_video:
+            _save_deferred_video(capture.id, deferred_video)
+        prepare_images_async = _should_prepare_images_async(source) or bool(deferred_video)
+        preview_image_limit = 4 if prepare_images_async and not deferred_video else 0
         persisted_result = _persist_result_artifacts(
             capture,
             capture.result or result,
             media_file_path=extraction.media_file_path,
+            video_deferred=bool(deferred_video),
             include_images=not prepare_images_async,
             image_preview_limit=preview_image_limit,
             progress_callback=(
@@ -2353,7 +2415,7 @@ def process_capture(capture_id: str) -> None:
                 else lambda percent, detail: update_live_progress("compose", percent, detail)
             ),
         )
-        media_delivery_ready = _ensure_required_media_artifact(capture, persisted_result)
+        media_delivery_ready = True if deferred_video else _ensure_required_media_artifact(capture, persisted_result)
         diagnostics.finish(
             "artifact",
             artifact_count=len(persisted_result.artifacts),
@@ -2363,7 +2425,9 @@ def process_capture(capture_id: str) -> None:
         for event in artifact_traces:
             logger.info("Capture video delivery profile: %s | %s", capture.id, event.detail or "")
         done_message = (
-            "正文和首批图片已可查看，下载文件仍在后台准备。"
+            "文字已可查看，原视频正在后台下载。"
+            if deferred_video
+            else "正文和首批图片已可查看，下载文件仍在后台准备。"
             if prepare_images_async
             else "文字已整理完成，原视频暂未准备好；文字结果已可查看。"
             if not media_delivery_ready

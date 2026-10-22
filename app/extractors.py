@@ -113,6 +113,9 @@ class ExtractionOutcome:
     fallback_used: bool = False
     fallback_chain: list[str] = field(default_factory=list)
     provider_traces: list[ProviderTraceEntry] = field(default_factory=list)
+    # Text first, original video afterwards: when set, ``media_file_path`` is the audio track
+    # (enough to transcribe) and the pipeline downloads the video stream in the background.
+    deferred_video: dict | None = None
 
 
 VIDEO_DELIVERY_TARGET_MAX_HEIGHT = 1080
@@ -2374,6 +2377,67 @@ def _bilibili_best_dash_pair(playurl_data: dict) -> tuple[str, str]:
     return (media_url(video), media_url(audio)) if video and audio else ("", "")
 
 
+def _bilibili_dash_url(aid: object, cid: object, bvid: str) -> str:
+    return f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&bvid={bvid}&fnver=0&fourk=1&qn=64&fnval=16"
+
+
+def _download_bilibili_audio_first(
+    client: httpx.Client,
+    *,
+    aid: object,
+    cid: object,
+    bvid: str,
+    capture_dir: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[Path | None, dict | None, list[str]]:
+    """Download only the DASH audio track and describe the video stream for later.
+
+    A long video's picture stream is often 20x the size of its audio. Transcription needs only
+    the audio, so the text no longer waits for hundreds of megabytes of video; the pipeline
+    fetches the picture afterwards (``complete_deferred_bilibili_video``) and merges the two.
+    """
+    try:
+        payload = _bilibili_api_json(client, _bilibili_dash_url(aid, cid, bvid), reason_code="bilibili_dash_failed")
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        video_url, audio_url = _bilibili_best_dash_pair(data)
+        if not video_url or not audio_url:
+            return None, None, []
+        if progress_callback is not None:
+            progress_callback(36, "正在下载 B站音轨，原视频稍后在后台补齐。")
+        audio_path = capture_dir / "bilibili_audio.m4s"
+        _download_file(audio_url, audio_path, platform="bilibili", headers=_bilibili_headers())
+        if not audio_path.exists() or audio_path.stat().st_size <= 0:
+            return None, None, []
+        deferred = {"platform": "bilibili", "aid": aid, "cid": cid, "bvid": bvid, "audio_path": str(audio_path)}
+        return audio_path, deferred, []
+    except ExtractionError as exc:
+        return None, None, [f"音轨优先下载失败，改为整段下载：{exc.message}"]
+
+
+def complete_deferred_bilibili_video(spec: dict, capture_dir: Path) -> Path | None:
+    """Fetch the picture stream for a text-first capture and merge it with the saved audio.
+
+    Play URLs expire, so the stream address is requested again here instead of being stored.
+    """
+    audio_path = Path(str(spec.get("audio_path") or ""))
+    if not audio_path.is_file():
+        return None
+    with _httpx_client(headers=_bilibili_headers()) as client:
+        payload = _bilibili_api_json(
+            client,
+            _bilibili_dash_url(spec.get("aid"), spec.get("cid"), str(spec.get("bvid") or "")),
+            reason_code="bilibili_dash_failed",
+        )
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+    video_url, _audio_url = _bilibili_best_dash_pair(data)
+    if not video_url:
+        return None
+    video_path = capture_dir / "bilibili_video.m4s"
+    output_path = capture_dir / "bilibili_source.mp4"
+    _download_file(video_url, video_path, platform="bilibili", headers=_bilibili_headers())
+    return _merge_media_streams(video_path, audio_path, output_path)
+
+
 def _download_bilibili_media(
     client: httpx.Client,
     *,
@@ -2386,7 +2450,7 @@ def _download_bilibili_media(
     warnings: list[str] = []
     common_query = f"avid={aid}&cid={cid}&bvid={bvid}&fnver=0&fourk=1"
     progressive_url = f"https://api.bilibili.com/x/player/playurl?{common_query}&qn=64&fnval=0"
-    dash_url = f"https://api.bilibili.com/x/player/playurl?{common_query}&qn=64&fnval=16"
+    dash_url = _bilibili_dash_url(aid, cid, bvid)
 
     try:
         payload = _bilibili_api_json(client, progressive_url, reason_code="bilibili_playurl_failed")
@@ -2466,6 +2530,7 @@ def extract_bilibili_direct(
         subtitle_text = ""
         subtitle_timeline = ""
         media_path: Path | None = None
+        deferred_video: dict | None = None
         warnings: list[str] = []
 
         if cid and aid:
@@ -2488,7 +2553,7 @@ def extract_bilibili_direct(
             except ExtractionError as exc:
                 warnings.append(f"播放信息获取失败：{exc.message}")
 
-            media_path, media_warnings = _download_bilibili_media(
+            media_path, deferred_video, media_warnings = _download_bilibili_audio_first(
                 client,
                 aid=aid,
                 cid=cid,
@@ -2497,6 +2562,16 @@ def extract_bilibili_direct(
                 progress_callback=progress_callback,
             )
             warnings.extend(media_warnings)
+            if media_path is None:
+                media_path, media_warnings = _download_bilibili_media(
+                    client,
+                    aid=aid,
+                    cid=cid,
+                    bvid=bvid,
+                    capture_dir=capture_dir,
+                    progress_callback=progress_callback,
+                )
+                warnings.extend(media_warnings)
 
     if progress_callback is not None:
         progress_callback(50, "B站内容提取完成。")
@@ -2514,7 +2589,9 @@ def extract_bilibili_direct(
         thumbnail_url=thumbnail_url,
         duration_seconds=duration_seconds,
         image_urls=[],
-        strategy=["direct_api"] + (["subtitle"] if subtitle_text else []) + (["media_direct"] if media_path else []),
+        strategy=["direct_api"]
+        + (["subtitle"] if subtitle_text else [])
+        + (["audio_first"] if deferred_video else ["media_direct"] if media_path else []),
         warnings=warnings,
         notes_text=description[:280] if description else "",
         subtitle_text=subtitle_text,
@@ -2525,6 +2602,7 @@ def extract_bilibili_direct(
         primary_text=subtitle_text,
         media_file_path=str(media_path) if media_path and media_path.exists() else "",
         needs_transcription=bool(media_path) and not bool(subtitle_text),
+        deferred_video=deferred_video if media_path and media_path.exists() else None,
     )
 
 
