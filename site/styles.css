@@ -2,11 +2,13 @@
   color-scheme: light;
   --ink: #111113;
   --muted: #66666b;
-  --quiet: #86868b;
+  --quiet: #6e6e73;
   --surface: #ffffff;
   --soft: #f5f6f7;
   --line: rgba(17, 17, 19, 0.12);
   --blue: #0a84ff;
+  /* Text in blue (labels, links) uses a darker blue that reads at 4.5:1 on white; the dots keep --blue. */
+  --link: #0066cc;
   --green: #30b38c;
   --amber: #f2b84b;
   --content: 1120px;
@@ -106,7 +108,7 @@ nav a { color: #424247; font-size: 14px; }
 }
 .eyebrow, .section-kicker {
   margin: 0;
-  color: var(--blue);
+  color: var(--link);
   font-size: 15px;
   font-weight: 650;
 }
@@ -147,7 +149,7 @@ nav a { color: #424247; font-size: 14px; }
 .button.primary { border-color: var(--ink); background: var(--ink); color: #fff; }
 .button:hover { translate: 0 -1px; }
 .button.primary:hover { background: #29292d; }
-.text-link { color: var(--blue); font-weight: 560; }
+.text-link { color: var(--link); font-weight: 560; }
 .compatibility { margin: 16px 0 0; color: var(--quiet); font-size: 14px; }
 .demo-note { max-width: 680px; margin: 16px auto 0; color: var(--quiet); font-size: 14px; line-height: 1.6; }
 
@@ -254,6 +256,8 @@ nav a { color: #424247; font-size: 14px; }
 .closing { padding: 136px 0 148px; text-align: center; }
 .closing > img { margin: 0 auto; border-radius: 16px; }
 .closing h2 { margin-top: 32px; }
+/* Chinese headlines: even lines instead of one character left alone on the last line. */
+.section h2, .closing h2 { text-wrap: balance; }
 .closing > p { margin: 18px auto 0; color: var(--muted); font-size: 19px; }
 footer {
   width: min(var(--content), calc(100% - 48px));
@@ -300,7 +304,7 @@ nav a:hover, footer a:hover, .text-link:hover { text-decoration: underline; text
   .deliverables { grid-template-columns: 1fr; }
   .deliverables article { min-height: 188px; padding: 32px 8px 36px; }
   .deliverables article:not(:last-child) { border-right: 0; border-bottom: 1px solid var(--line); }
-  .deliverables h3 { margin-top: 36px; }
+  .deliverables h3 { margin-top: 20px; }
   .proof { padding: 88px 24px; grid-template-columns: 1fr; gap: 64px; }
   .release-facts div { grid-template-columns: 90px 1fr; }
   .closing { padding: 96px 0 104px; }
