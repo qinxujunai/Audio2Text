@@ -1,8 +1,61 @@
 # AGENTS.md
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 本文件写给后续 AI 编程助手 / Codex。它不是产品宣传稿，只记录当前仓库已经落地、需要遵守的工作规则。
 
+## 本地迭代与安装版闭环（2026-10-11）
+
+- 用户授权批次后自主检查、评测、审查及修复，优先采用核查过的成熟实现。准确率必须有人工参考；不同模型/不同权重的 CPU 与 GPU 耗时不用于宣称纯 CUDA 加速。
+- 当前 CUDA 路线是 SenseVoice Small FP32 + 官方 sherpa-onnx 1.13.4 CUDA 12/cuDNN 9 SDK。CPU 兼容版原权重为 WSYue 微调 int8，二者不可混称相同权重。Whisper 为可选备用，不因某一引擎能跑 CUDA 就替换默认模型。
+- GPU SDK 通过 `scripts.prepare_sensevoice_cuda` 固定 revision 与 SHA-256 下载；不得覆盖项目 CPU venv。GPU 与 CPU ONNX DLL 必须进程隔离，worker 复用后端 `--sensevoice-gpu-worker`；显式 CUDA 不静默退回 CPU。
+- 桌面打包必须使用项目 CPython 3.11，与 cp311 GPU SDK ABI 对齐。`scripts/build_desktop_sidecar.ps1` 固定该 Python 与 PyInstaller 版本，禁止 uvx 自动选择最新 Python。
+- 源码、前端构建、后端 sidecar、桌面 exe 和安装包是一批交付。完成必须包含安装前备份、真实已安装 exe/sidecar 哈希核对、真实 CUDA 推理、历史正文保留，以及新功能实际验收；仅生成安装包不算用户已升级。
+- 先运行 `scripts.verify --backend-only`、TypeScript、前端构建及浏览器回归，再运行 `scripts.verify_desktop_upgrade` 验证打包后的 CUDA 文件上传、模型检测、保守校对与两版下载。私有测试 API 仅在本机回环地址提供。
+- 设置与校对接口限本地，复用桌面 token；密钥用 Windows DPAPI 加密，不返回明文。校对不得覆盖原 Capture，候选默认不选中，逐处确认后保存独立文件；模型不能保证语义正确，人工确认步骤不得省略。
+- WebView2 的 Tauri 页面请求本地后端会带 `Sec-Fetch-Site: cross-site`，只有桌面运行目标及精确 Tauri origin 可通过此检查，桌面 middleware 的进程 token 仍必须有效。安装验收必须运行真实 WebView 窗口；普通浏览器或 HTTP 测试不能替代。
+- 平台浏览器导航的超时参数不可跨函数误用：小红书使用已有 `BROWSER_GOTO_TIMEOUT_MS`，抖音使用调用方提供的 `goto_timeout_ms`。实链验收需走公开链路缺少数据后的浏览器分支，不可只 mock adapter 的成功结果；项目会话与安装版会话分别验证，不把网络风控计为抓取成功。
+- Tauri NSIS 打包会把主 exe 中的 `__TAURI_BUNDLE_TYPE_VAR_UNK` 改为 `NSS`；比较未打包主 exe 与安装版时仅允许该精确标记差异，后端 sidecar 必须逐字节一致。不要把打包标记变化误报成旧程序，也不要忽略其他差异。
+- 保留原品牌与线上已认可的视觉比例。2026-10-11 用户明确拒绝结果页扩宽：桌面外层宽度上限 1100px、正文/媒体工作区宽度上限 980px，整组结果高度上限 820px 并垂直居中，Web 与原生窗口相同；不得因大屏自动扩到 1720px，也不得仅收窄宽度而保留卡片撑满高窗口。验收必须覆盖真实最大化原生窗口的宽高比例。首页设置入口位于输入工具区，以 44px 点击区域的小图标呈现；结果页通过“校对 → 配置模型”进入相关配置，不放全局悬浮设置按钮。局部组件使用独立 `local-tools.css`，构建产物不手工编辑。
+- 输入工具区内的设置按钮打开的弹窗必须通过 portal 放在表单之外，防止在模型/API 输入框按 Enter 时误提交首页链接；回归需验证弹窗 Enter 不触发表单、Escape 恢复按钮焦点。
+- 可复核速度、样本边界、安装验证与回滚位置记录于 `docs/local-cuda-proofreading-plan.md` 和 `docs/local-upgrade-verification-20261011.md`。公开网站/Release 不随本地更新自动变更，不宣称尚未发布的远端已同步。
+
+## 默认分支与候选实现
+
+默认分支当前同步的是候选文档快照，2.3 代码仍在 `codex/wanxiang-platform-audio-ui` / PR #2。助手必须先确认当前分支与文件是否存在，不直接假定默认分支具有下文全部 2.3 接口、脚本或运行行为。
+
 ## 工作方式
+
+### 当前交付状态与恢复边界（2026-10-22）
+
+- 最新状态入口为 `docs/project-status.md`。必须分别报告源码、本地已安装版、正式 Release 与官网；当前安装候选 2.3.0 来自 `f063cec`，公开正式版仍为 2.1.0，不能把后续文档/CI 提交当作已安装来源。
+- 官网品牌维护已上线，完整 2.3 发布仍受提取超时与 npm 安全审计网络超时阻断；整体目标标为受阻，自动重跑已停止。准确率门槛通过不能抵消提取门槛失败。
+- 用户明确要求节省时间与算力。没有新修复依据、外部访问条件变化或明确要求时，不重复完整基准、下载实验、打包或覆盖安装。文档/记忆同步不恢复整个升级任务；继续开发须用户明确要求，恢复后优先复用有效证据、只补缺口。
+
+### 配置、校对与发布协议（2.3 批次）
+
+- `PATCH /v1/local/preferences` 分别保存 `proofreading` / `transcription`；保留旧 PUT 兼容。AI 保存不验证或更改 ASR，ASR 保存不替换 AI 设置。
+- `POST /v1/local/proofreading-check` 只发送合成短示例，验证未保存草稿，不写设置。“已保存”“模型列表可读”“实际校对测试通过”是不同状态。
+- DeepSeek 官方 host 使用 JSON object、显式关闭 thinking、有限输出预算；空输出、截断、授权、余额、超时和格式错误分别返回安全错误码。不得记录服务原始正文、密钥、待校对文本；本地路由 422 不回显输入。
+- 长文进度文件 `proofreading-job.json` 按块保存；来源 hash、协议、模型、地址摘要与不透明 credential revision 必须一致才可恢复。取消必须幂等，迟到结果不得覆盖新任务。
+- 接受修正必须提交匹配的 `job_id`；旧窗口的过期索引不能应用到新任务。建议默认不选中，保存独立 `proofreading.json`，Capture 原文保持不变。
+- 本机统一升级入口为 `scripts/upgrade_local.ps1`。需要匹配的安装包 SHA-256 与打包验收报告，停止空闲应用后备份程序、设置与历史元数据；核对完整 sidecar 文件树、主 exe 精确 NSIS 标记及历史哈希。程序、元数据回滚位置写入 upgrade-manifest。
+- CI 采用 CPython 3.11 创建项目 `.venv`，通过统一 `build_desktop.ps1` 构建。CI 只上传候选 artifact，不创建公开 Release；Pages 不因候选构建成功而更新。
+- 最终冻结后的安装包必须重新进行实际安装验收。发布同一份文件，官网下载再核对 SHA-256。缺 60 链接 / 72 段四小时三轮人工参考证据或干净 Windows 验收时，不伪报正式发布完成。
+- 每次交付分别记录源码、已安装应用、公开 Release、官网状态。此批次实施报告：`docs/release-2.3.0.md`。
+- 用户指定沿用桌面原圆点图标。应用、官网、favicon、分享图与演示统一使用 `web/public/brand-mark.svg` 的 `praxis-dot`，禁止改为“文”字候选。用 `scripts/generate_brand_assets.mjs` 同步图标；分享图单独生成，不覆盖已验收演示录像。
+- 交互精修保持认可的品牌与宽高比例。等待操作显示具体动作，不能仅禁用控件；转写草稿先保存再验证 CUDA。校对进度采用单次请求完成后再安排下一次的轮询，取消或更新任务使旧响应失效；保存修正期间锁定勾选。设计与浏览器证据见 `docs/interaction-refinement-20261012.md`。
+- 打包生成冻结源码、版本与主程序/后端/安装包哈希清单；本机升级必须消费并核对清单，执行保留且再次验哈希的安装包副本。安装目录的所有已有父链及目录树不得有 junction/symlink；NSIS 对空目标也检查父链和运行进程，禁止静默结束用户任务。
+- 取消校对必须携带目标 `job_id`，锁内检查当前任务身份；旧任务返回 409，重复取消同一任务幂等。完整 sidecar 相对路径与 SHA-256 树摘要同时绑定 sidecar manifest、delivery manifest 和打包验收报告；仅核对 exe 不允许复用资源或安装。提取验收率必须从逐条记录重新计算，矛盾摘要拒绝，失败和风控保留在分母；当前五个支持平台每个平台每轮至少有一个完整成功样本才允许发布；仍要求至少 60 条独立链接、三轮及零测试超时。旧六平台报告保留全部失败，不移除历史行或重新包装为新范围通过。
+- Windows hosted CI 常以管理员运行，WebView2 会忽略环境变量/HKCU 的调试参数；仅在受限的全新 CI runner 上临时设置并恢复 `wanxiang-chengwen.exe` 专用 HKLM 调试策略，不修改正式应用或本机策略。
+- 原生退出验收只对目标子进程的唯一 `Tauri Window` 发送关闭请求，随后确认退出码。`Tao Thread Event Target` 即使被 Win32 标为可见，也不是产品窗口；不得按 PID 遍历关闭所有可见窗口。DPI 与视口分别从真实窗口和 WebView 读取，不能用浏览器模拟 DPI 宣称系统 DPI 验收。
+- 后端构建指纹以 ordinal 顺序排列路径并规范化分隔符，不能依赖 `Sort-Object` 的区域/PowerShell 版本排序。父脚本与 Windows PowerShell sidecar 子脚本必须给出相同指纹；单文件变化必须使指纹失效。
+- 2026-10-13 用户明确移除 YouTube 支持和宣传；新输入在 DNS/短链请求前拒绝，也不可回退通用网页或重启 YouTube adapter。已有结果与原媒体保留。不得新增 VPN、代理端口、Cookie 或登录配置。历史 YouTube 诊断和基准仅作历史证据，不纳入当前能力宣传。移除宣传须同时检查 README/官网截图及演示录像中的可见文字，不能只搜索 HTML/Markdown；素材修改必须运行 `tests.test_brand_and_showcase` 与官网回归，保持已约定的 1920×1080、30 fps、12 秒演示规格。
+- 小红书匿名分享需兼容桌面 `note.noteDetailMap` 与手机 `noteData.data.noteData`，复用媒体规范化；保留完整分享参数，不把登录空壳认作正文。手机分享直连仅做一次备用 UA，逐块检查读取预算及页面大小；云端 relay 不能凭本机证据宣称已通过。定向链接、图片本地就绪与打包复验分别记录，见 `docs/xiaohongshu-mobile-20261021.md`。
+- 公开截图须逐张视觉复核，不能用文本文档扫描或演示视频通过替代。2026-10-21 独立复核发现旧手机首页 PNG 仍含 YouTube 文案，已用当前前端和空示例历史重新截图；已审查图片哈希由品牌回归锁定，替换图片时必须重新复核。当前五平台三轮结果见 `docs/platform-benchmark-20261021.md`，137/180 完整、4 次超时，正式发布门槛仍未通过。
 
 - 修改前先读相关代码、配置、文档和测试，理解现状后再动手。
 - 默认最小改动，优先复用已有结构、命名、类型、脚本和目录约定。
@@ -28,9 +81,7 @@
 
 ## 平台与结果规则
 
-- 对外平台范围：哔哩哔哩、小宇宙、抖音、小红书、微信公众号图文；YouTube 停止宣传。
-- 2026-10-21 本分支维护仅同步圆点品牌、公开演示及退役宣传，不包含 2.3 后端升级。正式下载仍以已有 Release 为准；2.3 完整升级在 PR #2 验收，不把网站维护当作新安装包发布。候选工作流成功不自动部署 Pages。
-- 用户指定原圆点图标，各表面以 `web/public/brand-mark.svg` 的 `praxis-dot` 为准，不生成“文”字或其他候选图标。公开演示标注开发预览与缩短等待，禁止导出私人历史。素材修改运行 `tests.test_brand_and_showcase` 及官网浏览器回归，并保持 1920×1080、30 fps、12 秒规格。
+- 支持平台：哔哩哔哩、小宇宙、抖音、小红书、微信公众号图文。
 - 默认文本优先级：平台字幕、页面正文、本地或远端转写。
 - 小宇宙是特例：正式正文只认 transcript，页面 shownotes / description 只作为辅助信息。
 - 命中字幕或正文快路径时，应跳过转写。
