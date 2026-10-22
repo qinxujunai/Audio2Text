@@ -6,12 +6,12 @@ const copy = {
     navWorkflow: "产品", navProof: "验证", eyebrow: "Windows 本地优先的内容整理工具",
     heroLede: "把视频、播客和图文，直接变成可用的文字与媒体。", download: "下载 Windows 版", trial: "在线试用", github: "查看 GitHub",
     demoNote: "演示使用开发预览版与预置示例，等待过程已缩短；正式下载版本见上方。", demoLabel: "万象成文从链接输入到文字与媒体交付的十二秒演示", playDemo: "播放或暂停演示", play: "播放演示", pause: "暂停演示",
-    workflowKicker: "一个入口，四类交付", workflowTitle: "内容进来，结果留下。", workflowBody: "粘贴公开链接或选择本地文件。能直接取得正文或字幕时立即交付；需要识别时，再自动选择当前电脑适合的路径。",
+    workflowKicker: "一个入口", workflowTitle: "贴一个链接，拿回全部文字。", workflowBody: "粘贴公开链接或选择本地文件。能直接取得正文或字幕时立即交付；需要识别时，再自动选择当前电脑适合的路径。",
     flowLabel: "万象成文处理流程", flowInput: "视频、播客、图文", flowProcess: "提取与识别", flowOutput: "文字与媒体",
     textTitle: "可用的正文", textBody: "复制全文，或下载 TXT 与 Markdown。", mediaTitle: "原始媒体", mediaBody: "视频、音频和图片分别交付，不混在一起。", localTitle: "本地优先", localBody: "Windows 版在本机处理，自动检测 CPU 与 GPU。",
     platformKicker: "支持的平台", platformTitle: "来自你熟悉的平台。", stable: "已验证", variable: "高波动", network: "视网络而定", platformNote: "平台内容和访问条件会变化。遇到无法读取的链接时，应用会说明下一步。",
-    proofKicker: "发布证据", proofTitle: "下载版本与校验，一目了然。", proofBody: "网站只从已发布的 GitHub Release 读取下载地址与校验值。安装包尚未代码签名，Windows 可能显示安全提示。", version: "版本", size: "安装包",
-    closingTitle: "把内容带回来。", closingBody: "在自己的电脑上，整理成真正能继续使用的结果。", security: "安全", feedback: "反馈"
+    proofKicker: "下载", proofTitle: "下载的每个文件，都能核对。", proofBody: "网站只从已发布的 GitHub Release 读取下载地址与校验值。安装包尚未代码签名，Windows 可能显示安全提示。", version: "版本", size: "安装包",
+    closingTitle: "下一条链接，交给它。", closingBody: "在你自己的电脑上，变成能继续用的文字。", security: "安全", feedback: "反馈"
   },
   en: {
     title: "Wanxiang Chengwen — Turn media into usable text",
@@ -20,12 +20,12 @@ const copy = {
     navWorkflow: "Product", navProof: "Verification", eyebrow: "Local-first content capture for Windows",
     heroLede: "Turn videos, podcasts, and visual articles into usable text and media.", download: "Download for Windows", trial: "Try online", github: "View on GitHub",
     demoNote: "The demo uses a development preview with prepared examples and shortened waits. The public download version is shown above.", demoLabel: "A twelve-second demo from pasted link to text and media deliverables", playDemo: "Play or pause demo", play: "Play demo", pause: "Pause demo",
-    workflowKicker: "One input, four deliverables", workflowTitle: "Bring content in. Keep the result.", workflowBody: "Paste a public link or choose a local file. Existing text and captions arrive first; when transcription is needed, the app selects a compatible path for this PC.",
+    workflowKicker: "One input", workflowTitle: "Paste a link. Get every word back.", workflowBody: "Paste a public link or choose a local file. Existing text and captions arrive first; when transcription is needed, the app selects a compatible path for this PC.",
     flowLabel: "Wanxiang Chengwen workflow", flowInput: "Video, podcast, article", flowProcess: "Extract and transcribe", flowOutput: "Text and media",
     textTitle: "Usable text", textBody: "Copy everything or download TXT and Markdown.", mediaTitle: "Original media", mediaBody: "Video, audio, and images remain distinct deliverables.", localTitle: "Local first", localBody: "The Windows app processes locally and detects CPU and GPU automatically.",
     platformKicker: "Supported platforms", platformTitle: "From the platforms you use.", stable: "Verified", variable: "Variable", network: "Network dependent", platformNote: "Content and access conditions change. If a link cannot be read, the app explains the next step.",
-    proofKicker: "Release evidence", proofTitle: "Check the version. Verify your download.", proofBody: "This site reads its download URL and checksum only from a published GitHub Release. The installer is currently unsigned, so Windows may show a security prompt.", version: "Version", size: "Installer",
-    closingTitle: "Bring the content back.", closingBody: "Turn it into something you can keep using, on your own PC.", security: "Security", feedback: "Feedback"
+    proofKicker: "Download", proofTitle: "Every download, verifiable.", proofBody: "This site reads its download URL and checksum only from a published GitHub Release. The installer is currently unsigned, so Windows may show a security prompt.", version: "Version", size: "Installer",
+    closingTitle: "Hand it the next link.", closingBody: "On your own PC, turned into text you can keep using.", security: "Security", feedback: "Feedback"
   }
 };
 
