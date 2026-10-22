@@ -105,6 +105,9 @@ def _run_sample(sample: ExtractionSample, *, repeat: int, work_dir: Path) -> dic
             "text_chars": len(text),
             "image_count": len(outcome.image_urls),
             "media_available": bool(outcome.media_file_path),
+            # Text first: the media here is the audio track; the original video is fetched after
+            # the text is delivered, so this row does not time the video download.
+            "video_deferred": bool(getattr(outcome, "deferred_video", None)),
             "needs_transcription": bool(outcome.needs_transcription),
             "subtitle_available": bool(outcome.subtitle_text or outcome.subtitle_timeline_text),
             "warning_count": len(outcome.warnings),

@@ -237,8 +237,9 @@ function heroDescription(capture: CaptureEnvelope, hasVideoArtifact: boolean) {
       : "正文和图片已整理完成，可直接查看、复制或下载。";
   }
   if (capture.source.media_kind === "video") {
-    return hasVideoArtifact
-      ? "文字与视频已整理完成，可直接查看、播放或下载。"
+    if (hasVideoArtifact) return "文字与视频已整理完成，可直接查看、播放或下载。";
+    return capture.capture.asset_preparation_pending
+      ? "文字已可查看，原视频正在后台下载。"
       : "文字已整理完成，视频文件暂未就绪。";
   }
   if (capture.source.media_kind === "audio") {
@@ -933,7 +934,36 @@ function TimedTranscript({
   );
 }
 
-function VideoUnavailablePanel({ notice, onRetry }: { notice: string; onRetry?: () => void }) {
+function VideoUnavailablePanel({
+  notice,
+  onRetry,
+  pending = false,
+}: {
+  notice: string;
+  onRetry?: () => void;
+  pending?: boolean;
+}) {
+  if (pending) {
+    // Text-first: the transcript is ready, the original video is still downloading.
+    return (
+      <section className="media-panel media-panel-empty is-pending" aria-live="polite">
+        <div className="media-panel-head">
+          <div>
+            <span className="result-section-kicker">视频</span>
+            <strong>预览</strong>
+          </div>
+        </div>
+        <div className="media-panel-body">
+          <div className="media-panel-empty-card">
+            <Film size={22} />
+            <strong>正在下载原视频</strong>
+            <p>文字已经可以阅读和复制，视频下载好后会出现在这里。</p>
+            <span className="media-panel-pending-bar" aria-hidden="true" />
+          </div>
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="media-panel media-panel-empty">
       <div className="media-panel-head">
@@ -1402,6 +1432,7 @@ export function DeliverableStage({
               <VideoUnavailablePanel
                 notice={capture.quality.result_notice}
                 onRetry={onRetry}
+                pending={capture.capture.asset_preparation_pending}
               />
             ) : null}
 
