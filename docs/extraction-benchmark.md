@@ -1,5 +1,10 @@
 # Extraction Benchmark
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 Public-link extraction changes are promoted by measured success and latency, not by framework popularity.
 
 The benchmark reads a private JSONL manifest so public test URLs do not need to be committed. Each line defines one stable sample and its minimum completeness contract:

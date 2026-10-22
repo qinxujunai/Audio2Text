@@ -1,5 +1,10 @@
 # Security Policy
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 ## Supported Releases
 
 Security fixes are provided for the latest published Windows release and the
