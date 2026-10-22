@@ -256,7 +256,7 @@ nav a { color: #424247; font-size: 14px; }
 .closing > img { margin: 0 auto; border-radius: 16px; }
 .closing h2 { margin-top: 32px; }
 /* Chinese headlines: even lines instead of one character left alone on the last line. */
-.section h2, .closing h2 { text-wrap: balance; }
+.section h2, .closing h2 { text-wrap: balance; word-break: keep-all; overflow-wrap: anywhere; }
 .closing > p { margin: 18px auto 0; color: var(--muted); font-size: 19px; }
 footer {
   width: min(var(--content), calc(100% - 48px));
