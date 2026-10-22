@@ -1,5 +1,10 @@
 # Praxis AI｜无界笃行 / 万象成文 发布收口说明
 
+<!-- project-doc-status:start -->
+> 文档维护同步：**2026-10-22** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
+> 本页属于 2.3 候选文档快照；默认分支代码与正式 2.1 安装包不因此升级。维护日期不代表重新执行历史测试。
+<!-- project-doc-status:end -->
+
 ## 当前发布口径
 
 当前版本按“单页交付型产品”发布，不按工作台或多角色系统发布。
@@ -10,9 +15,14 @@
 - 图文正文与正文图片提取
 - 视频结果页预览并下载原视频、原音频
 
-Windows 安装包是完整主产品；云端用于限额演示。目标电脑不需要
+Windows 安装包是主产品；云端用于限额演示。CPU 基础使用不需要
 Python、uv、CUDA 或单独安装 Chromium。首次使用安装 FFmpeg 9.0
 Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
+本机的 CUDA 路线另外配置了 SenseVoice Small FP32 与独立 GPU SDK，
+需可用的 NVIDIA CUDA/cuDNN 运行组件；这些不包含在基础安装包中。
+安装包大小以对应 Release 资产为准。当前支持哔哩哔哩、小宇宙、抖音、
+小红书和微信公众号图文；YouTube 已移除，不再属于当前发布复验范围。
+历史结果与原媒体仍保留，不把旧平台诊断当作当前能力。
 
 ## 当前真实交付形态
 
@@ -45,6 +55,10 @@ Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 
 ## 发布前硬门槛
 
+2.3.0 批次实施及验收状态见 [发布记录](release-2.3.0.md)。CI 只产生候选包，
+不自动创建公开 Release。公开包必须是最终快照在真实安装窗口验收过的同一文件；
+不得把 CI 重建包直接替换到下载页。官网仅在正式 Release 或明确手动部署时更新。
+
 - 后端自动化测试通过
 - Worker 安全测试与 npm 官方安全审计通过
 - 前端类型检查通过
@@ -66,25 +80,28 @@ Essentials 与 SenseVoice int8 两个校验运行包，总下载约 222 MB。
 - Hugging Face 上传前必须完成 `.\.venv\Scripts\hf.exe auth login`
 - HF Space 默认部署命令是 `.\.venv\Scripts\python.exe -m scripts.deploy_huggingface_space`；脚本会使用当前登录用户和默认 Space 名 `wanxiang-chengwen-preview`
 - 云端未配置 OpenAI-compatible 转写服务时，首页仍应可用，本地音视频文件上传前必须给出明确提示
-- 最终发布前必须执行 `.\.venv\Scripts\python.exe -m scripts.release_gate --final --with-live-smoke --live-smoke-base-url "http://127.0.0.1:8000"`
+- 最终发布前必须执行 `.\.venv\Scripts\python.exe -m scripts.release_gate --final --with-live-smoke --live-smoke-base-url "http://127.0.0.1:8000" --deployment-contract-base-url "https://wanxiang.praxisai.online" --extraction-benchmark-report "workspace\benchmarks\extraction-release.json" --transcription-benchmark-report "workspace\benchmarks\transcription-release.json"`
 
-本轮 2026-08-11 证据：哔哩哔哩、小宇宙、抖音、微信图文通过；
+历史 2026-08-11 证据（不是当前候选的验收）：哔哩哔哩、小宇宙、抖音、微信图文通过；
 小红书图文与 Live（15 图、14 个 Live 片段）通过。小红书视频样本触发
 平台会话验证，YouTube 在当前中国网络约 53 秒内明确失败，不得写成已通过。
 
 ## 建议发布前复验的平台样例
 
-- YouTube：1 条字幕视频
 - 哔哩哔哩：1 条字幕或简介明显的视频
 - 小宇宙：1 条口播 transcript 样例
 - 抖音：1 条公开视频样例
 - 小红书：1 条图文、1 条视频、1 条 Live 图样例
 - 微信公众号：1 条图文样例
 
+上述是功能类型冒烟，不替代当前五个平台至少 60 条独立链接、三轮、
+每个平台每轮完整成功及零基准超时的门槛。保留全部失败和历史报告，
+从逐条结果核算；不可通过缩减平台或删除失效链接把旧报告改成通过。
+
 ## 发布后仍应关注的边界
 
 - 抖音、小红书仍属于高波动平台，成功率依赖公开链路与项目级浏览器会话
-- Windows 默认使用 SenseVoice int8；运行时会检测 GPU、模型和平台语言，仅在有实测收益时选择项目级 Faster-Whisper，失败自动回落 CPU
+- 普通 Windows CPU 兼容版使用 SenseVoice int8；本机明确配置 SenseVoice Small FP32 CUDA，Whisper 可选，显式 CUDA 不静默回落 CPU。不同权重的结果必须分别说明
 - 小红书视频发布样本需要新鲜分享链接与有效项目级浏览器会话
 - `Assets/Models/...` 当前仍是 legacy fallback，不应在未迁移前直接删除
 
