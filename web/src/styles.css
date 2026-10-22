@@ -247,6 +247,14 @@ img {
   letter-spacing: 0.12em;
 }
 
+/* Chinese lines break evenly: no single "件。" left on the last line. */
+.hero-copy h1,
+.hero-copy p,
+.processing-copy h2,
+.processing-copy p {
+  text-wrap: balance;
+}
+
 .hero-copy h1 {
   margin: 0 0 18px;
   font-size: clamp(32px, 4.2vw, 56px);
