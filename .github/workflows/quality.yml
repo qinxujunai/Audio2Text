@@ -51,8 +51,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          npm ci
-          npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+          npm ci --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=1 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=5000
+          npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org --fetch-timeout=30000 --fetch-retries=0
           node node_modules/typescript/bin/tsc --noEmit
           npm run build
 
