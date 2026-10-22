@@ -57,6 +57,64 @@ def _bilibili_payloads(*, with_audio: bool = True):
 
 
 class BilibiliAudioFirstTestCase(unittest.TestCase):
+    def test_deferred_video_prefers_progressive_original_over_lower_resolution_dash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "bilibili_audio.m4s"
+            audio.write_bytes(b"audio")
+            spec = {"platform": "bilibili", "aid": 1, "cid": 2, "bvid": "BV1xx411c7mD", "audio_path": str(audio)}
+            requests: list[str] = []
+            downloads: list[str] = []
+
+            def api_json(_client, url, **_kwargs):
+                requests.append(url)
+                if "fnval=0" in url:
+                    return {"data": {"quality": 64, "durl": [{"url": "https://upos.example/original-720.mp4"}]}}
+                return {"data": {"dash": {
+                    "video": [{"baseUrl": "https://upos.example/480.m4s", "height": 480}],
+                    "audio": [{"baseUrl": "https://upos.example/audio.m4s"}],
+                }}}
+
+            def download(url, path, **_kwargs):
+                downloads.append(url)
+                Path(path).write_bytes(b"original")
+
+            with patch.object(extractors, "_bilibili_api_json", side_effect=api_json), patch.object(
+                extractors, "_download_large_file", side_effect=download
+            ), patch.object(extractors, "_merge_media_streams") as merge:
+                result = extractors.complete_deferred_bilibili_video(spec, Path(tmp))
+
+            self.assertEqual(downloads, ["https://upos.example/original-720.mp4"])
+            self.assertEqual(result, Path(tmp) / "bilibili_source.mp4")
+            self.assertIn("fnval=0", requests[0])
+            merge.assert_not_called()
+
+    def test_deferred_video_falls_back_to_dash_after_progressive_download_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "bilibili_audio.m4s"
+            audio.write_bytes(b"audio")
+            spec = {"platform": "bilibili", "aid": 1, "cid": 2, "bvid": "BV1xx411c7mD", "audio_path": str(audio)}
+            downloads: list[str] = []
+            original_api = _bilibili_payloads()
+
+            def api_json(client, url, **kwargs):
+                if "fnval=0" in url:
+                    return {"data": {"durl": [{"url": "https://upos.example/unavailable.mp4"}]}}
+                return original_api(client, url, **kwargs)
+
+            def download(url, path, **_kwargs):
+                downloads.append(url)
+                if url.endswith("unavailable.mp4"):
+                    raise ExtractionError("download", "下载暂不可用。", reason_code="download_failed", retryable=True)
+                Path(path).write_bytes(b"video")
+
+            with patch.object(extractors, "_bilibili_api_json", side_effect=api_json), patch.object(
+                extractors, "_download_large_file", side_effect=download
+            ), patch.object(extractors, "_merge_media_streams", side_effect=lambda v, a, o: (o.write_bytes(b"mp4"), o)[1]):
+                result = extractors.complete_deferred_bilibili_video(spec, Path(tmp))
+
+            self.assertEqual(downloads, ["https://upos.example/unavailable.mp4", "https://upos.example/v1080.m4s"])
+            self.assertEqual(result, Path(tmp) / "bilibili_source.mp4")
+
     def test_extraction_downloads_only_the_audio_and_defers_the_video(self) -> None:
         downloaded: list[str] = []
 
