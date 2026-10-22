@@ -19,6 +19,7 @@
 | [万象成文](../README.md) | 当前指南或协作约定；先核对分支与最新状态 |
 | [Security Policy](../SECURITY.md) | 当前指南或协作约定；先核对分支与最新状态 |
 | [Third-Party Notices](../THIRD_PARTY_NOTICES.md) | 当前指南或协作约定；先核对分支与最新状态 |
+| [给 Cloud Code 的本机回报与交接提示词](cloud-code-handoff-20261023.md) | Audio2Text 项目、已完成任务、验收证据、剩余限制与云端同步要求 |
 | [2026-10-22 三轮与原视频复核](platform-benchmark-20261022.md) | 141/180 完整、零超时、失败逐项说明及 2.3 正式包验收 |
 | [SenseVoice CUDA 人工参考测评](ascend-accuracy-20261012.md) | 专项历史/实测证据，保留原日期 |
 | [ASR 模型量化审计（2026-10-11）](asr-model-quantitative-audit-20261011.md) | 专项历史/实测证据，保留原日期 |
