@@ -7,59 +7,56 @@
 
 本文件写给后续 AI 编程助手 / Codex。它不是产品宣传稿，只记录当前仓库已经落地、需要遵守的工作规则。
 
-## 本地迭代与安装版闭环（2026-10-11）
+接手前按顺序读：本文件 →「不许回退的决定」→ [`docs/project-status.md`](docs/project-status.md)（源码、安装版、Release、官网各自的状态）。
 
-- 用户授权批次后自主检查、评测、审查及修复，优先采用核查过的成熟实现。准确率必须有人工参考；不同模型/不同权重的 CPU 与 GPU 耗时不用于宣称纯 CUDA 加速。
-- 当前 CUDA 路线是 SenseVoice Small FP32 + 官方 sherpa-onnx 1.13.4 CUDA 12/cuDNN 9 SDK。CPU 兼容版原权重为 WSYue 微调 int8，二者不可混称相同权重。Whisper 为可选备用，不因某一引擎能跑 CUDA 就替换默认模型。
-- GPU SDK 通过 `scripts.prepare_sensevoice_cuda` 固定 revision 与 SHA-256 下载；不得覆盖项目 CPU venv。GPU 与 CPU ONNX DLL 必须进程隔离，worker 复用后端 `--sensevoice-gpu-worker`；显式 CUDA 不静默退回 CPU。
-- 桌面打包必须使用项目 CPython 3.11，与 cp311 GPU SDK ABI 对齐。`scripts/build_desktop_sidecar.ps1` 固定该 Python 与 PyInstaller 版本，禁止 uvx 自动选择最新 Python。
-- 源码、前端构建、后端 sidecar、桌面 exe 和安装包是一批交付。完成必须包含安装前备份、真实已安装 exe/sidecar 哈希核对、真实 CUDA 推理、历史正文保留，以及新功能实际验收；仅生成安装包不算用户已升级。
-- 先运行 `scripts.verify --backend-only`、TypeScript、前端构建及浏览器回归，再运行 `scripts.verify_desktop_upgrade` 验证打包后的 CUDA 文件上传、模型检测、保守校对与两版下载。私有测试 API 仅在本机回环地址提供。
-- 设置与校对接口限本地，复用桌面 token；密钥用 Windows DPAPI 加密，不返回明文。校对不得覆盖原 Capture，候选默认不选中，逐处确认后保存独立文件；模型不能保证语义正确，人工确认步骤不得省略。
-- WebView2 的 Tauri 页面请求本地后端会带 `Sec-Fetch-Site: cross-site`，只有桌面运行目标及精确 Tauri origin 可通过此检查，桌面 middleware 的进程 token 仍必须有效。安装验收必须运行真实 WebView 窗口；普通浏览器或 HTTP 测试不能替代。
-- 平台浏览器导航的超时参数不可跨函数误用：小红书使用已有 `BROWSER_GOTO_TIMEOUT_MS`，抖音使用调用方提供的 `goto_timeout_ms`。实链验收需走公开链路缺少数据后的浏览器分支，不可只 mock adapter 的成功结果；项目会话与安装版会话分别验证，不把网络风控计为抓取成功。
-- Tauri NSIS 打包会把主 exe 中的 `__TAURI_BUNDLE_TYPE_VAR_UNK` 改为 `NSS`；比较未打包主 exe 与安装版时仅允许该精确标记差异，后端 sidecar 必须逐字节一致。不要把打包标记变化误报成旧程序，也不要忽略其他差异。
-- 保留原品牌与线上已认可的视觉比例。2026-10-11 用户明确拒绝结果页扩宽：桌面外层宽度上限 1100px、正文/媒体工作区宽度上限 980px，整组结果高度上限 820px 并垂直居中，Web 与原生窗口相同；不得因大屏自动扩到 1720px，也不得仅收窄宽度而保留卡片撑满高窗口。验收必须覆盖真实最大化原生窗口的宽高比例。首页设置入口位于输入工具区，以 44px 点击区域的小图标呈现；结果页通过“校对 → 配置模型”进入相关配置，不放全局悬浮设置按钮。局部组件使用独立 `local-tools.css`，构建产物不手工编辑。
-- 输入工具区内的设置按钮打开的弹窗必须通过 portal 放在表单之外，防止在模型/API 输入框按 Enter 时误提交首页链接；回归需验证弹窗 Enter 不触发表单、Escape 恢复按钮焦点。
-- 可复核速度、样本边界、安装验证与回滚位置记录于 `docs/local-cuda-proofreading-plan.md` 和 `docs/local-upgrade-verification-20261011.md`。公开网站/Release 不随本地更新自动变更，不宣称尚未发布的远端已同步。
+## 当前事实（2026-10-22）
 
-## 默认分支与候选实现
+- **分支**：`clean-main`（默认）= 公开正式版 v2.1.0 的代码与官网；`codex/wanxiang-platform-audio-ui`（PR #2）= 2.3 候选（AI 校对、CUDA、处理页计时、B 站先文字后视频、抖音免登录）。改 2.3 的代码只在这条分支上做；官网文案两边同步。
+- **结构**：
+  - `app/main.py` FastAPI 入口；`app/pipeline.py` 一条 Capture 的流程（识别来源 → 提取 → 转写 → 组装 → 交付文件，后台补齐图片和原视频）。
+  - `app/source_adapters.py` 每个平台的取数链（直连 → 开源工具 → 浏览器会话）；`app/extractors.py` 调度与下载；`app/browser_provider.py` Playwright 兜底。
+  - `app/platforms/`（目前只在 2.3 分支）：按平台拆出的纯函数（可用录制样本测试）。目前有 `douyin.py`（分享页接口）、`ranged.py`（多连接分段下载）。**新的平台逻辑放这里**，其余平台以后按同样方式从 `extractors.py` 迁出，一次一个，迁移时把测试的 `patch.object(extractors, …)` 一并改到新模块。
+  - `app/providers/transcription.py` 转写（SenseVoice，CPU / CUDA 进程隔离）；`web/` React 前端 + Tauri 桌面壳；`site/` 官网（Pages 手动触发部署）。
+- **发布**：CI 只出候选安装包；正式 Release 要用他电脑上的三轮基准、安装验收和同文件上传（见下文协议）。云端机器的 IP 会被 B 站 412 拦截、抖音分享页不返回内容，真实链路验证要在他的电脑上做。
 
-默认分支当前同步的是候选文档快照，2.3 代码仍在 `codex/wanxiang-platform-audio-ui` / PR #2。助手必须先确认当前分支与文件是否存在，不直接假定默认分支具有下文全部 2.3 接口、脚本或运行行为。
+## 不许回退的决定
+
+每条都有原因；要改，先在这里写清新理由。
+
+| 决定 | 原因 | 来源 |
+| --- | --- | --- |
+| B 站视频先下 DASH 音轨，立刻转写交付文字；原视频在后台重新取地址下载并合并（`deferred_video`，`deferred_video.json` 让重启后继续） | 三轮基准里的 4 次超时都是转写前要先下完整段原视频（样本 260 MB）。补齐失败只影响原视频，文字保留 | `6033f39` |
+| 后台原视频用 `app/platforms/ranged.py` 多个 Range 连接下载，不支持时退回单连接 | B 站 CDN 按连接限速；与 Bili23-Downloader、aria2c `-x` 同一做法 | `0751581` |
+| 抖音先走分享页接口 `iesdouyin.com/web/api/v2/aweme/slidesinfo/`（视频、图文两种请求，各问两次），web detail 接口只作最后一试 | 免登录、免签名，能拿到标题、作者、时长、无水印播放地址（2026-10-22 实测 8.6 MB 视频 10.5 秒）。旧的 `aweme/iteminfo` 已停用（返回空），detail 接口没有 a_bogus 签名会被 403，这正是「要求有效会话」失败的来源。**`iteminfo` 不要加回来** | `0751581` |
+| 小红书读页面 `__INITIAL_STATE__`，兼容桌面 `note.noteDetailMap` 与手机 `noteData` | 与最成熟的 XHS-Downloader 同一做法（它是 GPL-3.0，只能借鉴做法，不能并入代码）。没有 `xsec_token` 的旧链接读不到是平台限制 | `f063cec` |
+| 发布门槛：60 条独立链接 × 三轮 × 零超时，失败和风控留在分母，五个平台每轮都要有完整样本 | 不放宽。基准行的 `video_deferred` 如实说明该行不计原视频下载时间 | `docs/platform-benchmark-20261021.md` |
+| YouTube 不支持、不宣传（2026-10-13 用户决定） | 新输入在网络请求前拒绝，不回退通用网页 | 见协议一节 |
+| 校对不覆盖原 Capture；建议默认不选中，逐处确认后存独立文件 | 模型不能保证语义正确 | 见协议一节 |
+| 结果页宽度上限：外层 1100px、工作区 980px、高 820px 居中 | 2026-10-11 用户拒绝扩宽 | 见协议一节 |
+| 品牌图标只用 `web/public/brand-mark.svg` 的圆点 | 用户指定 | 见协议一节 |
+| 官网文案说用户能做什么：「贴一个链接，拿回全部文字」「下载的每个文件，都能核对」「下一条链接，交给它」；中文标题只在标点处换行（`word-break: keep-all`） | 2026-10-22 按 Apple 产品页标准改写 | `d9d2a67`、`6708808` |
+
+## 已知问题与待办
+
+- **2.3 还没发版**。要在他的 Windows 电脑上：用同一批 60 条样本重跑三轮提取基准（看 B 站超时与抖音会话失败是否消失）→ 零超时后按下文协议冻结、安装验收、发 Release → 官网下载核对 SHA-256。
+- 抖音：分享页接口偶尔返回空（已重试两次）；作者删除或私密的作品取不到。
+- 小红书：没有 `xsec_token` 的旧链接读不到。
+- 小宇宙读 `__NEXT_DATA__`，3/30 来源不可读取；公众号 30/30。
+- 安装包未签名。准确率大样本（60 段、3 小时人工参考）评测未跑，跑完前不换转写模型。
+- `app/extractors.py`（约 2800 行）和 `browser_provider.py`（约 1900 行）仍偏大，按上文方式逐个平台迁出。
+
+## 交接日志
+
+- **2026-10-22，Claude**：处理页加计时与预计剩余时间（`e728d4a`）；B 站先文字后视频（`6033f39`）；抖音改走分享页接口、B 站后台分段下载、新建 `app/platforms/`（`0751581`）；官网文案与换行（clean-main `d9d2a67`、`6708808`）；本文件重写，2026-05 维护日志移到 [`docs/history.md`](docs/history.md)。验证：Linux 全量测试与改动前同一失败集（6 项依赖 Windows/本机环境），Quality Gate 通过；真实 B 站链路未验证（云端 412）。
+- **2026-10-21 及以前，Codex（Praxis）**：2.3 候选实现、三轮基准、安装验收、官网品牌维护，见 `docs/project-status.md` 与 `docs/release-2.3.0.md`。
 
 ## 工作方式
 
-### 当前交付状态与恢复边界（2026-10-22）
-
-- 最新状态入口为 `docs/project-status.md`。必须分别报告源码、本地已安装版、正式 Release 与官网；当前安装候选 2.3.0 来自 `f063cec`，公开正式版仍为 2.1.0，不能把后续文档/CI 提交当作已安装来源。
-- 官网品牌维护已上线，完整 2.3 发布仍受提取超时与 npm 安全审计网络超时阻断；整体目标标为受阻，自动重跑已停止。准确率门槛通过不能抵消提取门槛失败。
-- 用户明确要求节省时间与算力。没有新修复依据、外部访问条件变化或明确要求时，不重复完整基准、下载实验、打包或覆盖安装。文档/记忆同步不恢复整个升级任务；继续开发须用户明确要求，恢复后优先复用有效证据、只补缺口。
-
-### 配置、校对与发布协议（2.3 批次）
-
-- `PATCH /v1/local/preferences` 分别保存 `proofreading` / `transcription`；保留旧 PUT 兼容。AI 保存不验证或更改 ASR，ASR 保存不替换 AI 设置。
-- `POST /v1/local/proofreading-check` 只发送合成短示例，验证未保存草稿，不写设置。“已保存”“模型列表可读”“实际校对测试通过”是不同状态。
-- DeepSeek 官方 host 使用 JSON object、显式关闭 thinking、有限输出预算；空输出、截断、授权、余额、超时和格式错误分别返回安全错误码。不得记录服务原始正文、密钥、待校对文本；本地路由 422 不回显输入。
-- 长文进度文件 `proofreading-job.json` 按块保存；来源 hash、协议、模型、地址摘要与不透明 credential revision 必须一致才可恢复。取消必须幂等，迟到结果不得覆盖新任务。
-- 接受修正必须提交匹配的 `job_id`；旧窗口的过期索引不能应用到新任务。建议默认不选中，保存独立 `proofreading.json`，Capture 原文保持不变。
-- 本机统一升级入口为 `scripts/upgrade_local.ps1`。需要匹配的安装包 SHA-256 与打包验收报告，停止空闲应用后备份程序、设置与历史元数据；核对完整 sidecar 文件树、主 exe 精确 NSIS 标记及历史哈希。程序、元数据回滚位置写入 upgrade-manifest。
-- CI 采用 CPython 3.11 创建项目 `.venv`，通过统一 `build_desktop.ps1` 构建。CI 只上传候选 artifact，不创建公开 Release；Pages 不因候选构建成功而更新。
-- 最终冻结后的安装包必须重新进行实际安装验收。发布同一份文件，官网下载再核对 SHA-256。缺 60 链接 / 72 段四小时三轮人工参考证据或干净 Windows 验收时，不伪报正式发布完成。
-- 每次交付分别记录源码、已安装应用、公开 Release、官网状态。此批次实施报告：`docs/release-2.3.0.md`。
-- 用户指定沿用桌面原圆点图标。应用、官网、favicon、分享图与演示统一使用 `web/public/brand-mark.svg` 的 `praxis-dot`，禁止改为“文”字候选。用 `scripts/generate_brand_assets.mjs` 同步图标；分享图单独生成，不覆盖已验收演示录像。
-- 交互精修保持认可的品牌与宽高比例。等待操作显示具体动作，不能仅禁用控件；转写草稿先保存再验证 CUDA。校对进度采用单次请求完成后再安排下一次的轮询，取消或更新任务使旧响应失效；保存修正期间锁定勾选。设计与浏览器证据见 `docs/interaction-refinement-20261012.md`。
-- 打包生成冻结源码、版本与主程序/后端/安装包哈希清单；本机升级必须消费并核对清单，执行保留且再次验哈希的安装包副本。安装目录的所有已有父链及目录树不得有 junction/symlink；NSIS 对空目标也检查父链和运行进程，禁止静默结束用户任务。
-- 取消校对必须携带目标 `job_id`，锁内检查当前任务身份；旧任务返回 409，重复取消同一任务幂等。完整 sidecar 相对路径与 SHA-256 树摘要同时绑定 sidecar manifest、delivery manifest 和打包验收报告；仅核对 exe 不允许复用资源或安装。提取验收率必须从逐条记录重新计算，矛盾摘要拒绝，失败和风控保留在分母；当前五个支持平台每个平台每轮至少有一个完整成功样本才允许发布；仍要求至少 60 条独立链接、三轮及零测试超时。旧六平台报告保留全部失败，不移除历史行或重新包装为新范围通过。
-- Windows hosted CI 常以管理员运行，WebView2 会忽略环境变量/HKCU 的调试参数；仅在受限的全新 CI runner 上临时设置并恢复 `wanxiang-chengwen.exe` 专用 HKLM 调试策略，不修改正式应用或本机策略。
-- 原生退出验收只对目标子进程的唯一 `Tauri Window` 发送关闭请求，随后确认退出码。`Tao Thread Event Target` 即使被 Win32 标为可见，也不是产品窗口；不得按 PID 遍历关闭所有可见窗口。DPI 与视口分别从真实窗口和 WebView 读取，不能用浏览器模拟 DPI 宣称系统 DPI 验收。
-- 后端构建指纹以 ordinal 顺序排列路径并规范化分隔符，不能依赖 `Sort-Object` 的区域/PowerShell 版本排序。父脚本与 Windows PowerShell sidecar 子脚本必须给出相同指纹；单文件变化必须使指纹失效。
-- 2026-10-13 用户明确移除 YouTube 支持和宣传；新输入在 DNS/短链请求前拒绝，也不可回退通用网页或重启 YouTube adapter。已有结果与原媒体保留。不得新增 VPN、代理端口、Cookie 或登录配置。历史 YouTube 诊断和基准仅作历史证据，不纳入当前能力宣传。移除宣传须同时检查 README/官网截图及演示录像中的可见文字，不能只搜索 HTML/Markdown；素材修改必须运行 `tests.test_brand_and_showcase` 与官网回归，保持已约定的 1920×1080、30 fps、12 秒演示规格。
-- 小红书匿名分享需兼容桌面 `note.noteDetailMap` 与手机 `noteData.data.noteData`，复用媒体规范化；保留完整分享参数，不把登录空壳认作正文。手机分享直连仅做一次备用 UA，逐块检查读取预算及页面大小；云端 relay 不能凭本机证据宣称已通过。定向链接、图片本地就绪与打包复验分别记录，见 `docs/xiaohongshu-mobile-20261021.md`。
-- 公开截图须逐张视觉复核，不能用文本文档扫描或演示视频通过替代。2026-10-21 独立复核发现旧手机首页 PNG 仍含 YouTube 文案，已用当前前端和空示例历史重新截图；已审查图片哈希由品牌回归锁定，替换图片时必须重新复核。当前五平台三轮结果见 `docs/platform-benchmark-20261021.md`，137/180 完整、4 次超时，正式发布门槛仍未通过。
-
+- 以 GitHub 上的代码与发行版为准（2026-10-22 用户：不用管本机还有没有没推的东西）。
+- 每个子问题先查 GitHub 上成熟、仍在维护的开源做法，不重复造轮子；换了做法要在「不许回退的决定」登记原因与提交号。GPL/AGPL 代码只借鉴做法，不并入（本项目 Apache-2.0）。
 - 修改前先读相关代码、配置、文档和测试，理解现状后再动手。
 - 默认最小改动，优先复用已有结构、命名、类型、脚本和目录约定。
-- 不为了“优化”而大面积重构，不擅自引入新依赖、改 API contract、改产品方向或重做视觉风格。
+- 结构调整要有明确收益并一次一块（例如按平台迁出 `extractors.py`）；不擅自改 API contract、产品方向或视觉风格。
 - 修 bug 先定位根因，避免到处堆 if 或补丁叠补丁。
 - 前端、后端、API 类型、Docker、README、docs 和测试要同步；改了运行方式或接口就必须同步文档。
 - 修改后必须说明改动内容、原因、验证命令、未覆盖风险。
@@ -125,336 +122,48 @@
   - `docker build -t praxis-audio2text .`（需要 Docker 可用时）
   - Browser Use 人工检查首页、处理中、结果页、下载、失败态和刷新恢复。
 
-## Cloudflare Worker 中继架构
-
-HF Space 部署在海外（非中国 IP），无法直接访问小红书/抖音等中国平台。通过 Cloudflare Worker 实现双向代理解决 GFW 问题。
-
-### 部署身份
-
-- Hugging Face 与 Cloudflare 身份只通过各自 CLI 登录态或 CI Secret 提供，不写入仓库。
-- Worker 脚本：`scripts/cf_worker_proxy.js`；默认名称：`wanxiang-chengwen-proxy`。
-
-### 服务 URL
-
-| 用途                          | URL                                                            |
-| ----------------------------- | -------------------------------------------------------------- |
-| 用户入口 (自定义域名)         | `https://wanxiang.praxisai.online`                             |
-| HF Space (后端源站)           | `https://liamgrant-wanxiang-chengwen-preview.hf.space`         |
-| Worker 中继 (反向代理 + 转发) | `https://wanxiang.praxisai.online`                             |
-| Worker 转发接口               | `https://wanxiang.praxisai.online/__proxy__?url=<encoded_url>` |
-
-### 工作原理
-
-1. **Worker 双模式**:
-   - **反向代理模式**: 所有非 `__proxy__` 请求透明转发到 HF Space，解决 hf.space 域名被 GFW 屏蔽的问题。
-   - **转发接口模式**: `__proxy__?url=...` 接收 URL 参数，从 Cloudflare 边缘节点（香港/新加坡）抓取目标页面，返回 HTML 和 JSON 响应。解决 HF Space 无法访问中国平台的问题。
-
-2. **后端 relay 逻辑** (`app/browser_provider.py`, `app/extractors.py`, `app/source_adapters.py`):
-   - `DEPLOYMENT_MODE == "cloud_preview"` 时自动启用 relay
-   - `DEPLOYMENT_MODE == "local"` 时走直连（本地机器有中国 IP）
-   - `CN_PLATFORM_PROXY` 环境变量可覆盖 relay URL（用于自定义 HTTP 代理）
-   - HTTP 层: `_relay_fetch_html()`, `_relay_fetch_json()` 通过 Worker 转发 URL
-   - Playwright 层: `_setup_playwright_relay_routing()` 拦截浏览器请求并路由到 Worker
-
-3. **Worker 部署命令**:
-
-   ```bash
-   npx wrangler deploy scripts/cf_worker_proxy.js --name wanxiang-chengwen-proxy --compatibility-date 2026-05-14
-   ```
-
-4. **Worker 配置** (`scripts/cf_worker_proxy.js`):
-   - `TARGET_HOST`: HF Space 域名
-   - CORS 头自动添加，支持跨域访问
-
-## 维护日志 / Maintenance Log
-
-### 2026-05-15 维护记录
-
-三轮迭代，当前 commit `7492049`。所有改动已验证通过（122 tests OK, TS 无错误, 前端已构建）。
-
-**前端体验**
-
-- 移动端剪贴板优化：Clipboard API 失败时引导长按/系统粘贴（`App.tsx`）
-- 错误净化：20+ 技术术语过滤规则，前后端双重拦截（`api.ts`、`ProcessingStage.tsx`）
-- 移动端布局：textarea 对称 padding，清除按钮 absolute 不受影响（`styles.css`）
-
-**图片提取（`browser_provider.py`）**
-
-- 尺寸阈值 160px → 120px，新增 `video[poster]` / `source[srcset]` 提取
-- 小红书 Live Photo 优化：优先已知字段再递归搜索
-
-**免费 Whisper（`cf_worker_proxy.js`、`wrangler.toml`、`transcription.py`）**
-
-- CF Worker `/__transcribe__` 端点，Workers AI `@cf/openai/whisper`
-- `cloud_preview` 模式自动选择 `CloudflareWorkersAIWhisperProvider`
-
-**结果页信息架构**
-
-- 布局 3 层：hero（pill + 标题 + 描述）→ 内容区（文字 + 图片/视频）→ meta footer（平台 | 类型 | 时长 | 查看来源）
-- 删除 `outcome-strip`（工程指标：正文已就绪 / N个下载项 / 质量较高）
-- 删除 `facts-strip`（信息与 hero/meta footer 重复）
-- 实现"整理正文 / 原文"标签切换（`views.primary` ↔ `views.notes`），无 notes 时原文禁用
-
-**UI 细节（`styles.css`）**
-
-- 完成 pill：灰色调，与品牌一致
-- 图片卡片 hover：`translateY(-3px)` + 双层柔和阴影
-- 文字卡片：双层阴影、微斜渐变、边框透明度 0.06
-- 正文排版：行高 1.95、段落间距 18px、颜色 `#2c2c2c`
-
-**Bug 修复**
-
-- `source_adapters.py` 补充遗漏导入 `DEPLOYMENT_MODE`、`CN_PLATFORM_RELAY_URL`
-
-**Apple HIG 合规（第 4 轮）**
-
-- 删除死 CSS 9 组：`.header-note`、`.status-chip.is-ready/.is-danger`、`.hero-kicker`、`.hero-trust-grid`、`.processing-ticker`、`.processing-progress` 系列、`.image-gallery-body.is-previewing`、`.image-card-action.is-primary`
-- 触控目标 ≥ 44pt：`--action-height` 42→44、`.image-card-action` 36→44、`.image-viewer-close` 42→44、`.image-viewer-nav` 38→44
-- 文档精简：三轮维护日志合并为一个条目，去除重复表述
-
-**已知风险**
-
-- CF Workers AI Whisper 免费版日配额限制，超大音频可能超时
-- Live Photo 抓取成功率依赖平台接口稳定性
-
-### 2026-05-15 第 5 轮：8pt 网格对齐 + 文案微调（commit `0785777`）
-
-**8pt 网格间距对齐（`styles.css`，约 90 处修改）**
-
-- gap 值：`5/6/10→8px`、`12/14→16px`、`18→24px`、`26→24px`
-- Section padding：`.main-stage` 18/26→24/24、`.processing-shell` 34/28/30→32/32/32、`.hero-form-card` 18/20→24/24、`.result-prose` 22/28→24/32
-- 组件尺寸：`.brand-mark` 28→32、`.hero-submit` 52→56、`.image-card-badge` 58/30→56/32、`.image-viewer-toolbar-button` 34→32
-- 移动端同步对齐：640px / 960px 断点内 margin/padding/border-radius 校正
-- 微间距保留：2-4px 的视觉微调值（Apple 允许）
-
-**文案微调**
-
-- placeholder `贴入`→`粘贴`（`InputStage.tsx`）
-- 视频不可用面板：`暂未拿到可预览视频`→`视频预览暂不可用`（`DeliverableStage.tsx`）
-
-**清理**
-
-- 删除 15 个临时调试文件（截图、快照日志、测试 HTML），释放约 3MB
-
-### 2026-05-15 第 6 轮：去标签化 + 测试全绿 + 上线准备
-
-**移除整理正文/原文标签切换**
-
-- 删除 `result-mode-tabs` 组件及相关 CSS（桌面+移动端，共 ~50 行）
-- 删除 `textViewMode` 状态、`hasNotesText`、`notesText` 逻辑、`TextViewMode` 类型
-- 结果页直接展示 `primary_text`，不再有二级视图切换
-- `DeliverableStage.tsx` 简化约 15 行
-
-**Vite 开发配置**
-
-- 新增 `server.proxy`：`/config` 和 `/v1` 代理到 `http://127.0.0.1:8000`（`vite.config.ts`）
-- dev server 可以直接调后端，无需额外配置
-
-**测试验证**
-
-- 122 后端测试全部通过（unittest discover），1 跳过（live smoke 需配置 URL）
-- TypeScript 零错误，Vite 构建通过（CSS 38.84KB, JS 322.35KB）
-- UI smoke `test_video_result_layout_stays_stable` `.facts-strip` 引用已修复为 `.deliverable-meta`
-- hover 测试使用 `force: true`（标准 hover 效果测试模式）
-
-**文档同步**
-
-- README.md、docs/verification.md、docs/release-ready.md 中 "details row" / "facts row" 统一更新为 "meta footer"
-
-### 2026-05-15 上线前最终闭环
-
-**测试验证**
-
-- 后端测试：122 passed / 1 skipped
-- TypeScript：零错误
-- 前端构建：成功（CSS 38.93KB, JS 322.39KB）
-
-**功能冒烟**
-
-- 首页：通过（品牌标识、输入框、按钮、最近记录均正常）
-- 处理中页面：通过（进度条、状态文案、处理中标签正常）
-- 结果页（视频）：通过（hero区、双栏布局、视频播放器、meta footer齐全）
-- 结果页（图文-小红书）：通过（来源识别成功，提取失败时错误提示友好）
-- 失败态：通过（处理失败pill、友好文案、无技术细节暴露）
-- 移动端适配：通过（响应式布局、按钮堆叠、文字换行正常）
-- 图片查看器：未测试（本地无图文完整结果，需线上验证）
-
-**代码质量**
-
-- 死代码清理：无（CSS/TSX/Python 均无未使用代码）
-- 文档一致性：无（README.md、docs/ 均无过时引用，CSS类名与TSX完全对齐）
-
-**结论**
-
-- 是否可以上线：是
-- 遗留风险：CF Workers AI Whisper 免费版日配额限制，超大音频可能超时；Live Photo 抓取成功率依赖平台接口稳定性；图片查看器未在本次冒烟中覆盖（需线上图文结果验证）
-
-### 2026-05-15 部署记录
-
-**已部署**
-
-- HF Space: `https://liamgrant-wanxiang-chengwen-preview.hf.space`（海外可访问）
-- CF Worker: `wanxiang-chengwen-proxy`（已部署，功能正常）
-- 自定义域名: `wanxiang.praxisai.online`（已绑定 Worker，`.online` TLD 中国 DNS 可解析）
-- 旧域名: `praxisai.men`（已绑定 Worker，但 `.men` TLD 国内不可用）
-
-**国内访问**
-
-- `wanxiang.praxisai.online` 已验证中国 DNS（阿里 223.5.5.5、腾讯 119.29.29.29）可正常解析
-- `.online` 是主流 TLD，不会被 GFW 识别为代理域名
-
-**当前可用地址**
-
-- 国内/海外: `https://wanxiang.praxisai.online`
-- HF Space 直连: `https://liamgrant-wanxiang-chengwen-preview.hf.space`
-- Worker 默认域名: `https://wanxiang-chengwen-proxy.liamgrant-wanxiang.workers.dev`
-
-**额度限制（已实现）**
-
-- 每日次数：12 次/IP/天（环境变量 `DAILY_CAPTURE_LIMIT`）
-- **小红书图文免限流**：无转写，不消耗计算资源，不计入每日次数
-- 视频时长：≤ 30 分钟（环境变量 `MAX_VIDEO_DURATION_MINUTES`）
-- 文件大小：≤ 200MB（环境变量 `MAX_UPLOAD_SIZE_MB`）
-- 管理员 IP 免限制：环境变量 `ADMIN_IPS`（逗号分隔）
-- 用户隔离：基于客户端 IP（`X-Forwarded-For` / `CF-Connecting-IP`），每个 IP 只能看到自己的历史记录
-
-### 2026-05-16 架构简化 + Bug 修复
-
-**根因修复（4 个）**
-
-- 剪贴板粘贴：`execCommand('paste')` 移到 `await` 之前同步执行，保留用户手势（`App.tsx`）
-- Docker Chromium：加 `--no-sandbox --disable-gpu` 启动参数（`browser_provider.py`）
-- Worker Content-Type：保留原始 Content-Type，不再强制 `text/plain`，SPA 可正常渲染（`cf_worker_proxy.js`）
-- 小红书页面检测：补充 "你访问的页面不见了" 等 404 标题匹配（`source_adapters.py`）
-
-**架构剃刀**
-
-- 小红书提取：跳过 HTTP 中继静态抓取（SPA 空壳永远无数据），直接 Playwright + `page.evaluate()` 从 `window.__INITIAL_STATE__` 提取笔记 JSON。不再传输 `page.content()` 全文（521KB → 2KB），总耗时减少 30-40%（`browser_provider.py`）
-- 前端错误处理：砍掉 55 行 `RAW_TECH_PATTERNS` 正则黑名单，后端已产出中文错误信息，前端直接透传（`api.ts`）
-- 小红书限流豁免：`_check_daily_rate_limit` 移至 URL 解析后，按平台判断（`main.py`）
-
-**已部署**
-
-- GitHub: clean-main 分支
-- HF Space: `liamgrant/wanxiang-chengwen-preview`
-- Cloudflare Worker: `wanxiang-chengwen-proxy`（Content-Type 修复）
-- 自定义域名: `wanxiang.praxisai.online`
-
-### 2026-05-16 图片查看器工具栏 + 跨平台字体修复
-
-**根因修复（2 个）**
-
-- 工具栏膨胀：移动端 `.image-viewer-toolbar-group.is-navigation` 的 `flex: 1 1 100%` 强制占满整行，把图片工具组和下载按钮挤到额外行，工具栏从 2 行膨胀到 3 行（166px），遮挡图片（`styles.css`）
-- 跨平台字体差异：WeChat WebView 可能自动调整文本大小，导致字体渲染与 Safari 不一致（`styles.css`）
-
-**修复内容**
-
-- 移动端工具栏重排：导航组 `flex: 0 1 auto`，图片工具组 `flex: 1 1 auto`，下载按钮 `order: 1` 独占末行；按钮尺寸 44→40px，间距 8→6px，圆角 26→20px
-- 工具栏高度从 166px（3 行）降至 100px（2 行），不再遮挡图片
-- PC 端单行布局不受影响（桌面断点未修改）
-- 根元素添加 `-webkit-text-size-adjust: 100%` + `text-size-adjust: 100%`，阻止 WeChat WebView 自动放大文字
-
-**验证**
-
-- 后端测试：122 passed / 1 skipped
-- TypeScript：零错误
-- 前端构建：CSS 37.93KB, JS 322.32KB
-- Playwright 截图验证：WeChat iPhone (375×812)、Safari iPhone (390×844)、Narrow Android (360×780)、Desktop (1440×900) 四端工具栏布局正确
-
-**已部署**
-
-- GitHub: clean-main 分支
-- HF Space: `liamgrant/wanxiang-chengwen-preview`
-
-### 2026-05-16 Apple HIG 合规 + 移动端布局全面优化
-
-**触控目标修复（3 个，≥ 44pt）**
-
-- `.hero-input-clear`：40→44px（清空输入按钮）
-- `.recent-inline-delete`：32→44px（删除记录按钮）
-- `.image-viewer-toolbar-button`：36→44px（图片查看器工具栏按钮）
-
-**工具栏布局统一**
-
-- `image-tools` 组 `flex: 1 1 auto` → `flex: 0 1 auto`，不再膨胀挤占空间
-- 普通图和 Live 图工具栏结构一致：导航+缩放在同一行，下载在第二行
-- 按钮 44→36px（桌面）/ 44px（移动端），间距统一 4-6px
-
-**正文区间距消除**
-
-- `.result-content-shell` 移动端 `flex: 1` → `flex: 0 0 auto`，不再撑满剩余空间
-- `.result-prose` 移动端 `min-height: 100%` → `auto`，内容自适应高度
-
-**跨平台字体一致性**
-
-- 根元素 `-webkit-text-size-adjust: 100%` + `text-size-adjust: 100%`，阻止 WeChat WebView 自动放大
-
-**验证**
-
-- 后端测试：122 passed / 1 skipped
-- TypeScript：零错误
-- 前端构建：CSS 37.98KB, JS 322.32KB
-- Playwright 四端截图：WeChat iPhone、Safari iPhone、Narrow Android、Desktop 全部布局正确
-
-**已部署**
-
-- GitHub: clean-main 分支（`e708c61`）
-- HF Space: `liamgrant/wanxiang-chengwen-preview`
-
-### 2026-05-16 桌面端两栏布局修复
-
-**根因**
-
-- 提交 `d6c59f5` 移除了 `@media (min-width: 1025px)` 内的两栏网格布局，改为所有宽度单栏自然流
-- 原因是桌面端 `height: 100vh` 高度锁定导致部分视口文案列被挤压至 ~25% 宽度
-- 修复方案过于激进，未区分桌面/手机断点，导致桌面端 UI 崩坏为手机端样式
-
-**修复内容**
-
-- 恢复 `body.has-result-stage` 高度锁定链：body → #root → .app-shell → .main-stage → .stage-shell-ready
-- 恢复 `.stage-shell-ready` 高度计算 `calc(100vh - 96px)` + `overflow: hidden` 级联
-- 恢复两栏网格：`.deliverable-workspace.has-images` → `grid-template-columns: minmax(0, 1.06fr) minmax(320px, 0.94fr)`
-- 恢复 `.deliverable-workspace.has-video` → `grid-template-columns: minmax(0, 1.06fr) minmax(360px, 0.94fr)`
-- 恢复面板内部滚动：`.result-content-shell` / `.image-gallery-body` 各自 `overflow: auto`
-- 手机端断点（≤960px / ≤640px）未触碰
-
-**验证**
-
-- 前端构建：CSS 39.22KB, JS 322.32KB
-- Playwright 截图验证：Desktop (1440×900) 两栏布局正确，Mobile (390×844) 单栏布局正确
-
-**已部署**
-
-- GitHub: clean-main 分支（`607226f`）
-- HF Space: `liamgrant/wanxiang-chengwen-preview`
-
-### 2026-05-17 UI 回归修复 + 备份版本对齐
-
-**根因**
-
-- 多次增量修改导致 CSS 和组件代码与备份版本不一致
-- 组件使用 `deliverable-meta` 类名，但 CSS 已切换为 `fact-chip` 类名
-- `viewer-media-enter` 动画中的 `transform: scale()` 与图片查看器交互式 transform 冲突
-
-**修复内容**
-
-- 恢复备份版本的 CSS（`styles.css`）作为基础
-- 恢复备份版本的组件（`DeliverableStage.tsx`）作为基础
-- 仅叠加必要改动：hero 标签样式、`-webkit-text-size-adjust`
-- 移除冲突的动画 transform（只保留 opacity 淡入）
-
-**关键教训**
-
-- 备份版本的类名体系（`fact-chip`、`facts-strip-side`）与之前版本不同
-- 修改 CSS/组件时必须同时检查类名匹配
-- 动画中的 `transform` 会覆盖元素的交互式 `transform`，导致布局异常
-
-**验证**
-
-- 前端构建：CSS 41.30KB, JS 323.20KB
-- Playwright 截图验证：Desktop 居中正确，两栏布局正常
-
-**已部署**
-
-- GitHub: clean-main 分支
-- HF Space: `liamgrant/wanxiang-chengwen-preview`
+## 本机迭代、安装与发布协议
+
+### 本机迭代与安装版闭环（2026-10-11）
+
+- 用户授权批次后自主检查、评测、审查及修复，优先采用核查过的成熟实现。准确率必须有人工参考；不同模型/不同权重的 CPU 与 GPU 耗时不用于宣称纯 CUDA 加速。
+- 当前 CUDA 路线是 SenseVoice Small FP32 + 官方 sherpa-onnx 1.13.4 CUDA 12/cuDNN 9 SDK。CPU 兼容版原权重为 WSYue 微调 int8，二者不可混称相同权重。Whisper 为可选备用，不因某一引擎能跑 CUDA 就替换默认模型。
+- GPU SDK 通过 `scripts.prepare_sensevoice_cuda` 固定 revision 与 SHA-256 下载；不得覆盖项目 CPU venv。GPU 与 CPU ONNX DLL 必须进程隔离，worker 复用后端 `--sensevoice-gpu-worker`；显式 CUDA 不静默退回 CPU。
+- 桌面打包必须使用项目 CPython 3.11，与 cp311 GPU SDK ABI 对齐。`scripts/build_desktop_sidecar.ps1` 固定该 Python 与 PyInstaller 版本，禁止 uvx 自动选择最新 Python。
+- 源码、前端构建、后端 sidecar、桌面 exe 和安装包是一批交付。完成必须包含安装前备份、真实已安装 exe/sidecar 哈希核对、真实 CUDA 推理、历史正文保留，以及新功能实际验收；仅生成安装包不算用户已升级。
+- 先运行 `scripts.verify --backend-only`、TypeScript、前端构建及浏览器回归，再运行 `scripts.verify_desktop_upgrade` 验证打包后的 CUDA 文件上传、模型检测、保守校对与两版下载。私有测试 API 仅在本机回环地址提供。
+- 设置与校对接口限本地，复用桌面 token；密钥用 Windows DPAPI 加密，不返回明文。校对不得覆盖原 Capture，候选默认不选中，逐处确认后保存独立文件；模型不能保证语义正确，人工确认步骤不得省略。
+- WebView2 的 Tauri 页面请求本地后端会带 `Sec-Fetch-Site: cross-site`，只有桌面运行目标及精确 Tauri origin 可通过此检查，桌面 middleware 的进程 token 仍必须有效。安装验收必须运行真实 WebView 窗口；普通浏览器或 HTTP 测试不能替代。
+- 平台浏览器导航的超时参数不可跨函数误用：小红书使用已有 `BROWSER_GOTO_TIMEOUT_MS`，抖音使用调用方提供的 `goto_timeout_ms`。实链验收需走公开链路缺少数据后的浏览器分支，不可只 mock adapter 的成功结果；项目会话与安装版会话分别验证，不把网络风控计为抓取成功。
+- Tauri NSIS 打包会把主 exe 中的 `__TAURI_BUNDLE_TYPE_VAR_UNK` 改为 `NSS`；比较未打包主 exe 与安装版时仅允许该精确标记差异，后端 sidecar 必须逐字节一致。不要把打包标记变化误报成旧程序，也不要忽略其他差异。
+- 保留原品牌与线上已认可的视觉比例。2026-10-11 用户明确拒绝结果页扩宽：桌面外层宽度上限 1100px、正文/媒体工作区宽度上限 980px，整组结果高度上限 820px 并垂直居中，Web 与原生窗口相同；不得因大屏自动扩到 1720px，也不得仅收窄宽度而保留卡片撑满高窗口。验收必须覆盖真实最大化原生窗口的宽高比例。首页设置入口位于输入工具区，以 44px 点击区域的小图标呈现；结果页通过“校对 → 配置模型”进入相关配置，不放全局悬浮设置按钮。局部组件使用独立 `local-tools.css`，构建产物不手工编辑。
+- 输入工具区内的设置按钮打开的弹窗必须通过 portal 放在表单之外，防止在模型/API 输入框按 Enter 时误提交首页链接；回归需验证弹窗 Enter 不触发表单、Escape 恢复按钮焦点。
+- 可复核速度、样本边界、安装验证与回滚位置记录于 `docs/local-cuda-proofreading-plan.md` 和 `docs/local-upgrade-verification-20261011.md`。公开网站/Release 不随本地更新自动变更，不宣称尚未发布的远端已同步。
+
+### 配置、校对与发布协议（2.3 批次）
+
+- `PATCH /v1/local/preferences` 分别保存 `proofreading` / `transcription`；保留旧 PUT 兼容。AI 保存不验证或更改 ASR，ASR 保存不替换 AI 设置。
+- `POST /v1/local/proofreading-check` 只发送合成短示例，验证未保存草稿，不写设置。“已保存”“模型列表可读”“实际校对测试通过”是不同状态。
+- DeepSeek 官方 host 使用 JSON object、显式关闭 thinking、有限输出预算；空输出、截断、授权、余额、超时和格式错误分别返回安全错误码。不得记录服务原始正文、密钥、待校对文本；本地路由 422 不回显输入。
+- 长文进度文件 `proofreading-job.json` 按块保存；来源 hash、协议、模型、地址摘要与不透明 credential revision 必须一致才可恢复。取消必须幂等，迟到结果不得覆盖新任务。
+- 接受修正必须提交匹配的 `job_id`；旧窗口的过期索引不能应用到新任务。建议默认不选中，保存独立 `proofreading.json`，Capture 原文保持不变。
+- 本机统一升级入口为 `scripts/upgrade_local.ps1`。需要匹配的安装包 SHA-256 与打包验收报告，停止空闲应用后备份程序、设置与历史元数据；核对完整 sidecar 文件树、主 exe 精确 NSIS 标记及历史哈希。程序、元数据回滚位置写入 upgrade-manifest。
+- CI 采用 CPython 3.11 创建项目 `.venv`，通过统一 `build_desktop.ps1` 构建。CI 只上传候选 artifact，不创建公开 Release；Pages 不因候选构建成功而更新。
+- 最终冻结后的安装包必须重新进行实际安装验收。发布同一份文件，官网下载再核对 SHA-256。缺 60 链接 / 72 段四小时三轮人工参考证据或干净 Windows 验收时，不伪报正式发布完成。
+- 每次交付分别记录源码、已安装应用、公开 Release、官网状态。此批次实施报告：`docs/release-2.3.0.md`。
+- 用户指定沿用桌面原圆点图标。应用、官网、favicon、分享图与演示统一使用 `web/public/brand-mark.svg` 的 `praxis-dot`，禁止改为“文”字候选。用 `scripts/generate_brand_assets.mjs` 同步图标；分享图单独生成，不覆盖已验收演示录像。
+- 交互精修保持认可的品牌与宽高比例。等待操作显示具体动作，不能仅禁用控件；转写草稿先保存再验证 CUDA。校对进度采用单次请求完成后再安排下一次的轮询，取消或更新任务使旧响应失效；保存修正期间锁定勾选。设计与浏览器证据见 `docs/interaction-refinement-20261012.md`。
+- 打包生成冻结源码、版本与主程序/后端/安装包哈希清单；本机升级必须消费并核对清单，执行保留且再次验哈希的安装包副本。安装目录的所有已有父链及目录树不得有 junction/symlink；NSIS 对空目标也检查父链和运行进程，禁止静默结束用户任务。
+- 取消校对必须携带目标 `job_id`，锁内检查当前任务身份；旧任务返回 409，重复取消同一任务幂等。完整 sidecar 相对路径与 SHA-256 树摘要同时绑定 sidecar manifest、delivery manifest 和打包验收报告；仅核对 exe 不允许复用资源或安装。提取验收率必须从逐条记录重新计算，矛盾摘要拒绝，失败和风控保留在分母；当前五个支持平台每个平台每轮至少有一个完整成功样本才允许发布；仍要求至少 60 条独立链接、三轮及零测试超时。旧六平台报告保留全部失败，不移除历史行或重新包装为新范围通过。
+- Windows hosted CI 常以管理员运行，WebView2 会忽略环境变量/HKCU 的调试参数；仅在受限的全新 CI runner 上临时设置并恢复 `wanxiang-chengwen.exe` 专用 HKLM 调试策略，不修改正式应用或本机策略。
+- 原生退出验收只对目标子进程的唯一 `Tauri Window` 发送关闭请求，随后确认退出码。`Tao Thread Event Target` 即使被 Win32 标为可见，也不是产品窗口；不得按 PID 遍历关闭所有可见窗口。DPI 与视口分别从真实窗口和 WebView 读取，不能用浏览器模拟 DPI 宣称系统 DPI 验收。
+- 后端构建指纹以 ordinal 顺序排列路径并规范化分隔符，不能依赖 `Sort-Object` 的区域/PowerShell 版本排序。父脚本与 Windows PowerShell sidecar 子脚本必须给出相同指纹；单文件变化必须使指纹失效。
+- 2026-10-13 用户明确移除 YouTube 支持和宣传；新输入在 DNS/短链请求前拒绝，也不可回退通用网页或重启 YouTube adapter。已有结果与原媒体保留。不得新增 VPN、代理端口、Cookie 或登录配置。历史 YouTube 诊断和基准仅作历史证据，不纳入当前能力宣传。移除宣传须同时检查 README/官网截图及演示录像中的可见文字，不能只搜索 HTML/Markdown；素材修改必须运行 `tests.test_brand_and_showcase` 与官网回归，保持已约定的 1920×1080、30 fps、12 秒演示规格。
+- 小红书匿名分享需兼容桌面 `note.noteDetailMap` 与手机 `noteData.data.noteData`，复用媒体规范化；保留完整分享参数，不把登录空壳认作正文。手机分享直连仅做一次备用 UA，逐块检查读取预算及页面大小；云端 relay 不能凭本机证据宣称已通过。定向链接、图片本地就绪与打包复验分别记录，见 `docs/xiaohongshu-mobile-20261021.md`。
+- 公开截图须逐张视觉复核，不能用文本文档扫描或演示视频通过替代。2026-10-21 独立复核发现旧手机首页 PNG 仍含 YouTube 文案，已用当前前端和空示例历史重新截图；已审查图片哈希由品牌回归锁定，替换图片时必须重新复核。当前五平台三轮结果见 `docs/platform-benchmark-20261021.md`，137/180 完整、4 次超时，正式发布门槛仍未通过。
+
+- 修改前先读相关代码、配置、文档和测试，理解现状后再动手。
+
+## 云端预览
+
+云端预览经 Cloudflare Worker 中继访问国内平台（`scripts/cf_worker_proxy.js`，`DEPLOYMENT_MODE=cloud_preview` 时启用）。部署身份、URL 与原理见 [`docs/history.md`](docs/history.md) 和 [`docs/deployment.md`](docs/deployment.md)。
