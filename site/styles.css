@@ -310,7 +310,7 @@ nav a:hover, footer a:hover, .text-link:hover { text-decoration: underline; text
   footer { width: calc(100% - 32px); padding: 28px 0; grid-template-columns: 1fr; gap: 8px; }
   footer > p { display: none; }
   footer > div:last-child { justify-self: start; flex-wrap: wrap; gap: 0 20px; }
-  footer > div:last-child a { min-width: 0; }
+  footer > div:last-child a { justify-content: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {

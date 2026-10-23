@@ -97,7 +97,8 @@ class PublicSiteBrowserTests(unittest.TestCase):
         page.get_by_role("button", name="EN").click()
         self.assertEqual(page.locator("html").get_attribute("lang"), "en")
         self.assertIn("Turn videos", page.locator(".hero-lede").inner_text())
-        self.assertIn("development preview", page.locator(".demo-note").inner_text())
+        self.assertIn("A real run", page.locator(".demo-note").inner_text())
+        self.assertIn("CC BY 3.0", page.locator(".demo-note").inner_text())
         page.reload(wait_until="networkidle")
         self.assertEqual(page.locator("html").get_attribute("lang"), "en")
         page.close()
@@ -109,7 +110,8 @@ class PublicSiteBrowserTests(unittest.TestCase):
         for platform in ("哔哩哔哩", "小宇宙", "抖音", "小红书", "微信公众号"):
             self.assertIn(platform, supported)
         self.assertNotIn("YouTube", page.locator("body").inner_text())
-        self.assertIn("开发预览版", page.locator(".demo-note").inner_text())
+        self.assertIn("真实处理", page.locator(".demo-note").inner_text())
+        self.assertIn("中国新闻社", page.locator(".demo-note").inner_text())
         self.assertIn("v2.1.0", page.locator(".compatibility").inner_text())
         page.close()
 

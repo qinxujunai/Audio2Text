@@ -5,7 +5,7 @@ const copy = {
     skip: "跳到主要内容", brandHome: "万象成文首页", primaryNav: "主要导航", languageSwitch: "语言",
     navWorkflow: "产品", navProof: "验证", eyebrow: "Windows 本地优先的内容整理工具",
     heroLede: "把视频、播客和图文，直接变成可用的文字与媒体。", download: "下载 Windows 版", trial: "在线试用", github: "查看 GitHub",
-    demoNote: "演示使用开发预览版与预置示例，等待过程已缩短；正式下载版本见上方。", demoLabel: "万象成文从链接输入到文字与媒体交付的十二秒演示", playDemo: "播放或暂停演示", play: "播放演示", pause: "暂停演示",
+    demoNote: "这是一次真实处理：52 秒的中文视频，语音转写用时 5.3 秒（云端 CPU），等待部分已加速。素材：中国新闻社，CC BY 3.0。", demoLabel: "十二秒演示：上传一段 52 秒的中文视频，拿回全部文字和可播放的视频", playDemo: "播放或暂停演示", play: "播放演示", pause: "暂停演示",
     workflowKicker: "一个入口", workflowTitle: "贴一个链接，拿回全部文字。", workflowBody: "粘贴公开链接或选择本地文件。能直接取得正文或字幕时立即交付；需要识别时，再自动选择当前电脑适合的路径。",
     flowLabel: "万象成文处理流程", flowInput: "视频、播客、图文", flowProcess: "提取与识别", flowOutput: "文字与媒体",
     textTitle: "可用的正文", textBody: "复制全文，或下载 TXT 与 Markdown。", mediaTitle: "原始媒体", mediaBody: "视频、音频和图片分别交付，不混在一起。", localTitle: "本地优先", localBody: "Windows 版在本机处理，自动检测 CPU 与 GPU。",
@@ -19,7 +19,7 @@ const copy = {
     skip: "Skip to main content", brandHome: "Wanxiang Chengwen home", primaryNav: "Primary navigation", languageSwitch: "Language",
     navWorkflow: "Product", navProof: "Verification", eyebrow: "Local-first content capture for Windows",
     heroLede: "Turn videos, podcasts, and visual articles into usable text and media.", download: "Download for Windows", trial: "Try online", github: "View on GitHub",
-    demoNote: "The demo uses a development preview with prepared examples and shortened waits. The public download version is shown above.", demoLabel: "A twelve-second demo from pasted link to text and media deliverables", playDemo: "Play or pause demo", play: "Play demo", pause: "Pause demo",
+    demoNote: "A real run: a 52-second Mandarin video, transcribed in 5.3 s on a cloud CPU; waiting is sped up. Footage: China News Service, CC BY 3.0.", demoLabel: "Twelve-second demo: upload a 52-second Mandarin video and get back the full text and a playable video", playDemo: "Play or pause demo", play: "Play demo", pause: "Pause demo",
     workflowKicker: "One input", workflowTitle: "Paste a link. Get every word back.", workflowBody: "Paste a public link or choose a local file. Existing text and captions arrive first; when transcription is needed, the app selects a compatible path for this PC.",
     flowLabel: "Wanxiang Chengwen workflow", flowInput: "Video, podcast, article", flowProcess: "Extract and transcribe", flowOutput: "Text and media",
     textTitle: "Usable text", textBody: "Copy everything or download TXT and Markdown.", mediaTitle: "Original media", mediaBody: "Video, audio, and images remain distinct deliverables.", localTitle: "Local first", localBody: "The Windows app processes locally and detects CPU and GPU automatically.",
@@ -30,7 +30,7 @@ const copy = {
 };
 
 Object.assign(copy.zh, {
-  navProof: "下载", demoNote: "演示使用开发预览版与预置示例，等待过程已缩短；正式下载版本见上方。",
+  navProof: "下载",
   workflowKicker: "从输入到保存", workflowBody: "粘贴链接或选择文件，查看正文与媒体，再复制或保存。已有正文或字幕时优先提取；需要识别时，在本机完成。",
   localBody: "本地文件在电脑上识别，支持可选 CUDA 加速。",
   scenariosKicker: "让有价值的内容，留得下来", scenariosTitle: "听过、看过。也能找回。",
@@ -55,7 +55,7 @@ Object.assign(copy.zh, {
   faqSafety: "Windows 为什么提示安全警告？", faqSafetyBody: "当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。"
 });
 Object.assign(copy.en, {
-  navProof: "Download", demoNote: "The demo uses a development preview with prepared examples and shortened waits. The public download version is shown above.",
+  navProof: "Download",
   workflowKicker: "From input to saved result", workflowBody: "Paste a link or choose a file. Read the text, preview the media, then copy or save. Existing text and captions come first; local recognition handles the rest.",
   localBody: "Recognize local files on your PC, with optional CUDA acceleration.",
   scenariosKicker: "Keep what matters", scenariosTitle: "Heard it. Seen it. Find it again.",
