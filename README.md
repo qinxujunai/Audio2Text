@@ -22,7 +22,7 @@ app_port: 8000
 
 [![观看万象成文产品演示](docs/assets/wanxiang-demo-poster.jpg)](docs/assets/wanxiang-demo.mp4)
 
-*12 秒演示来自开发预览版的实际安装界面，使用专用示例与预置结果，等待过程已缩短；正式下载版本以 Release 标识为准。*
+*12 秒演示是一次真实处理（2026-10-23）：上传一段 52 秒的中文视频，SenseVoice 在云端 CPU 上 5.3 秒转写完，文字和视频都来自那次运行，等待部分已加速。素材：[中国新闻社《王忠民：人工智能算力的尽头是电力，电力尽头是绿电》](https://commons.wikimedia.org/wiki/File:王忠民：人工智能算力的尽头是电力，电力尽头是绿电.webm)，[CC BY 3.0](https://creativecommons.org/licenses/by/3.0/)；演示是界面录屏，未改动原片内容。*
 
 ## 留下内容，随时回看
 
