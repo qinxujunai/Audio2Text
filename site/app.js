@@ -11,7 +11,7 @@ const copy = {
     textTitle: "可用的正文", textBody: "复制全文，或下载 TXT 与 Markdown。", mediaTitle: "原始媒体", mediaBody: "视频、音频和图片分别交付，不混在一起。", localTitle: "本地优先", localBody: "Windows 版在本机处理，自动检测 CPU 与 GPU。",
     platformKicker: "支持的平台", platformTitle: "来自你熟悉的平台。", stable: "已验证", variable: "高波动", network: "视网络而定", platformNote: "平台内容和访问条件会变化。遇到无法读取的链接时，应用会说明下一步。",
     proofKicker: "下载", proofTitle: "下载的每个文件，都能核对。", proofBody: "网站只从已发布的 GitHub Release 读取下载地址与校验值。安装包尚未代码签名，Windows 可能显示安全提示。", version: "版本", size: "安装包",
-    closingTitle: "下一条链接，交给它。", closingBody: "在你自己的电脑上，变成能继续用的文字。", security: "安全", feedback: "反馈"
+    closingTitle: "下一条链接，交给它。", closingBody: "在你自己的电脑上，变成能继续用的文字。", security: "安全", feedback: "反馈", maker: "秦徐俊的作品", makerHref: "https://qinxujunai.github.io/"
   },
   en: {
     title: "Wanxiang Chengwen — Turn media into usable text",
@@ -25,7 +25,7 @@ const copy = {
     textTitle: "Usable text", textBody: "Copy everything or download TXT and Markdown.", mediaTitle: "Original media", mediaBody: "Video, audio, and images remain distinct deliverables.", localTitle: "Local first", localBody: "The Windows app processes locally and detects CPU and GPU automatically.",
     platformKicker: "Supported platforms", platformTitle: "From the platforms you use.", stable: "Verified", variable: "Variable", network: "Network dependent", platformNote: "Content and access conditions change. If a link cannot be read, the app explains the next step.",
     proofKicker: "Download", proofTitle: "Every download, verifiable.", proofBody: "This site reads its download URL and checksum only from a published GitHub Release. The installer is currently unsigned, so Windows may show a security prompt.", version: "Version", size: "Installer",
-    closingTitle: "Hand it the next link.", closingBody: "On your own PC, turned into text you can keep using.", security: "Security", feedback: "Feedback"
+    closingTitle: "Hand it the next link.", closingBody: "On your own PC, turned into text you can keep using.", security: "Security", feedback: "Feedback", maker: "More by Qin Xujun", makerHref: "https://qinxujunai.github.io/en/"
   }
 };
 
@@ -95,6 +95,10 @@ function applyLanguage(nextLanguage) {
   document.querySelectorAll("[data-i18n]").forEach((element) => {
     const key = element.dataset.i18n;
     if (selected[key]) element.textContent = selected[key];
+  });
+  document.querySelectorAll("[data-i18n-href]").forEach((element) => {
+    const key = element.dataset.i18nHref;
+    if (selected[key]) element.href = selected[key];
   });
   document.querySelectorAll("[data-i18n-aria]").forEach((element) => {
     const key = element.dataset.i18nAria;

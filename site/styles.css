@@ -307,8 +307,10 @@ nav a:hover, footer a:hover, .text-link:hover { text-decoration: underline; text
   .proof { padding: 88px 24px; grid-template-columns: 1fr; gap: 64px; }
   .release-facts div { grid-template-columns: 90px 1fr; }
   .closing { padding: 96px 0 104px; }
-  footer { width: calc(100% - 32px); padding: 28px 0; grid-template-columns: 1fr auto; gap: 16px; }
+  footer { width: calc(100% - 32px); padding: 28px 0; grid-template-columns: 1fr; gap: 8px; }
   footer > p { display: none; }
+  footer > div:last-child { justify-self: start; flex-wrap: wrap; gap: 0 20px; }
+  footer > div:last-child a { min-width: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
