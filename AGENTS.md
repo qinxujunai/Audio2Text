@@ -49,6 +49,8 @@
 
 ## 交接日志
 
+- **2026-10-24，Claude**：官网顶栏加「‹ 返回」，只对从作者个人网站点进来的访客显示（个人网站在本标签页 sessionStorage 留下 `qxj.back`，约定见那个仓库的 `docs/back-link.md`）；品牌和返回放进 `.header-start`。只改 `site/`。验证：`tests/test_public_site.py`、`test_brand_and_showcase.py` 13 项通过；从个人网站点进来显示、直接打开不显示。
+
 - **2026-10-23，Claude**：官网与 README 演示换成真实处理的录屏：网页版上传 52 秒中文视频（中国新闻社，CC BY 3.0），SenseVoice int8 在云端 CPU 5.3 秒转写，录屏只加速等待；封面与 README 结果页截图取自同一次运行。修掉 914cbdf 引入的手机页脚链接不足 44px（`min-width: 0` 覆盖了点击区域）。验证：`tests/test_public_site_browser.py`、`test_brand_and_showcase.py`、`test_public_site.py` 19 项通过（改动前页脚那项失败）；演示 1920×1080、30fps、12.0 秒、427 KB。
 
 - **2026-10-23，Claude**：官网页脚加「秦徐俊的作品」（英文 More by Qin Xujun，按语言切换链接，`data-i18n-href`）；手机上页脚链接换到品牌下面一行，不再挤出屏幕。只改 `site/`，应用、安装包、Release 不变。验证：`tests/test_public_site.py`、`tests/test_brand_and_showcase.py` 13 项通过；390/1280 宽中英文页脚无脚本错误。
