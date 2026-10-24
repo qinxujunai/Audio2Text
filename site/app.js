@@ -2,7 +2,7 @@ const copy = {
   zh: {
     title: "万象成文 — 视频、播客与图文，一处整理",
     description: "万象成文把视频、播客和图文，直接变成可用的文字与媒体。Windows 本地优先。",
-    skip: "跳到主要内容", brandHome: "万象成文首页", primaryNav: "主要导航", languageSwitch: "语言",
+    skip: "跳到主要内容", back: "‹ 返回", brandHome: "万象成文首页", primaryNav: "主要导航", languageSwitch: "语言",
     navWorkflow: "产品", navProof: "验证", eyebrow: "Windows 本地优先的内容整理工具",
     heroLede: "把视频、播客和图文，直接变成可用的文字与媒体。", download: "下载 Windows 版", trial: "在线试用", github: "查看 GitHub",
     demoNote: "这是一次真实处理：52 秒的中文视频，语音转写用时 5.3 秒（云端 CPU），等待部分已加速。素材：中国新闻社，CC BY 3.0。", demoLabel: "十二秒演示：上传一段 52 秒的中文视频，拿回全部文字和可播放的视频", playDemo: "播放或暂停演示", play: "播放演示", pause: "暂停演示",
@@ -16,7 +16,7 @@ const copy = {
   en: {
     title: "Wanxiang Chengwen — Turn media into usable text",
     description: "Turn videos, podcasts, and visual articles into usable text and media. Local-first on Windows.",
-    skip: "Skip to main content", brandHome: "Wanxiang Chengwen home", primaryNav: "Primary navigation", languageSwitch: "Language",
+    skip: "Skip to main content", back: "‹ Back", brandHome: "Wanxiang Chengwen home", primaryNav: "Primary navigation", languageSwitch: "Language",
     navWorkflow: "Product", navProof: "Verification", eyebrow: "Local-first content capture for Windows",
     heroLede: "Turn videos, podcasts, and visual articles into usable text and media.", download: "Download for Windows", trial: "Try online", github: "View on GitHub",
     demoNote: "A real run: a 52-second Mandarin video, transcribed in 5.3 s on a cloud CPU; waiting is sped up. Footage: China News Service, CC BY 3.0.", demoLabel: "Twelve-second demo: upload a 52-second Mandarin video and get back the full text and a playable video", playDemo: "Play or pause demo", play: "Play demo", pause: "Pause demo",
@@ -132,3 +132,22 @@ if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
     if (filmControlText) filmControlText.textContent = copy[language].pause;
   }).catch(() => {});
 }
+
+// "‹ Back" to the author's personal site, only for visitors who came from it: that site leaves 'qxj.back' in this
+// tab's sessionStorage when someone clicks through. A link opened directly shows nothing. Contract: the personal
+// site repository, docs/back-link.md.
+(() => {
+  try {
+    const back = sessionStorage.getItem("qxj.back");
+    const link = document.querySelector("[data-qxj-back]");
+    if (!back || !link || !back.startsWith(`${location.origin}/`)) return;
+    link.href = back;
+    link.hidden = false;
+    link.addEventListener("click", (event) => {
+      if (document.referrer && document.referrer.split("#")[0] === back.split("#")[0]) {
+        event.preventDefault();
+        history.back();
+      }
+    });
+  } catch {}
+})();
