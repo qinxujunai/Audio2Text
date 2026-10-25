@@ -49,6 +49,8 @@
 
 ## 交接日志
 
+- **2026-10-25，Claude**：关闭云端预览（见「云端预览」一节）；`yt-dlp` 2026.8.19 → 2026.10.21（`yt-dlp-ejs` 0.8.0 不变，新版要求的就是它）。下一次发版才进安装包。验证：干净 venv 装 `requirements.txt` 后 `pip check` 无冲突；Linux 全量 388 项，新旧 yt-dlp 失败的是同一组 7 个（Windows 本机、浏览器相关，和本次无关）。
+
 - **2026-10-24，Claude**：官网顶栏加「‹ 返回」，只对从作者个人网站点进来的访客显示（个人网站在本标签页 sessionStorage 留下 `qxj.back`，约定见那个仓库的 `docs/back-link.md`）；品牌和返回放进 `.header-start`。只改 `site/`。验证：`tests/test_public_site.py`、`test_brand_and_showcase.py` 13 项通过；从个人网站点进来显示、直接打开不显示。
 
 - **2026-10-23，Claude**：官网与 README 演示换成真实处理的录屏：网页版上传 52 秒中文视频（中国新闻社，CC BY 3.0），SenseVoice int8 在云端 CPU 5.3 秒转写，录屏只加速等待；封面与 README 结果页截图取自同一次运行。修掉 914cbdf 引入的手机页脚链接不足 44px（`min-width: 0` 覆盖了点击区域）。验证：`tests/test_public_site_browser.py`、`test_brand_and_showcase.py`、`test_public_site.py` 19 项通过（改动前页脚那项失败）；演示 1920×1080、30fps、12.0 秒、427 KB。
@@ -173,6 +175,8 @@
 
 - 修改前先读相关代码、配置、文档和测试，理解现状后再动手。
 
-## 云端预览
+## 云端预览（2026-10-25 已关闭）
 
-云端预览经 Cloudflare Worker 中继访问国内平台（`scripts/cf_worker_proxy.js`，`DEPLOYMENT_MODE=cloud_preview` 时启用）。部署身份、URL 与原理见 [`docs/history.md`](docs/history.md) 和 [`docs/deployment.md`](docs/deployment.md)。
+2026-05-15 部署过一套云端预览：Hugging Face Space `liamgrant/wanxiang-chengwen-preview` 做后端，Cloudflare Worker `wanxiang-chengwen-proxy` 中继国内平台，绑定 `wanxiang.praxisai.online`、`praxisai.men`。2026-10-25 审查发现线上 Worker 一直是 5 月的旧版：`__proxy__` 能转发任意网址（开放代理），`__transcribe__` 不验签就调用账号的 Workers AI，页面还在提供已不支持的 YouTube。作者没有要求保留，所以全部关闭：Worker 和两个域名绑定已删除；HF Space 由作者在 Hugging Face 删除。
+
+**不要重新部署**，除非作者明确要求。万象成文现在只有 Windows 桌面版（在用户自己电脑上、用自己的网络抓取和转写，免费，也不会被平台当作海外 IP 拦截）；官网 `site/` 只是介绍和下载页，不用任何云资源。`scripts/cf_worker_proxy.js`、`scripts/deploy_huggingface_space.py`、`DEPLOYMENT_MODE=cloud_preview` 的代码保留为历史能力，原理见 [`docs/history.md`](docs/history.md)、[`docs/deployment.md`](docs/deployment.md)。
