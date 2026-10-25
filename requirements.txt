@@ -8,7 +8,7 @@ av==17.1.0
 httpx==0.28.1
 requests==2.34.2
 sherpa-onnx==1.13.4
-yt-dlp==2026.8.19
+yt-dlp==2026.10.21
 yt-dlp-ejs==0.8.0
 playwright==1.61.0
 youtube-transcript-api==1.2.4
