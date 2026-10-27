@@ -5,15 +5,15 @@
 - 云端基线 `1017b31`，版本冻结提交 `e6787556531c7489ef609ed31598bfb2b7df75aa`；Windows 安装包 SHA-256 `90f294be738856dfb1b4241f1f7c4f4c8403a3ccb905f64bc3006b4d1c04218a`。本机项目环境 pip check 通过，后端和 unittest 各 394 项、1 项跳过，TypeScript 与前端构建通过。
 - 相同 60 条三轮 141/180 完整、零超时、五平台每轮有完整成功；每条完整状态与 2.3.0 一致，validator 通过。[基准证据](platform-benchmark-20261027.md)。
 - 冻结安装包的打包后 CUDA、模型发现、校对和下载检查通过；本机 2.3.1 升级、历史保留、原生窗口、新 B 站 CUDA 转写及原视频播放通过；回滚 `workspace/temp/product-rollback-20261027-142252/`。首次构建因 Cargo.toml 换行变化被冻结检查拒绝，复用经哈希验证的 sidecar 重建通过。
-- [干净 Windows 同文件验收](https://github.com/qinxujunai/Audio2Text/actions/runs/40526076993)通过。[v2.3.1 正式 Release](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.1)已发布；官网部署和实际下载摘要须单独核验。安装包未签名；历史 39 次样本失败保留。
+- [干净 Windows 同文件验收](https://github.com/qinxujunai/Audio2Text/actions/runs/40526076993)通过。[v2.3.1 正式 Release](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.1)已发布；手动 Pages `40528976210` 成功，线上版本及匿名完整下载 SHA-256 与验收文件一致。安装包未签名；历史 39 次样本失败保留。
 
 
 <!-- project-doc-status:start -->
 > 文档维护同步：**2026-10-23** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
-> v2.3.0 已正式发布；历史验证仍以各自测试日期和安装包摘要为准。
+> v2.3.1 已正式发布；历史验证仍以各自测试日期和安装包摘要为准。
 <!-- project-doc-status:end -->
 
-更新：2026-10-23。本页区分源码、安装版与公开交付；不以源码修改代表用户已升级。
+更新：2026-10-27。本页区分源码、安装版与公开交付；以下旧表记录 2.3.0 历史状态，最新交付见上节。
 
 | 层面 | 已核对状态 |
 | --- | --- |
