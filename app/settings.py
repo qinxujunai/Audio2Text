@@ -53,7 +53,7 @@ PRODUCT_SLOGAN = "\u4E07\u8C61\u5165\u9875\uFF0C\u843D\u5B57\u6210\u6587\u3002"
 
 APP_DISPLAY_NAME = f"{PRODUCT_NAME} API"
 CODE_NAME = os.environ.get("RELAY_ENGINE_NAME", "capture_text")
-APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.3.0").strip() or "2.3.0"
+APP_VERSION = os.environ.get("AUDIO2TEXT_VERSION", "2.3.1").strip() or "2.3.1"
 
 
 def _detect_git_commit() -> str:
