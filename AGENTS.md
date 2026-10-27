@@ -49,6 +49,8 @@
 
 ## 交接日志
 
+- **2026-10-27，Codex**：同步云端 `1017b31`，发布冻结 `e678755`；相同 60 链接三轮 141/180、零超时，validator 通过且逐条完整状态与 2.3.0 相同。后端和 unittest 各 394 项（1 跳过）、前端构建和 TypeScript 通过；本机安装、真实 CUDA 转写和原视频播放、[干净 Windows 同文件验收](https://github.com/qinxujunai/Audio2Text/actions/runs/40526076993)通过。v2.3.1 安装包 SHA-256 `90f294be738856dfb1b4241f1f7c4f4c8403a3ccb905f64bc3006b4d1c04218a`，回滚 `workspace/temp/product-rollback-20261027-142252/`。官网实际部署和下载摘要另行核验；不得将云端预览重新部署。
+
 - **2026-10-25，Claude**：关闭云端预览（见「云端预览」一节）；`yt-dlp` 2026.8.19 → 2026.10.21（`yt-dlp-ejs` 0.8.0 不变，新版要求的就是它）。下一次发版才进安装包。验证：干净 venv 装 `requirements.txt` 后 `pip check` 无冲突；Linux 全量 388 项，新旧 yt-dlp 失败的是同一组 7 个（Windows 本机、浏览器相关，和本次无关）。
 
 - **2026-10-24，Claude**：官网顶栏加「‹ 返回」，只对从作者个人网站点进来的访客显示（个人网站在本标签页 sessionStorage 留下 `qxj.back`，约定见那个仓库的 `docs/back-link.md`）；品牌和返回放进 `.header-start`。只改 `site/`。验证：`tests/test_public_site.py`、`test_brand_and_showcase.py` 13 项通过；从个人网站点进来显示、直接打开不显示。
