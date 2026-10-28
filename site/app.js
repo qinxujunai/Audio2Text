@@ -52,6 +52,7 @@ Object.assign(copy.zh, {
   faqSize: "为什么首次启动还要下载？", faqSizeBody: "安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。",
   faqPlatforms: "哪些链接可以整理？", faqPlatformsBody: "支持哔哩哔哩、小宇宙、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。",
   faqAI: "AI 校对能保证正确吗？", faqAIBody: "不能。模型只提出建议，你逐处确认后才能保存。数字与单位有额外保护，但人名、事实和语义仍需自己核对；原文与校对版始终分别保留。",
+  faqSummary: "摘要与要点如何生成？", faqSummaryBody: "在结果页手动生成，应用会先说明所用模型服务、发送范围和可能的费用。摘要附有原文依据，单独保存；AI 内容仍需对照原文核查。",
   faqSafety: "Windows 为什么提示安全警告？", faqSafetyBody: "当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。"
 });
 Object.assign(copy.en, {
@@ -77,6 +78,7 @@ Object.assign(copy.en, {
   faqSize: "Why are there first-run downloads?", faqSizeBody: "The installer contains the base app. Models and media components are downloaded separately and checked against their hashes. GPU models and components are optional; the app does not change drivers or system settings.",
   faqPlatforms: "Which links are supported?", faqPlatformsBody: "Bilibili, Xiaoyuzhou, Douyin, Xiaohongshu, and WeChat articles. Access depends on your network, login, and platform rules. Support does not guarantee every link will work.",
   faqAI: "Are AI corrections always right?", faqAIBody: "No. Review each suggestion before saving. Numbers and units have extra guards, but names, facts, and meaning still need your judgment. Original and corrected versions remain separate.",
+  faqSummary: "How are summaries generated?", faqSummaryBody: "Start them manually on the result page. The app first shows the model service, what will be sent, and possible charges. Summaries are saved separately with source excerpts; check AI output against the original.",
   faqSafety: "Why does Windows show a warning?", faqSafetyBody: "The installer is currently unsigned. Download from this page's GitHub Release and check the SHA-256 above. Use the feedback link if you encounter a problem."
 });
 

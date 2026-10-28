@@ -7,6 +7,7 @@
 - 冻结源码 `a82d87b`；正式 [v2.3.2 Release](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.2) 安装包 SHA-256 为 `39aa0b1ebb908a332705ceca74375047b742bbaf7d7097708cced0506b305c7c`。该文件通过[干净 Windows 验收](https://github.com/qinxujunai/Audio2Text/actions/runs/40695707967)，已安装本机并核对历史、设置与校对、摘要入口；真实外部模型未调用，摘要结果仍须用户核对原文。
 - 本机升级备份 `workspace/temp/product-rollback-20261028-214503/`。产品官网[手动部署](https://github.com/qinxujunai/Audio2Text/actions/runs/40701273440)成功，匿名完整下载安装包与上述摘要一致；Release 自动触发的部署失败记录保留。
 - [主分支质量检查](https://github.com/qinxujunai/Audio2Text/actions/runs/40701027778)通过。
+- 产品官网补充中英文摘要说明，包含手动发起、服务费用与核对原文的边界；官网回归 19 项通过。
 
 ## 2026-10-28：接手入口与当前状态
 
