@@ -49,10 +49,11 @@ import type { Artifact, CaptureEnvelope, CaptureSourceImage, ResultSegment } fro
 import type { ImageViewerItem, ImageViewerMode } from "./ImageViewer";
 
 const ImageViewer = lazy(() => import("./ImageViewer"));
-import { ProofreadingButton } from "./LocalTools";
+import { ProofreadingButton, SummaryButton } from "./LocalTools";
 
 type DeliverableStageProps = {
   capture: CaptureEnvelope;
+  localToolsAvailable: boolean;
   onCaptureUpdated: (capture: CaptureEnvelope) => void;
   onNotify: (message: string) => void;
   onReset: () => void;
@@ -992,6 +993,7 @@ function VideoUnavailablePanel({
 
 export function DeliverableStage({
   capture,
+  localToolsAvailable,
   onCaptureUpdated,
   onNotify,
   onReset,
@@ -1125,19 +1127,9 @@ export function DeliverableStage({
       ? "deliverable-workspace has-images"
       : "deliverable-workspace";
 
-  const titleFact = visibleFacts.find((fact) => fact.key === "title");
   const secondaryFacts = visibleFacts.filter((fact) => fact.key !== "title");
-  const factsSection = titleFact || secondaryFacts.length || sourceUrl ? (
+  const factsSection = secondaryFacts.length || sourceUrl ? (
     <section className="facts-strip">
-      {titleFact ? (
-        <div className="facts-strip-main">
-          <div className="fact-chip fact-chip-title">
-            <span>{factLabel(titleFact.key, titleFact.label)}</span>
-            <strong title={titleFact.value}>{titleFact.value}</strong>
-          </div>
-        </div>
-      ) : null}
-
       {secondaryFacts.length || sourceUrl ? (
         <div className="facts-strip-side">
           {secondaryFacts.map((fact) => (
@@ -1323,7 +1315,8 @@ export function DeliverableStage({
                       </ArtifactAction>
                     ) : null}
 
-                    {showCopyAction && isDesktopApp() ? <ProofreadingButton captureId={capture.capture.id} /> : null}
+                    {showCopyAction && localToolsAvailable ? <ProofreadingButton captureId={capture.capture.id} /> : null}
+                    {showCopyAction && localToolsAvailable ? <SummaryButton captureId={capture.capture.id} /> : null}
                     {showCopyAction ? (
                       <button
                         className="copy-action is-primary"

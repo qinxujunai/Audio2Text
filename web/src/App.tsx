@@ -1067,6 +1067,7 @@ export default function App() {
             >
               <DeliverableStage
                 capture={currentCapture}
+                localToolsAvailable={Boolean(config && config.deployment_mode !== "cloud_preview" && (config.runtime_target === "local_web" || config.runtime_target === "windows_desktop"))}
                 onCaptureUpdated={setCurrentCapture}
                 onNotify={setToast}
                 onReset={resetWorkspace}

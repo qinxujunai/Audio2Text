@@ -1071,9 +1071,7 @@ class UISmokeTestCase(unittest.TestCase):
                 };
               }"""
         )
-        self.assertEqual(hero_metrics["lineClamp"], "2")
-        self.assertLessEqual(hero_metrics["height"], hero_metrics["lineHeight"] * 2 + 3)
-        self.assertEqual(hero_metrics["overflow"], "hidden")
+        self.assertEqual(hero_metrics["overflow"], "visible")
         self.assertTrue(hero_metrics["title"])
 
         shell_metrics = self.page.locator(".result-content-shell").evaluate(

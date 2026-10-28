@@ -43,19 +43,6 @@ export function formatElapsed(seconds: number): string {
   return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
 }
 
-/**
- * Remaining time from the observed rate, rounded coarsely so it never jitters.
- * Shown only once progress is meaningful and recent; hidden when it would be a guess.
- */
-export function estimateRemaining(progress: number, elapsedSeconds: number, stalledSeconds: number): string {
-  if (progress < 8 || progress >= 99 || elapsedSeconds < 10 || stalledSeconds > 30) return "";
-  const remaining = (elapsedSeconds * (100 - progress)) / progress;
-  if (!Number.isFinite(remaining) || remaining > 90 * 60) return "";
-  if (remaining < 45) return "即将完成";
-  if (remaining < 90) return "预计还需约 1 分钟";
-  return `预计还需约 ${Math.round(remaining / 60)} 分钟`;
-}
-
 function useProcessingClock(active: boolean, progress: number) {
   const startedAt = useRef<number>(Date.now());
   const progressAt = useRef<{ value: number; at: number }>({ value: progress, at: Date.now() });
@@ -101,8 +88,7 @@ export function ProcessingStage({
   const normalizedProgress = Math.round(Math.min(100, Math.max(progressPercent || 0, 0)));
   const safeDetail = safeProgressDetail(progressDetail);
   const { elapsed, stalled } = useProcessingClock(working, normalizedProgress);
-  const remaining = indeterminate ? "" : estimateRemaining(normalizedProgress, elapsed, stalled);
-  const reassurance = working && stalled > 30 ? "长内容需要更久，仍在处理" : "";
+  const reassurance = working && stalled > 30 ? "进度暂未更新，长内容可能需要更长时间" : "";
 
   return (
     <section
@@ -148,7 +134,6 @@ export function ProcessingStage({
             </div>
             <div className="processing-meter-time" aria-live="off">
               <span>已用 {formatElapsed(elapsed)}</span>
-              {remaining ? <span>{remaining}</span> : null}
             </div>
           </div>
         ) : null}
