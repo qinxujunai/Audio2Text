@@ -1,7 +1,7 @@
 # AGENTS.md
 
 <!-- project-doc-status:start -->
-> 文档维护同步：**2026-10-23** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
+> 文档维护同步：**2026-10-28** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
 > v2.3.1 已于 2026-10-27 正式发布；历史验证仍以各自测试日期和安装包摘要为准。
 <!-- project-doc-status:end -->
 
