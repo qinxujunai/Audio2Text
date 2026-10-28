@@ -15,12 +15,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.local_preferences import (cuda_available, read_preferences, save_preferences,
                                    proofreading_config, transcription_options, save_section)
 from app.proofreading import ProofreadingService, list_models, verify_proofreading, ProofreadingError, StaleProofreadingError
+from app.summary import SummaryService
 from app.settings import DEPLOYMENT_MODE, MODEL_PATH, RUNTIME_TARGET, SENSEVOICE_MODEL_DIR
 from app.storage import get_capture_repository
 from scripts.config import COMPUTE_TYPE, DEVICE
 
 repository = get_capture_repository()
 service = ProofreadingService(repository)
+summary_service = SummaryService(repository)
 
 
 def local_only(request: Request):
@@ -102,6 +104,8 @@ def _check_idle():
         raise HTTPException(409, "请等待当前处理任务完成，再更改本地设置。")
     if any(job["status"] == "running" for job in service.jobs.values()):
         raise HTTPException(409, "请等待校对完成或取消后再更改设置。")
+    if any(job["status"] == "running" for job in summary_service.jobs.values()):
+        raise HTTPException(409, "请等待摘要完成或取消后再更改设置。")
 
 
 @router.get("/preferences")
@@ -158,6 +162,8 @@ def patch_preferences(payload: PreferencesPatch):
         _check_idle()
     elif any(job["status"] == "running" for job in service.jobs.values()):
         raise HTTPException(409, "请等待校对完成或取消后再更改校对设置。")
+    elif any(job["status"] == "running" for job in summary_service.jobs.values()):
+        raise HTTPException(409, "请等待摘要完成或取消后再更改校对设置。")
     try:
         values = payload.model_dump(exclude_unset=True)
         section = values.pop("section")
@@ -218,6 +224,43 @@ async def cuda_check():
         return {"device": runtime["device"], "compute_type": runtime["compute_type"], "model": runtime.get("model") or Path(runtime["model_path"]).name}
     except Exception as exc:
         raise HTTPException(400, "CUDA 验证未通过，请检查本地模型与 CUDA 运行组件；未切换到 CPU。") from exc
+
+
+@router.get("/captures/{capture_id}/summary")
+def summary_status(capture_id: str):
+    try:
+        return summary_service.status(capture_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.get("/summary/config")
+def summary_config():
+    try:
+        return summary_service.preview()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+class SummaryStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    config_id: str = Field(min_length=64, max_length=64)
+
+
+@router.post("/captures/{capture_id}/summary")
+def start_summary(capture_id: str, payload: SummaryStartRequest):
+    try:
+        return summary_service.start(capture_id, payload.config_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+
+
+@router.post("/captures/{capture_id}/summary/cancel")
+def cancel_summary(capture_id: str, payload: CancelRequest):
+    try:
+        return summary_service.cancel(capture_id, payload.job_id)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
 
 
 @router.get("/captures/{capture_id}/proofreading")

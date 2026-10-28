@@ -194,3 +194,66 @@ export function ProofreadingButton({ captureId }: { captureId: string }) {
   const [open, setOpen] = useState(false);
   return <><button type="button" className="copy-action" onClick={() => setOpen(true)}><Check size={15} />校对</button>{open && <ProofreadingDialog key={captureId} captureId={captureId} onClose={() => setOpen(false)} />}</>;
 }
+
+type SummaryPoint = { point: string; quote: string; start: number; end: number };
+type SummaryState = { job: { id: string; status: string; progress: number; message: string } | null; saved: { overview: string; overview_ids: number[]; points: SummaryPoint[]; model: string } | null };
+
+function SummaryDialog({ captureId, onClose }: { captureId: string; onClose: () => void }) {
+  const [data, setData] = useState<SummaryState>({ job: null, saved: null });
+  const [config, setConfig] = useState<{ base_url: string; model: string; config_id: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const running = data.job?.status === "running";
+  const revision = useRef(0);
+  const load = async () => {
+    const current = ++revision.current;
+    const result = await localRequest<SummaryState>(`/captures/${captureId}/summary`);
+    if (current === revision.current) setData(result);
+  };
+  useEffect(() => {
+    void load().catch(e => setMessage(e.message));
+    setConfig(null);
+    void localRequest<{ base_url: string; model: string; config_id: string }>("/summary/config").then(setConfig).catch(e => setMessage(e.message));
+  }, [captureId, settingsOpen]);
+  useEffect(() => {
+    if (!running || busy) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try { await load(); } catch (e) { if (!cancelled) setMessage(e instanceof Error ? e.message : "无法读取进度"); }
+      if (!cancelled) timer = setTimeout(() => void poll(), 1500);
+    };
+    timer = setTimeout(() => void poll(), 1500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [running, busy, captureId]);
+  const run = async (action: () => Promise<void>) => {
+    ++revision.current; setBusy(true); setMessage("");
+    try { await action(); } catch (e) { setMessage(e instanceof Error ? e.message : "摘要未完成"); }
+    finally { setBusy(false); }
+  };
+  return <Dialog title="摘要与要点" onClose={onClose}><div className="local-tools-body">
+    <p>AI 根据原文生成要点，引用原文供核对；请以原文为准。</p>
+    <p className="local-tools-note">点击生成后，全文将分段发送至 {config?.base_url || "尚未配置的模型服务"}（模型：{config?.model || "未配置"}），可能产生服务费用。原文不会被修改。</p>
+    <div className="local-tools-actions">
+      <button type="button" disabled={busy || running} onClick={() => setSettingsOpen(true)}><Settings2 size={16} />配置模型</button>
+      <button type="button" className="is-primary" disabled={busy || running || !config} onClick={() => void run(async () => {
+        const job = await localRequest<NonNullable<SummaryState["job"]>>(`/captures/${captureId}/summary`, { config_id: config?.config_id });
+        setData(d => ({ ...d, job }));
+      })}>{data.saved ? "重新生成" : "生成摘要"}</button>
+      {running && <button type="button" disabled={busy} onClick={() => void run(async () => {
+        await localRequest(`/captures/${captureId}/summary/cancel`, { job_id: data.job?.id }); await load();
+      })}>取消摘要</button>}
+    </div>
+    {running && <div role="status"><progress value={data.job?.progress || 0} max={100} /><p>正在整理 · {data.job?.progress}%</p><p>取消会停止后续分段；当前已进入发送流程的请求可能仍会发出或完成，无法撤回。</p></div>}
+    {data.job?.status === "failed" && <p role="alert">{data.job.message}</p>}
+    {data.job?.status === "cancelled" && <p role="status">摘要已取消，原文未改变。</p>}
+    {data.saved && <section><h3>{data.job?.status === "ready" ? "AI 生成的摘要与要点" : "上一次成功的摘要与要点"}</h3><p>{data.saved.overview}</p><details><summary>查看概述的原文依据</summary>{data.saved.overview_ids.map(i => <blockquote key={i}>{data.saved?.points[i]?.quote}</blockquote>)}</details>{data.saved.points.map((item, i) => <div className="local-tools-message" key={`${item.start}-${i}`}><p>{item.point}</p><details><summary>查看原文依据</summary><blockquote>{item.quote}</blockquote></details></div>)}</section>}
+    {message && <p role="alert">{message}</p>}
+  </div>{settingsOpen && <PreferencesDialog onClose={() => setSettingsOpen(false)} />}</Dialog>;
+}
+
+export function SummaryButton({ captureId }: { captureId: string }) {
+  const [open, setOpen] = useState(false);
+  return <><button type="button" className="copy-action" onClick={() => setOpen(true)}>AI 摘要</button>{open && <SummaryDialog key={captureId} captureId={captureId} onClose={() => setOpen(false)} />}</>;
+}

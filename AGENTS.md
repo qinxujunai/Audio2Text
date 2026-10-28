@@ -1,5 +1,7 @@
 # AGENTS.md
 
+本地待发布的结果页、校对和摘要改动及其边界见 [项目交付状态](docs/project-status.md)；不得将本地源码或安装候选当作已公开发布。
+
 <!-- project-doc-status:start -->
 > 文档维护同步：**2026-10-28** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
 > v2.3.1 已于 2026-10-27 正式发布；历史验证仍以各自测试日期和安装包摘要为准。
