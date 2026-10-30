@@ -7,7 +7,7 @@ app_port: 8000
 # 万象成文
 
 <!-- project-doc-status:start -->
-> 文档维护同步：**2026-10-23** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
+> 文档维护同步：**2026-10-30** · 项目维护文档 · [最新状态](docs/project-status.md) · [文档索引](docs/README.md)
 > v2.3.0 已于 2026-10-23 正式发布；历史验证仍以各自测试日期和安装包摘要为准。
 <!-- project-doc-status:end -->
 
@@ -48,15 +48,17 @@ Windows 10 / 11 x64。基础识别与媒体组件首次约下载 222 MB，之后
 
 2.3 版本提供保守 AI 校对：只提出明确错误的修正建议，由你逐处确认，再另存校对版。原文保留，两版分别下载。开始校对前，界面会说明文字将发送至你配置的服务，费用由该服务决定。
 
+也可以手动生成 AI 摘要与要点，逐条查看原文依据。摘要独立保存，不修改原文；生成前会说明发送范围和可能的费用，内容需要对照原文核查。
+
 地址与密钥填写后可以检测模型，也可以手动填写；“测试校对”用专用短示例检查实际返回。“已保存”与“测试通过”分别显示。长文按块保留进度，取消或失败后可以继续。密钥按 Windows 当前用户加密保存在本机。
 
 具备兼容 NVIDIA 显卡的电脑可准备 SenseVoice CUDA 组件，并验证实际执行设备。显式 CUDA 失败会明确提示。CPU 兼容路线与 CUDA 路线的权重不同；[测评报告](docs/ascend-accuracy-20261012.md) 区分模型质量与相同权重的设备加速。
 
-**发布状态：[v2.3.0 已正式发布](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.0)，同一文件通过本机安装及干净 Windows 验收。固定 60 条链接三轮 141/180 完整、零超时，失败保留在分母；详见[本轮验证](docs/platform-benchmark-20261022.md)。**
+**发布状态：[v2.3.2 已正式发布](https://github.com/qinxujunai/Audio2Text/releases/tag/v2.3.2)，安装包通过本机安装及干净 Windows 验收。2026 年 10 月固定 60 条链接三轮基准为 141/180 完整、零超时，失败保留在分母；详见[交付状态](docs/project-status.md)与[基准记录](docs/platform-benchmark-20261027.md)。**
 
 ## 了解更多
 
-- [本轮实施与发布状态](docs/release-2.3.0.md)
+- [当前实施与发布状态](docs/project-status.md)
 - [本地 CUDA 与校对说明](docs/local-cuda-proofreading-plan.md)
 - [交互与实际安装验证](docs/interaction-refinement-20261012.md)
 - [开发、部署与维护](docs/developer-guide.md)
