@@ -11,9 +11,9 @@
 
 接手前按顺序读：本文件 →「不许回退的决定」→ [`docs/project-status.md`](docs/project-status.md)（源码、安装版、Release、官网各自的状态）。
 
-## 当前事实（2026-10-23）
+## 项目结构与历史发布事实
 
-- **分支**：`clean-main`（默认）已合入通过验收的 2.3；正式版 v2.3.0 冻结来源 `a192250`，安装包 SHA-256 `a4a7a62ccf597210587bf2a4f837aa78c7ad62d2c4cf9813634c91a6b3d2b1a3`。`codex/wanxiang-platform-audio-ui` 保留开发历史；之后的文档/合并提交不冒称安装来源。
+- **分支与版本**：`clean-main` 为默认分支；截至 2026-11-02 核对，最新正式发布为 v2.3.2，冻结源码 `a82d87b`，验收与回滚依据见 [项目交付状态](docs/project-status.md)。本机安装状态和当前 Release 操作前重新核对。v2.3.0 冻结来源 `a192250` 属于历史，`codex/wanxiang-platform-audio-ui` 保留开发历史；文档/合并提交不冒称安装来源。
 - **结构**：
   - `app/main.py` FastAPI 入口；`app/pipeline.py` 一条 Capture 的流程（识别来源 → 提取 → 转写 → 组装 → 交付文件，后台补齐图片和原视频）。
   - `app/source_adapters.py` 每个平台的取数链（直连 → 开源工具 → 浏览器会话）；`app/extractors.py` 调度与下载；`app/browser_provider.py` Playwright 兜底。

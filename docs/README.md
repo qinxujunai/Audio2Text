@@ -1,15 +1,15 @@
 # 文档索引与接手顺序
 
 <!-- project-doc-status:start -->
-> 文档维护同步：**2026-10-23** · 项目维护文档 · [最新状态](project-status.md) · [文档索引](README.md)
-> v2.3.0 已正式发布；历史验证仍以各自测试日期和安装包摘要为准。
+> 文档入口核对：**2026-11-02** · [最新状态](project-status.md) · [文档索引](README.md)
+> 已核对公开正式版为 v2.3.2；版本会变化，后续操作前重新检查 Release。历史验证仍以各自测试日期和安装包摘要为准。
 <!-- project-doc-status:end -->
 
-先读 [项目最新状态](project-status.md)，再读 [AGENTS.md](../AGENTS.md)。本批交付更新日期为 **2026-10-23**；这不是对历史测试的重新执行日期。
+先读 [项目最新状态](project-status.md)，再读 [AGENTS.md](../AGENTS.md)。入口更正不代表重新执行历史测试或重新检查本机安装。
 
 ## 先确认所在分支
 
-默认分支 `clean-main` 已合入通过本机和干净 Windows 同文件验收的 2.3，实现历史保留在 `codex/wanxiang-platform-audio-ui`（[PR #2](https://github.com/qinxujunai/Audio2Text/pull/2)）。正式 v2.3.0 和当前安装版来源为冻结 `a192250`；后续文档与合并提交不代表新安装来源。三轮结果与剩余链接限制见[本轮验证](platform-benchmark-20261022.md)，官网下载回执见[项目状态](project-status.md)。
+默认分支为 `clean-main`。截至本次核对，正式 v2.3.2 冻结源码为 `a82d87b`，历史本机安装及干净 Windows 同文件验收证据见[项目状态](project-status.md)；当前本机版本需现场核对。v2.3.0 冻结源码 `a192250` 和 [PR #2](https://github.com/qinxujunai/Audio2Text/pull/2) 属于历史记录，不能用来判断当前安装版。三轮结果与剩余链接限制见[历史验证](platform-benchmark-20261022.md)。
 
 ## 文档清单
 
