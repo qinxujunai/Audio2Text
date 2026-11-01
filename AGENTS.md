@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**提交者只有他一个人（2026-11-02 他的要求，所有仓库、以后每一次）**：作者和提交者都只能是 `qinxujunai <266454737+qinxujunai@users.noreply.github.com>`。智能体（Claude、Codex 等）、定时任务（不用 `github-actions[bot]`）、合并都一样；提交说明里不加 `Co-Authored-By`、`Claude-Session` 或任何工具署名。不要在网页上点合并（会让 GitHub 成为提交者），在本地合并后推送。
+**提交者只有他一个人（2026-11-02 他的要求，所有仓库、以后每一次）**：作者和提交者都只能是 `qinxujunai <266454737+qinxujunai@users.noreply.github.com>`。智能体（Claude、Codex 等）、定时任务（不用 `github-actions[bot]`）、合并都一样；提交说明里不加 `Co-Authored-By`、`Claude-Session` 或任何工具署名。不要在网页上点合并（会让 GitHub 成为提交者），在本地合并后推送。2026-11-02 已把全部历史统一改成这一个署名（文件内容不变）；文档里引用的旧提交编号对照见 `docs/commit-map-2026-11-02.txt`。版本标签仍指向改写前的提交（内容相同），因为云端推不了标签。
 
 2.3.2 结果页、校对和摘要的发布证据与边界见 [项目交付状态](docs/project-status.md)；真实外部模型未在本轮验收中调用。
 
