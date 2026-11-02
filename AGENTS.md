@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**提交者只有他一个人（2026-11-02 他的要求，所有仓库、以后每一次）**：作者和提交者都只能是 `qinxujunai <266454737+qinxujunai@users.noreply.github.com>`。智能体（Claude、Codex 等）、定时任务（不用 `github-actions[bot]`）、合并都一样；提交说明里不加 `Co-Authored-By`、`Claude-Session` 或任何工具署名。不要在网页上点合并（会让 GitHub 成为提交者），在本地合并后推送。2026-11-02 已把全部历史统一改成这一个署名（文件内容不变）；文档里引用的旧提交编号对照见 `docs/commit-map-2026-11-02.txt`。版本标签仍指向改写前的提交（内容相同），因为云端推不了标签。
+**提交者只有他一个人（2026-11-02 他的要求，所有仓库、以后每一次）**：作者和提交者都只能是 `qinxujunai <266454737+qinxujunai@users.noreply.github.com>`。智能体（Claude、Codex 等）、定时任务（不用 `github-actions[bot]`）、合并都一样；提交说明里不加 `Co-Authored-By`、`Claude-Session` 或任何工具署名。不要在网页上点合并（会让 GitHub 成为提交者），在本地合并后推送。2026-11-02 已把全部历史统一改成这一个署名（文件内容不变）；文档里引用的旧提交编号对照见 `docs/commit-map-2026-11-02.txt`。版本标签也已于同日移到改写后的对应提交（名字不变；带说明的标签保留原说明和日期，标注人为 qinxujunai），Release 和附件不变。
 
 2.3.2 结果页、校对和摘要的发布证据与边界见 [项目交付状态](docs/project-status.md)；真实外部模型未在本轮验收中调用。
 
@@ -52,6 +52,8 @@
 - `app/extractors.py`（约 2800 行）和 `browser_provider.py`（约 1900 行）仍偏大，按上文方式逐个平台迁出。
 
 ## 交接日志
+
+- **2026-11-02，Claude**：经他同意，把 7 个版本标签移到历史改写后的对应提交（新旧提交文件内容完全相同），如 `v2.3.2` → `c7bab79`；带说明的 3 个（`runtime-v1`、`v2.0.0`、`v2.1.0`）按原说明和原日期重建，标注人为 qinxujunai。一次原子推送，每个标签只在 GitHub 上仍是旧值时才更新（`--force-with-lease`）。同时改了本文件第 3 行和 `docs/commit-map-2026-11-02.txt` 第一行的标签说明。验证：`git ls-remote --tags origin` 解引用后逐个等于对照表里的新提交；14 个 Release 的名称、标签、草稿状态、发布时间、说明长度和附件数（共 31 个）推送前后完全相同。回滚：旧值留在他本机新克隆的本地引用 `refs/backup/tags-before-move-20261102/*`（未推送）。
 
 - **2026-10-27，Codex**：同步云端 `1017b31`，发布冻结 `e678755`；相同 60 链接三轮 141/180、零超时，validator 通过且逐条完整状态与 2.3.0 相同。后端和 unittest 各 394 项（1 跳过）、前端构建和 TypeScript 通过；本机安装、真实 CUDA 转写和原视频播放、[干净 Windows 同文件验收](https://github.com/qinxujunai/Audio2Text/actions/runs/40526076993)通过。v2.3.1 安装包 SHA-256 `90f294be738856dfb1b4241f1f7c4f4c8403a3ccb905f64bc3006b4d1c04218a`，回滚 `workspace/temp/product-rollback-20261027-142252/`。Pages 手动部署 `40528976210` 成功；官网匿名完整下载的 SHA-256 与验收包一致。Release 自动触发的 Pages 运行 `40528885587` 失败，失败记录保留；不得将云端预览重新部署。
 
