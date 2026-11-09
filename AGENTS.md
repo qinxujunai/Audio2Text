@@ -53,6 +53,8 @@
 
 ## 交接日志
 
+- **2026-11-09，Claude**：官网 `site/` 按 Apple 产品页的思路重做版式（作者说原来的「太丑」，确认只改官网、不动软件界面）。文案一字不改；去掉四张来源卡上无意义的符号图标，换成用 HTML/CSS 画的小界面示意（标「界面为示意」）；「贴一个链接」和「保留原话」两节改为左文右图（结果卡示意、原有的勾选校对演示）；下载区改为黑底，SHA-256 收进可展开的「核对校验值」；标题第二句灰色（`app.js` 的 `splitTitle`，按句号、逗号分）；小标题不再用蓝色。演示录像、占位符、`data-i18n` 键、返回链接、品牌圆点都不变；新增的示例文字中英文写在 `app.js`。验证：`tests.test_public_site`、`test_brand_and_showcase` 通过；`test_public_site_browser` 需要 Python 版 Playwright（云端没有），其中每一项检查（四种宽度无横向溢出、手机点击区域 ≥44px、中英切换并保持、平台说明、无 YouTube、演示说明、减少动效不自动播放、试用链接 2 个）用 Node 版 Playwright 照写一遍全部通过。未部署：等作者看完预览说上线，再手动触发 Pages。
+
 - **2026-11-02，Claude**：经他同意，把 7 个版本标签移到历史改写后的对应提交（新旧提交文件内容完全相同），如 `v2.3.2` → `c7bab79`；带说明的 3 个（`runtime-v1`、`v2.0.0`、`v2.1.0`）按原说明和原日期重建，标注人为 qinxujunai。一次原子推送，每个标签只在 GitHub 上仍是旧值时才更新（`--force-with-lease`）。同时改了本文件第 3 行和 `docs/commit-map-2026-11-02.txt` 第一行的标签说明。验证：`git ls-remote --tags origin` 解引用后逐个等于对照表里的新提交；14 个 Release 的名称、标签、草稿状态、发布时间、说明长度和附件数（共 31 个）推送前后完全相同。回滚：旧值留在他本机新克隆的本地引用 `refs/backup/tags-before-move-20261102/*`（未推送）。
 
 - **2026-10-27，Codex**：同步云端 `1017b31`，发布冻结 `e678755`；相同 60 链接三轮 141/180、零超时，validator 通过且逐条完整状态与 2.3.0 相同。后端和 unittest 各 394 项（1 跳过）、前端构建和 TypeScript 通过；本机安装、真实 CUDA 转写和原视频播放、[干净 Windows 同文件验收](https://github.com/qinxujunai/Audio2Text/actions/runs/40526076993)通过。v2.3.1 安装包 SHA-256 `90f294be738856dfb1b4241f1f7c4f4c8403a3ccb905f64bc3006b4d1c04218a`，回滚 `workspace/temp/product-rollback-20261027-142252/`。Pages 手动部署 `40528976210` 成功；官网匿名完整下载的 SHA-256 与验收包一致。Release 自动触发的 Pages 运行 `40528885587` 失败，失败记录保留；不得将云端预览重新部署。

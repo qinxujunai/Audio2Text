@@ -82,6 +82,36 @@ Object.assign(copy.en, {
   faqSafety: "Why does Windows show a warning?", faqSafetyBody: "The installer is currently unsigned. Download from this page's GitHub Release and check the SHA-256 above. Use the feedback link if you encounter a problem."
 });
 
+// 2026-11-09: sample text inside the illustrated scenes (decorative, aria-hidden) and the download panel.
+Object.assign(copy.zh, {
+  mockVideo: "今天想和大家聊三件事。", mockSpeakerA: "主播", mockSpeakerB: "嘉宾", mockPodcast: "我们先从一个问题开始。",
+  mockFile: "访谈录音.m4a", mockLocal: "在本机识别", mockArticle: "一篇图文笔记", mockNote: "界面为示意。",
+  tabText: "正文", tabVideo: "视频", tabImages: "图片", copyAll: "复制全文", checksum: "核对校验值（SHA-256）"
+});
+Object.assign(copy.en, {
+  mockVideo: "Three things I want to cover today.", mockSpeakerA: "Host", mockSpeakerB: "Guest", mockPodcast: "Let's start with one question.",
+  mockFile: "interview.m4a", mockLocal: "Recognizing on this PC", mockArticle: "A visual note", mockNote: "Illustrations, not screenshots.",
+  tabText: "Text", tabVideo: "Video", tabImages: "Images", copyAll: "Copy all", checksum: "Verify the checksum (SHA-256)"
+});
+
+// Two-tone headlines, as on the VoiceFlow site: the line after the first sentence break is set in grey.
+function splitTitle(element) {
+  const text = element.textContent.trim();
+  let cut = -1;
+  for (const mark of ["。", "，", ". ", ", "]) {
+    const at = text.indexOf(mark);
+    if (at > 0 && at + mark.length < text.length) { cut = at + mark.trimEnd().length; break; }
+  }
+  if (cut < 0) return;
+  const rest = text.slice(cut).trim();
+  const first = document.createElement("span");
+  first.textContent = text.slice(0, cut);
+  const second = document.createElement("span");
+  second.className = "title-soft";
+  second.textContent = rest;
+  element.replaceChildren(first, second);
+}
+
 const languageButtons = [...document.querySelectorAll("[data-language]")];
 const film = document.querySelector("video");
 const filmControl = document.querySelector(".film-control");
@@ -106,6 +136,7 @@ function applyLanguage(nextLanguage) {
     const key = element.dataset.i18nAria;
     if (selected[key]) element.setAttribute("aria-label", selected[key]);
   });
+  document.querySelectorAll("[data-split]").forEach(splitTitle);
   languageButtons.forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.language === language)));
   if (filmControlText) filmControlText.textContent = film && !film.paused ? selected.pause : selected.play;
   localStorage.setItem("wanxiang-language", language);

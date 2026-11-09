@@ -40,107 +40,167 @@
 
   <main id="main">
     <section class="hero" id="top">
-      <p class="eyebrow" data-i18n="eyebrow">Windows 本地优先的内容整理工具</p>
-      <h1>万象成文</h1>
-      <p class="hero-lede" data-i18n="heroLede">把视频、播客和图文，直接变成可用的文字与媒体。</p>
-      <div class="hero-actions">
-        <a class="button primary" href="__WANXIANG_INSTALLER_URL__" data-download data-i18n="download">下载 Windows 版</a>
-        __WANXIANG_TRIAL_LINK__
-        <a class="text-link" href="https://github.com/qinxujunai/Audio2Text" data-i18n="github">查看 GitHub</a>
+      <div class="hero-copy">
+        <p class="eyebrow" data-i18n="eyebrow">Windows 本地优先的内容整理工具</p>
+        <h1>万象成文</h1>
+        <p class="hero-lede" data-i18n="heroLede">把视频、播客和图文，直接变成可用的文字与媒体。</p>
+        <div class="hero-actions">
+          <a class="button primary" href="__WANXIANG_INSTALLER_URL__" data-download data-i18n="download">下载 Windows 版</a>
+          __WANXIANG_TRIAL_LINK__
+          <a class="text-link" href="https://github.com/qinxujunai/Audio2Text" data-i18n="github">查看 GitHub</a>
+        </div>
+        <p class="compatibility">Windows 10 / 11 · x64 · v__WANXIANG_VERSION__</p>
       </div>
-      <p class="compatibility">Windows 10 / 11 · x64 · v__WANXIANG_VERSION__</p>
-      <figure class="product-film">
-        <video muted loop playsinline preload="none" poster="assets/demo-poster.jpg" aria-label="十二秒演示：上传一段 52 秒的中文视频，拿回全部文字和可播放的视频" data-i18n-aria="demoLabel">
-          <source src="assets/wanxiang-demo.mp4" type="video/mp4">
-        </video>
-        <button class="film-control" type="button" aria-pressed="false" data-i18n-aria="playDemo" aria-label="播放演示">
-          <span class="play-icon" aria-hidden="true"></span>
-          <span data-i18n="play">播放演示</span>
-        </button>
-      </figure>
-      <p class="demo-note" data-i18n="demoNote">这是一次真实处理：52 秒的中文视频，语音转写用时 5.3 秒（云端 CPU），等待部分已加速。素材：中国新闻社，CC BY 3.0。</p>
+      <div class="film-section">
+        <div class="product-stage">
+          <figure class="product-film">
+            <video muted loop playsinline preload="none" poster="assets/demo-poster.jpg" aria-label="十二秒演示：上传一段 52 秒的中文视频，拿回全部文字和可播放的视频" data-i18n-aria="demoLabel">
+              <source src="assets/wanxiang-demo.mp4" type="video/mp4">
+            </video>
+            <button class="film-control" type="button" aria-pressed="false" data-i18n-aria="playDemo" aria-label="播放演示">
+              <span class="play-icon" aria-hidden="true"></span>
+              <span data-i18n="play">播放演示</span>
+            </button>
+          </figure>
+          <p class="demo-note" data-i18n="demoNote">这是一次真实处理：52 秒的中文视频，语音转写用时 5.3 秒（云端 CPU），等待部分已加速。素材：中国新闻社，CC BY 3.0。</p>
+        </div>
+      </div>
     </section>
 
     <section class="scenarios section" id="scenarios">
-      <div class="section-heading">
-        <p class="section-kicker" data-i18n="scenariosKicker">让有价值的内容，留得下来</p>
-        <h2 data-i18n="scenariosTitle">听过、看过。也能找回。</h2>
-      </div>
-      <div class="scenario-grid">
-        <article><span aria-hidden="true">↗</span><h3 data-i18n="scenarioVideo">长视频</h3><p data-i18n="scenarioVideoBody">留下完整文字，回看视频，复制值得保留的那一段。</p></article>
-        <article><span aria-hidden="true">◌</span><h3 data-i18n="scenarioPodcast">播客</h3><p data-i18n="scenarioPodcastBody">把对话变成正文，让听到的内容也能被搜索和引用。</p></article>
-        <article><span aria-hidden="true">＋</span><h3 data-i18n="scenarioFile">本地音视频</h3><p data-i18n="scenarioFileBody">选择自己的录音或视频，在电脑上完成语音识别。</p></article>
-        <article><span aria-hidden="true">≡</span><h3 data-i18n="scenarioArticle">图文</h3><p data-i18n="scenarioArticleBody">正文与图片一起留下，阅读、查看与保存各得其所。</p></article>
+      <div class="shell">
+        <div class="section-heading">
+          <p class="section-kicker" data-i18n="scenariosKicker">让有价值的内容，留得下来</p>
+          <h2 data-i18n="scenariosTitle" data-split>听过、看过。也能找回。</h2>
+        </div>
+        <div class="scenario-grid">
+          <article class="scene">
+            <h3 data-i18n="scenarioVideo">长视频</h3>
+            <div class="mock mock-video" aria-hidden="true">
+              <div class="mock-player"><span class="mock-play"></span><span class="mock-track"><i></i></span><span class="mock-time">12:48</span></div>
+              <p><time>00:12</time><span data-i18n="mockVideo">今天想和大家聊三件事。</span></p>
+              <p><time>00:19</time><span class="mock-bar w80"></span></p>
+              <p><time>00:27</time><span class="mock-bar w60"></span></p>
+            </div>
+            <p class="scene-caption" data-i18n="scenarioVideoBody">留下完整文字，回看视频，复制值得保留的那一段。</p>
+          </article>
+          <article class="scene">
+            <h3 data-i18n="scenarioPodcast">播客</h3>
+            <div class="mock mock-podcast" aria-hidden="true">
+              <div class="mock-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+              <p><b data-i18n="mockSpeakerA">主播</b><span data-i18n="mockPodcast">我们先从一个问题开始。</span></p>
+              <p><b data-i18n="mockSpeakerB">嘉宾</b><span class="mock-bar w70"></span></p>
+            </div>
+            <p class="scene-caption" data-i18n="scenarioPodcastBody">把对话变成正文，让听到的内容也能被搜索和引用。</p>
+          </article>
+          <article class="scene">
+            <h3 data-i18n="scenarioFile">本地音视频</h3>
+            <div class="mock mock-file" aria-hidden="true">
+              <div class="mock-chip"><span class="mock-file-icon"></span><span><b data-i18n="mockFile">访谈录音.m4a</b><small>38:06 · 52 MB</small></span></div>
+              <div class="mock-progress"><span data-i18n="mockLocal">在本机识别</span><span class="mock-track"><i></i></span></div>
+              <p><span class="mock-bar w90"></span></p>
+              <p><span class="mock-bar w50"></span></p>
+            </div>
+            <p class="scene-caption" data-i18n="scenarioFileBody">选择自己的录音或视频，在电脑上完成语音识别。</p>
+          </article>
+          <article class="scene">
+            <h3 data-i18n="scenarioArticle">图文</h3>
+            <div class="mock mock-article" aria-hidden="true">
+              <b data-i18n="mockArticle">一篇图文笔记</b>
+              <div class="mock-images"><span></span><span></span><span></span></div>
+              <p><span class="mock-bar w90"></span></p>
+              <p><span class="mock-bar w70"></span></p>
+            </div>
+            <p class="scene-caption" data-i18n="scenarioArticleBody">正文与图片一起留下，阅读、查看与保存各得其所。</p>
+          </article>
+        </div>
+        <p class="mock-note" data-i18n="mockNote">界面为示意。</p>
       </div>
     </section>
 
-    <section class="workflow section" id="workflow">
-      <div class="section-heading">
-        <p class="section-kicker" data-i18n="workflowKicker">一个入口</p>
-        <h2 data-i18n="workflowTitle">贴一个链接，拿回全部文字。</h2>
-        <p data-i18n="workflowBody">粘贴公开链接或选择本地文件。能直接取得正文或字幕时立即交付；需要识别时，再自动选择当前电脑适合的路径。</p>
-      </div>
-      <div class="flow-line" aria-label="万象成文处理流程" data-i18n-aria="flowLabel">
-        <div><span class="source-dot blue"></span><strong data-i18n="flowInput">视频、播客、图文</strong></div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div><span class="source-dot green"></span><strong data-i18n="flowProcess">提取与识别</strong></div>
-        <span class="flow-arrow" aria-hidden="true">→</span>
-        <div><span class="source-dot amber"></span><strong data-i18n="flowOutput">文字与媒体</strong></div>
-      </div>
-      <div class="deliverables">
-        <article><span>01</span><h3 data-i18n="textTitle">可用的正文</h3><p data-i18n="textBody">复制全文，或下载 TXT 与 Markdown。</p></article>
-        <article><span>02</span><h3 data-i18n="mediaTitle">原始媒体</h3><p data-i18n="mediaBody">视频、音频和图片分别交付，不混在一起。</p></article>
-        <article><span>03</span><h3 data-i18n="localTitle">本地优先</h3><p data-i18n="localBody">Windows 版在本机处理，自动检测 CPU 与 GPU。</p></article>
+    <section class="workflow section split-section" id="workflow">
+      <div class="shell split">
+        <div class="split-copy">
+          <p class="section-kicker" data-i18n="workflowKicker">从输入到保存</p>
+          <h2 data-i18n="workflowTitle" data-split>贴一个链接，拿回全部文字。</h2>
+          <p class="section-lede" data-i18n="workflowBody">粘贴链接或选择文件，查看正文与媒体，再复制或保存。已有正文或字幕时优先提取；需要识别时，在本机完成。</p>
+          <ul class="deliverables">
+            <li><b data-i18n="textTitle">可用的正文</b><span data-i18n="textBody">复制全文，或下载 TXT 与 Markdown。</span></li>
+            <li><b data-i18n="mediaTitle">原始媒体</b><span data-i18n="mediaBody">视频、音频和图片分别交付，不混在一起。</span></li>
+            <li><b data-i18n="localTitle">本地优先</b><span data-i18n="localBody">本地文件在电脑上识别，支持可选 CUDA 加速。</span></li>
+          </ul>
+        </div>
+        <div class="result-card" aria-hidden="true">
+          <div class="result-input"><span class="result-link">b23.tv/…</span><span class="result-go"></span></div>
+          <div class="result-tabs"><span class="on" data-i18n="tabText">正文</span><span data-i18n="tabVideo">视频</span><span data-i18n="tabImages">图片</span></div>
+          <div class="result-body">
+            <p data-i18n="mockVideo">今天想和大家聊三件事。</p>
+            <p><span class="mock-bar w90"></span></p>
+            <p><span class="mock-bar w80"></span></p>
+            <p><span class="mock-bar w60"></span></p>
+          </div>
+          <div class="result-actions"><span class="dark" data-i18n="copyAll">复制全文</span><span>TXT</span><span>Markdown</span></div>
+        </div>
       </div>
     </section>
 
-    <section class="local-proof section" id="local-proof">
-      <div class="section-heading compact">
-        <p class="section-kicker" data-i18n="localProofKicker">识别在本地，修正由你决定</p>
-        <h2 data-i18n="localProofTitle">保留原话。只改明确的错。</h2>
-        <p data-i18n="localProofBody">AI 校对提出小范围修正，逐处确认后另存一份。原文一直保留，不润色、不总结、不删段。</p>
+    <section class="local-proof section split-section soft-section" id="local-proof">
+      <div class="shell split">
+        <div class="split-copy">
+          <p class="section-kicker" data-i18n="localProofKicker">识别在本地，修正由你决定</p>
+          <h2 data-i18n="localProofTitle" data-split>保留原话。只改明确的错。</h2>
+          <p class="section-lede" data-i18n="localProofBody">AI 校对提出小范围修正，逐处确认后另存一份。原文一直保留，不润色、不总结、不删段。</p>
+          <div class="local-notes"><p data-i18n="gpuBody">支持 NVIDIA CUDA 加速，实际运行设备在本地设置中可查看。也可选择 CPU。</p><p data-i18n="privacyBody">本地识别不上传音频。启用远程 AI 校对时，会把待校对文字发送给你配置的模型服务；费用由该服务收取。</p></div>
+        </div>
+        <div class="proof-demo" aria-label="校对操作示例" data-i18n-aria="proofDemoLabel">
+          <div class="demo-toolbar"><span data-i18n="proofDemoTitle">确认每一处修正</span><span class="demo-caption" data-i18n="exampleOnly">示例文字</span></div>
+          <p class="demo-original" data-i18n="demoOriginal">这里有一个错别宇。金额三百元。保留所有原话。</p>
+          <label class="demo-suggestion"><input id="demo-correction" type="checkbox"><span class="demo-change"><del>错别宇</del> <span aria-hidden="true">→</span> <strong>错别字</strong></span><small data-i18n="demoReason">仅修正错别字</small></label>
+          <p class="demo-result" aria-live="polite" data-i18n="demoOriginal">这里有一个错别宇。金额三百元。保留所有原话。</p>
+          <p class="demo-caption" data-i18n="demoPreserved">勾选建议预览校对版，原文保持不变。</p>
+        </div>
       </div>
-      <div class="proof-demo" aria-label="校对操作示例" data-i18n-aria="proofDemoLabel">
-        <div class="demo-toolbar"><span data-i18n="proofDemoTitle">确认每一处修正</span><span class="demo-caption" data-i18n="exampleOnly">示例文字</span></div>
-        <p class="demo-original" data-i18n="demoOriginal">这里有一个错别宇。金额三百元。保留所有原话。</p>
-        <label class="demo-suggestion"><input id="demo-correction" type="checkbox"><span><del>错别宇</del> <span aria-hidden="true">→</span> <strong>错别字</strong></span><small data-i18n="demoReason">仅修正错别字</small></label>
-        <p class="demo-result" aria-live="polite" data-i18n="demoOriginal">这里有一个错别宇。金额三百元。保留所有原话。</p>
-        <p class="demo-caption" data-i18n="demoPreserved">勾选建议预览校对版，原文保持不变。</p>
-      </div>
-      <div class="local-notes"><p data-i18n="gpuBody">支持 NVIDIA CUDA 加速，实际运行设备在本地设置中可查看。也可选择 CPU。</p><p data-i18n="privacyBody">本地识别不上传音频。启用远程 AI 校对时，会把待校对文字发送给你配置的模型服务；费用由该服务收取。</p></div>
     </section>
 
-    <section class="proof section" id="proof">
-      <div class="proof-copy">
-        <p class="section-kicker" data-i18n="proofKicker">下载</p>
-        <h2 data-i18n="proofTitle">下载的每个文件，都能核对。</h2>
-        <p data-i18n="proofBody">网站只从已发布的 GitHub Release 读取下载地址与校验值。安装包尚未代码签名，Windows 可能显示安全提示。</p>
+    <section class="proof section dark-section" id="proof">
+      <div class="shell split">
+        <div class="split-copy">
+          <p class="section-kicker" data-i18n="proofKicker">下载与版本</p>
+          <h2 data-i18n="proofTitle" data-split>在自己的电脑上，开始整理。</h2>
+          <p class="section-lede" data-i18n="proofBody">下载来自 GitHub Release，版本与校验值自动同步。当前安装包尚未代码签名，Windows 可能显示安全提示。</p>
+        </div>
+        <div class="release-panel">
+          <dl class="release-facts">
+            <div><dt data-i18n="version">版本</dt><dd>v__WANXIANG_VERSION__</dd></div>
+            <div><dt data-i18n="size">安装包</dt><dd>__WANXIANG_INSTALLER_SIZE__</dd></div>
+          </dl>
+          <details class="hash"><summary data-i18n="checksum">核对校验值（SHA-256）</summary><code>__WANXIANG_SHA256__</code></details>
+          <a class="button light" href="__WANXIANG_INSTALLER_URL__" data-download data-i18n="download">下载 Windows 版</a>
+        </div>
       </div>
-      <dl class="release-facts">
-        <div><dt data-i18n="version">版本</dt><dd>v__WANXIANG_VERSION__</dd></div>
-        <div><dt data-i18n="size">安装包</dt><dd>__WANXIANG_INSTALLER_SIZE__</dd></div>
-        <div class="hash"><dt>SHA-256</dt><dd>__WANXIANG_SHA256__</dd></div>
-      </dl>
     </section>
 
     <section class="faq section" id="faq">
-      <div class="section-heading compact"><h2 data-i18n="faqTitle">开始之前，了解这些。</h2></div>
-      <details><summary data-i18n="faqSystem">需要什么电脑？</summary><p data-i18n="faqSystemBody">Windows 10 / 11，64 位。CPU 可完成本地识别；NVIDIA 显卡可使用可选 CUDA 组件。首次启动需要联网准备模型与运行组件，之后本地文件可离线识别。</p></details>
-      <details><summary data-i18n="faqSize">为什么首次启动还要下载？</summary><p data-i18n="faqSizeBody">安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。</p></details>
-      <details><summary data-i18n="faqPlatforms">哪些链接可以整理？</summary><p data-i18n="faqPlatformsBody">支持哔哩哔哩、小宇宙、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。</p></details>
-      <details><summary data-i18n="faqAI">AI 校对能保证正确吗？</summary><p data-i18n="faqAIBody">不能。模型只提出建议，你逐处确认后才能保存。数字与单位有额外保护，但人名、事实和语义仍需自己核对；原文与校对版始终分别保留。</p></details>
-      <details><summary data-i18n="faqSummary">摘要与要点如何生成？</summary><p data-i18n="faqSummaryBody">在结果页手动生成，应用会先说明所用模型服务、发送范围和可能的费用。摘要附有原文依据，单独保存；AI 内容仍需对照原文核查。</p></details>
-      <details><summary data-i18n="faqSafety">Windows 为什么提示安全警告？</summary><p data-i18n="faqSafetyBody">当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。</p></details>
+      <div class="faq-shell">
+        <h2 data-i18n="faqTitle">开始之前，了解这些。</h2>
+        <details><summary data-i18n="faqSystem">需要什么电脑？</summary><p data-i18n="faqSystemBody">Windows 10 / 11，64 位。CPU 可完成本地识别；NVIDIA 显卡可使用可选 CUDA 组件。首次启动需要联网准备模型与运行组件，之后本地文件可离线识别。</p></details>
+        <details><summary data-i18n="faqSize">为什么首次启动还要下载？</summary><p data-i18n="faqSizeBody">安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。</p></details>
+        <details><summary data-i18n="faqPlatforms">哪些链接可以整理？</summary><p data-i18n="faqPlatformsBody">支持哔哩哔哩、小宇宙、抖音、小红书与微信公众号图文。能否读取也取决于网络、登录与平台访问规则；受限内容会提示恢复方式。平台支持不代表每条链接都能成功。</p></details>
+        <details><summary data-i18n="faqAI">AI 校对能保证正确吗？</summary><p data-i18n="faqAIBody">不能。模型只提出建议，你逐处确认后才能保存。数字与单位有额外保护，但人名、事实和语义仍需自己核对；原文与校对版始终分别保留。</p></details>
+        <details><summary data-i18n="faqSummary">摘要与要点如何生成？</summary><p data-i18n="faqSummaryBody">在结果页手动生成，应用会先说明所用模型服务、发送范围和可能的费用。摘要附有原文依据，单独保存；AI 内容仍需对照原文核查。</p></details>
+        <details><summary data-i18n="faqSafety">Windows 为什么提示安全警告？</summary><p data-i18n="faqSafetyBody">当前安装包尚未代码签名。请从本页的 GitHub Release 下载，并核对上方 SHA-256；遇到问题可通过页脚反馈入口提交。</p></details>
+      </div>
     </section>
 
     <section class="closing section">
-      <img src="assets/brand-mark.svg" width="72" height="72" alt="">
-      <h2 data-i18n="closingTitle">下一条链接，交给它。</h2>
+      <img src="assets/brand-mark.svg" width="64" height="64" alt="">
+      <h2 data-i18n="closingTitle" data-split>下一条链接，交给它。</h2>
       <p data-i18n="closingBody">在你自己的电脑上，变成能继续用的文字。</p>
       <div class="hero-actions">
         <a class="button primary" href="__WANXIANG_INSTALLER_URL__" data-download data-i18n="download">下载 Windows 版</a>
         __WANXIANG_TRIAL_LINK__
       </div>
+      <p class="closing-note">Windows 10 / 11 · x64 · v__WANXIANG_VERSION__</p>
     </section>
   </main>
 
