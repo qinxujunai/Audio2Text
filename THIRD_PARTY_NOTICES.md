@@ -29,15 +29,19 @@ license text in the installer artifact.
 ## Model Weights
 
 Model weights are not licensed by this repository's Apache-2.0 license.
-The standard runtime package contains only the int8 SenseVoice model converted
-by sherpa-onnx from `ASLP-lab/WSYue-ASR` (Apache-2.0):
-`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`. Faster-Whisper and
-Qwen3-ASR remain optional benchmark candidates and are not shipped.
+Since 2.4 the standard runtime package (`sensevoice-small-int8-general`) contains
+the general-purpose `FunAudioLLM/SenseVoiceSmall` weights (Apache-2.0) as the int8
+export by the sherpa-onnx maintainer,
+`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`, plus Silero VAD
+(`silero_vad.onnx`, MIT, https://github.com/snakers4/silero-vad) used to cut
+audio at pauses. Up to 2.3 the package held the Cantonese fine-tune
+`ASLP-lab/WSYue-ASR` (`sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09`).
+Faster-Whisper and Qwen3-ASR remain optional benchmark candidates and are not shipped.
 
 The optional local CUDA profile additionally uses the original
 `FunAudioLLM/SenseVoiceSmall` (Apache-2.0), exported by the sherpa-onnx maintainer
 as `csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17`.
-It is a different weight variant from the WSYue int8 compatibility profile.
+It is the same general-purpose model as the standard int8 package, in FP32.
 The model and official GPU wheel are separately downloaded with pinned revisions
 and hashes by `scripts/prepare_sensevoice_cuda.py`; GPU drivers/CUDA/cuDNN are
 not redistributed in this installer. Component provenance lives beside the SDK.
@@ -46,7 +50,9 @@ not redistributed in this installer. Component provenance lives beside the SDK.
 
 - SenseVoice int8 model: https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
 - SenseVoice conversion documentation: https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html
-- SenseVoice fine-tune source and license: https://huggingface.co/ASLP-lab/WSYue-ASR
+- SenseVoice original model: https://github.com/FunAudioLLM/SenseVoice
+- Silero VAD: https://github.com/snakers4/silero-vad (MIT); ONNX file from https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+- SenseVoice fine-tune used up to 2.3: https://huggingface.co/ASLP-lab/WSYue-ASR
 - FFmpeg 9.0 Essentials binary and checksums: https://www.gyan.dev/ffmpeg/builds/
 - FFmpeg corresponding source: https://github.com/FFmpeg/FFmpeg/tree/n9.0
 

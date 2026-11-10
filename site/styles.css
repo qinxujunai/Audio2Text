@@ -274,6 +274,7 @@ nav a:hover { color: var(--ink); }
 .hash[open] summary::after { content: "−"; }
 .hash code { display: block; padding: 12px 14px; border-radius: 10px; background: #000; color: #d2d2d7; font-family: "SF Mono", Consolas, monospace; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .release-panel .button { width: 100%; }
+.release-panel .mirror-link { width: 100%; justify-content: center; margin-top: 8px; color: #2997ff; }
 
 /* Questions: one narrow column. */
 .faq-shell { width: min(760px, calc(100% - 48px)); margin: 0 auto; }

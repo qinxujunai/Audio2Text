@@ -491,6 +491,16 @@ fn open_capture_source(app: AppHandle, capture_id: String) -> Result<(), String>
         .map_err(|_| "系统暂时无法打开来源页面。".to_string())
 }
 
+/// Fixed page, never a URL from the network: the update notice can only open the official site.
+const UPDATE_PAGE_URL: &str = "https://qinxujunai.github.io/Audio2Text/";
+
+#[tauri::command]
+fn open_update_page(app: AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(UPDATE_PAGE_URL, None::<&str>)
+        .map_err(|_| "系统暂时无法打开下载页。".to_string())
+}
+
 #[tauri::command]
 fn reveal_saved_artifact(
     app: AppHandle,
@@ -646,6 +656,7 @@ pub fn run() {
             open_platform_session,
             open_capture_source,
             open_saved_artifact,
+            open_update_page,
             reveal_diagnostics_folder,
             reveal_saved_artifact,
             restart_backend,

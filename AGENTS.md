@@ -41,6 +41,12 @@
 | 品牌图标只用 `web/public/brand-mark.svg` 的圆点 | 用户指定 | 见协议一节 |
 | 官网与 README 的演示是真实处理的录屏（上传真实视频、真实转写结果），不用预置示例；素材须可公开使用并署名 | 2026-10-23 用户看了预置结果的旧演示说「很虚假」。做法与素材见 `showcase/README.md` | 2026-10-23 交接日志 |
 | 官网文案说用户能做什么：「贴一个链接，拿回全部文字」「下载的每个文件，都能核对」「下一条链接，交给它」；中文标题只在标点处换行（`word-break: keep-all`） | 2026-10-22 按 Apple 产品页标准改写 | `d9d2a67`、`6708808` |
+| CPU 默认识别模型用通用版 SenseVoice Small int8（sherpa-onnx 2024-07-17），组件 `sensevoice-small-int8-general`，装在 `models/sensevoice/general-int8`，替换并删除旧的粤语微调版 `small-int8` | 旧默认是 WSYue 粤语微调版：转普通话没有标点、口语混在一起、「OI」拆成「O I」。同一段 60 秒普通话（翁家翌访谈 10:00–11:00），通用版有标点、数字规范、「信息学竞赛」「省选」识别正确，CPU 用时相同。CUDA 路线本来就是通用版权重。打包用 `scripts/build_runtime_pack.py`（输入文件 SHA-256 固定，输出可复现） | 2026-11-10 云端对比，见交接日志 |
+| 切段用 Silero VAD（同一个组件包里的 `silero_vad.onnx`）在说话停顿处切，合并成不超过 28 秒的片段；没有 VAD 模型时退回能量切分。CPU 与 CUDA 共用 `_iter_timed_chunks`，CPU 也流式解码 | 固定 24 秒硬切会把句子切成两半并补上句号；CPU 旧代码整段解码进内存（3 小时约 750MB） | 同上 |
+| yt-dlp 路径的视频若 ≥10 分钟且需要转写：先只下音轨交付文字，原视频用 `deferred_video`（`platform: ytdlp`）后台补齐；下载时限按时长放宽（`_media_download_budget`） | B 站接口 412 后会走 yt-dlp，原来要先下完整段 1080p 才转写，而总时限只有 120 秒，长视频必然超时 | 同上 |
+| 运行组件与安装包有国内镜像：`runtime-packs.json` 的 `mirrors`（腾讯云 `media-1416754078` 上海，`wanxiang/runtime/`）优先，失败换 GitHub；官网「国内下载」指向 `wanxiang/releases/<tag>/`；同一文件、同一 SHA-256 | 国内用户下 GitHub 常常很慢或失败（2026-11-10 作者确认加腾讯云线路） | 同上 |
+| 启动时检查新版本（`/v1/app/update`：腾讯云 `wanxiang/latest.json` 优先，GitHub Releases 备用，5 秒超时、缓存 6 小时、失败不提示），首页显示一行「有新版本」，只打开固定的官网地址；不自动下载安装 | 平台改版后旧版本会失效，用户需要知道该更新（作者选的方案） | 同上 |
+| 处理中可以取消：`POST /v1/captures/{id}/cancel`，在下一次进度更新时停止，yt-dlp 子进程立即终止；记录保留为「已取消」、可重新处理。`CaptureCancelled` 继承 BaseException，不能被 `except Exception` 吞掉 | 3 小时的播客原来只能干等或关掉软件 | 同上 |
 
 ## 已知问题与待办
 
@@ -52,6 +58,15 @@
 - `app/extractors.py`（约 2800 行）和 `browser_provider.py`（约 1900 行）仍偏大，按上文方式逐个平台迁出。
 
 ## 交接日志
+
+- **2026-11-10，Claude（2.4.0 候选，未发布）**：作者要求按「苹果级」标准把项目一次改好，再交给本地发版。云端审查和改动：
+  - 转写：默认 CPU 模型换成通用版 SenseVoice（见「不许回退的决定」）；Silero VAD 在停顿处切段；CPU 路径流式解码；进度显示「已识别 mm:ss / 总时长」，转写占进度条 50%→96%。
+  - 下载：yt-dlp 路径长视频先音频后视频，时限按时长放宽；yt-dlp 2026.10.21 → 2026.10.26。
+  - 更新提醒（`app/update_check.py`、`UpdateNotice.tsx`、Tauri 命令 `open_update_page`）与腾讯云镜像（`runtime_packs.py` 多来源下载、`replaces` 删除旧组件目录；官网「国内下载」）。
+  - 交互：选好文件后主箭头直接开始，去掉重复的「处理这个文件」；处理中可「取消」，历史卡片标「已取消 / 未完成 / 处理中」；760–960px 窄窗口按钮不再掉行；首页内容比窗口高时不再顶到顶栏；结果页本地音频不再叫「播客」、去掉底部重复的平台/类型/时长、未播放时不高亮、没有封面时不放空占位；设置里输入框字号统一；「没有可识别的音轨」不再被说成「转写组件没准备好」（新原因 `transcribe_no_audio`）；本地版缺组件的提示不再写「云端预览」；前端 456 处 `\uXXXX` 转义改回中文。
+  - 版本号 2.4.0（`app/settings.py`、`tauri.conf.json`、`Cargo.toml/lock`）。
+  - 验证（Linux 云端）：unittest 426 项，只有改动前就存在的 7 项 Windows/本机环境失败；新增测试 25 项；TypeScript、前端构建通过；同一段 60 秒普通话真实转写有标点、切在停顿处；Playwright 在 760/1100/1280 宽走查首页、选文件、处理中、取消、结果页、设置，无脚本错误、无横向溢出；翁家翌 B 站链接（2 小时 3 分）实测走到了 yt-dlp 新路径（「正在下载音频，文字会先出来，原视频随后补齐」），但当时 B 站 CDN 对云端 IP 返回 567，音频没有下载下来，端到端未在云端验证，须在本机验证；同一条任务上实测「取消」：立即变为「已取消」，没有残留下载进程。
+  - 未完成、需要本机：新组件上传 GitHub `runtime-v2` 与腾讯云；Windows 打包、安装验收、CUDA 路径、干净 Windows CI；60 链接三轮基准；正式发布与官网部署。组件 SHA-256 以本机用 `scripts/build_runtime_pack.py --write-manifest` 重新打包的结果为准（云端结果 `ade7e877…25eb`，160748940 字节）。
 
 - **2026-11-09，Claude**：官网 `site/` 按 Apple 产品页的思路重做版式（作者说原来的「太丑」，确认只改官网、不动软件界面）。文案一字不改；去掉四张来源卡上无意义的符号图标，换成用 HTML/CSS 画的小界面示意（标「界面为示意」）；「贴一个链接」和「保留原话」两节改为左文右图（结果卡示意、原有的勾选校对演示）；下载区改为黑底，SHA-256 收进可展开的「核对校验值」；标题第二句灰色（`app.js` 的 `splitTitle`，按句号、逗号分）；小标题不再用蓝色。演示录像、占位符、`data-i18n` 键、返回链接、品牌圆点都不变；新增的示例文字中英文写在 `app.js`。验证：`tests.test_public_site`、`test_brand_and_showcase` 通过；`test_public_site_browser` 需要 Python 版 Playwright（云端没有），其中每一项检查（四种宽度无横向溢出、手机点击区域 ≥44px、中英切换并保持、平台说明、无 YouTube、演示说明、减少动效不自动播放、试用链接 2 个）用 Node 版 Playwright 照写一遍全部通过。作者看完预览说「上线」后，`062fc02` 快进合入 clean-main，手动触发 Pages 部署；线上核对：版本 v2.3.2、下载地址指向 v2.3.2 Release、页面上的 SHA-256 与 Release 的 SHA256SUMS.txt 一致；中英文、手机和电脑都没有脚本错误、没有横向溢出。
 
@@ -148,7 +163,7 @@
 ### 本机迭代与安装版闭环（2026-10-11）
 
 - 用户授权批次后自主检查、评测、审查及修复，优先采用核查过的成熟实现。准确率必须有人工参考；不同模型/不同权重的 CPU 与 GPU 耗时不用于宣称纯 CUDA 加速。
-- 当前 CUDA 路线是 SenseVoice Small FP32 + 官方 sherpa-onnx 1.13.4 CUDA 12/cuDNN 9 SDK。CPU 兼容版原权重为 WSYue 微调 int8，二者不可混称相同权重。Whisper 为可选备用，不因某一引擎能跑 CUDA 就替换默认模型。
+- 当前 CUDA 路线是 SenseVoice Small FP32 + 官方 sherpa-onnx 1.13.4 CUDA 12/cuDNN 9 SDK。2.4 起 CPU 默认为同一通用版权重的 int8 导出（2.3 及以前是 WSYue 粤语微调 int8）；int8 与 FP32 精度不同，不混称同一模型文件。Whisper 为可选备用，不因某一引擎能跑 CUDA 就替换默认模型。
 - GPU SDK 通过 `scripts.prepare_sensevoice_cuda` 固定 revision 与 SHA-256 下载；不得覆盖项目 CPU venv。GPU 与 CPU ONNX DLL 必须进程隔离，worker 复用后端 `--sensevoice-gpu-worker`；显式 CUDA 不静默退回 CPU。
 - 桌面打包必须使用项目 CPython 3.11，与 cp311 GPU SDK ABI 对齐。`scripts/build_desktop_sidecar.ps1` 固定该 Python 与 PyInstaller 版本，禁止 uvx 自动选择最新 Python。
 - 源码、前端构建、后端 sidecar、桌面 exe 和安装包是一批交付。完成必须包含安装前备份、真实已安装 exe/sidecar 哈希核对、真实 CUDA 推理、历史正文保留，以及新功能实际验收；仅生成安装包不算用户已升级。

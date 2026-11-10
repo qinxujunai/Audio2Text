@@ -10,7 +10,7 @@ const copy = {
     flowLabel: "万象成文处理流程", flowInput: "视频、播客、图文", flowProcess: "提取与识别", flowOutput: "文字与媒体",
     textTitle: "可用的正文", textBody: "复制全文，或下载 TXT 与 Markdown。", mediaTitle: "原始媒体", mediaBody: "视频、音频和图片分别交付，不混在一起。", localTitle: "本地优先", localBody: "Windows 版在本机处理，自动检测 CPU 与 GPU。",
     platformKicker: "支持的平台", platformTitle: "来自你熟悉的平台。", stable: "已验证", variable: "高波动", network: "视网络而定", platformNote: "平台内容和访问条件会变化。遇到无法读取的链接时，应用会说明下一步。",
-    proofKicker: "下载", proofTitle: "下载的每个文件，都能核对。", proofBody: "网站只从已发布的 GitHub Release 读取下载地址与校验值。安装包尚未代码签名，Windows 可能显示安全提示。", version: "版本", size: "安装包",
+    proofKicker: "下载", proofTitle: "下载的每个文件，都能核对。", proofBody: "网站只从已发布的 GitHub Release 读取下载地址与校验值；国内下载是同一个文件，校验值相同。安装包尚未代码签名，Windows 可能显示安全提示。", mirrorDownload: "国内下载", version: "版本", size: "安装包",
     closingTitle: "下一条链接，交给它。", closingBody: "在你自己的电脑上，变成能继续用的文字。", security: "安全", feedback: "反馈", maker: "秦徐俊的作品", makerHref: "https://qinxujunai.github.io/"
   },
   en: {
@@ -24,7 +24,7 @@ const copy = {
     flowLabel: "Wanxiang Chengwen workflow", flowInput: "Video, podcast, article", flowProcess: "Extract and transcribe", flowOutput: "Text and media",
     textTitle: "Usable text", textBody: "Copy everything or download TXT and Markdown.", mediaTitle: "Original media", mediaBody: "Video, audio, and images remain distinct deliverables.", localTitle: "Local first", localBody: "The Windows app processes locally and detects CPU and GPU automatically.",
     platformKicker: "Supported platforms", platformTitle: "From the platforms you use.", stable: "Verified", variable: "Variable", network: "Network dependent", platformNote: "Content and access conditions change. If a link cannot be read, the app explains the next step.",
-    proofKicker: "Download", proofTitle: "Every download, verifiable.", proofBody: "This site reads its download URL and checksum only from a published GitHub Release. The installer is currently unsigned, so Windows may show a security prompt.", version: "Version", size: "Installer",
+    proofKicker: "Download", proofTitle: "Every download, verifiable.", proofBody: "This site reads its download URL and checksum only from a published GitHub Release; the China mirror serves the same file with the same checksum. The installer is currently unsigned, so Windows may show a security prompt.", mirrorDownload: "China mirror", version: "Version", size: "Installer",
     closingTitle: "Hand it the next link.", closingBody: "On your own PC, turned into text you can keep using.", security: "Security", feedback: "Feedback", maker: "More by Qin Xujun", makerHref: "https://qinxujunai.github.io/en/"
   }
 };
@@ -46,7 +46,7 @@ Object.assign(copy.zh, {
   gpuBody: "支持 NVIDIA CUDA 加速，实际运行设备在本地设置中可查看。也可选择 CPU。",
   privacyBody: "本地识别不上传音频。启用远程 AI 校对时，会把待校对文字发送给你配置的模型服务；费用由该服务收取。",
   proofKicker: "下载与版本", proofTitle: "在自己的电脑上，开始整理。",
-  proofBody: "下载来自 GitHub Release，版本与校验值自动同步。当前安装包尚未代码签名，Windows 可能显示安全提示。",
+  proofBody: "下载来自 GitHub Release，国内下载是同一个文件，版本与校验值自动同步。当前安装包尚未代码签名，Windows 可能显示安全提示。",
   faqTitle: "开始之前，了解这些。", faqSystem: "需要什么电脑？",
   faqSystemBody: "Windows 10 / 11，64 位。CPU 可完成本地识别；NVIDIA 显卡可使用可选 CUDA 组件。首次启动需要联网准备模型与运行组件，之后本地文件可离线识别。",
   faqSize: "为什么首次启动还要下载？", faqSizeBody: "安装包包含基础应用，识别模型与媒体组件按需下载并核对校验值。CUDA 模型与组件独立准备，不会自动更改显卡驱动或系统环境。",
@@ -72,7 +72,7 @@ Object.assign(copy.en, {
   gpuBody: "Optional NVIDIA CUDA acceleration. View the actual execution device in local settings, or choose CPU.",
   privacyBody: "Local recognition does not upload audio. Remote AI proofreading sends transcript text to your configured model service; that service determines the cost.",
   proofKicker: "Download and version", proofTitle: "Start on your own computer.",
-  proofBody: "Downloads come from GitHub Releases, with synchronized versions and checksums. The installer is currently unsigned; Windows may show a security prompt.",
+  proofBody: "Downloads come from GitHub Releases, and the China mirror serves the same file, with synchronized versions and checksums. The installer is currently unsigned; Windows may show a security prompt.",
   faqTitle: "Before you start.", faqSystem: "What computer do I need?",
   faqSystemBody: "Windows 10 / 11, 64-bit. CPU recognition is supported; NVIDIA GPUs can use optional CUDA components. Initial setup downloads models and runtime components. Local files can then be recognized offline.",
   faqSize: "Why are there first-run downloads?", faqSizeBody: "The installer contains the base app. Models and media components are downloaded separately and checked against their hashes. GPU models and components are optional; the app does not change drivers or system settings.",

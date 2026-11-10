@@ -200,6 +200,7 @@ class CaptureListItemModel(BaseModel):
     created_at: str
     updated_at: str
     preview_text: str = ""
+    cancelled: bool = False
 
 
 class CaptureListResponse(BaseModel):

@@ -15,6 +15,7 @@ export type CaptureListItem = {
   created_at: string;
   updated_at: string;
   preview_text: string;
+  cancelled?: boolean;
 };
 
 export type CaptureListResponse = {

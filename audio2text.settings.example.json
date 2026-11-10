@@ -11,7 +11,7 @@
   "vad_filter": true,
   "max_upload_size_mb": 1024,
   "transcription_provider": "auto",
-  "sensevoice_model_path": "workspace/runtime/models/sensevoice/small-int8",
+  "sensevoice_model_path": "workspace/runtime/models/sensevoice/general-int8",
   "openai_compatible_base_url": "",
   "openai_compatible_api_key": "",
   "openai_compatible_model": "gpt-4o-mini-transcribe",

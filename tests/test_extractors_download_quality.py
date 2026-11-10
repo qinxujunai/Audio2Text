@@ -105,6 +105,85 @@ class ExtractorDownloadQualityTestCase(unittest.TestCase):
         self.assertEqual(outcome.media_file_path, "sample.mp4")
         self.assertTrue(any("format_id=137+140" in (entry.detail or "") for entry in outcome.provider_traces))
 
+    def _long_video(self, duration):
+        resolved = SimpleNamespace(platform="bilibili", content_type="video", normalized_url="https://www.bilibili.com/video/BV1demo/")
+        info = {"title": "长访谈", "webpage_url": resolved.normalized_url, "duration": duration, "description": ""}
+        return resolved, info
+
+    def test_long_video_downloads_audio_first_and_defers_the_picture(self) -> None:
+        resolved, info = self._long_video(7365)
+        calls = []
+
+        def download(url, capture_dir, **kwargs):
+            calls.append(kwargs)
+            return extractors.DownloadSelection(path=Path("audio.m4a"))
+
+        with patch.object(extractors, "_ytdlp_metadata", return_value=(info, [])), patch.object(
+            extractors, "_select_subtitle_track", return_value=(None, "none", "")
+        ), patch.object(extractors, "_download_media_selection_with_ytdlp", side_effect=download):
+            outcome = extractors.extract_with_ytdlp(resolved, Path("."))
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["content_type"], "audio")
+        self.assertEqual(calls[0]["format_selector"], extractors.AUDIO_ONLY_FORMAT)
+        self.assertGreater(calls[0]["timeout_seconds"], extractors.YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS)
+        self.assertEqual(outcome.media_file_path, "audio.m4a")
+        self.assertEqual(outcome.deferred_video["platform"], "ytdlp")
+        self.assertEqual(outcome.deferred_video["url"], resolved.normalized_url)
+        self.assertIn("audio_first", outcome.strategy)
+
+    def test_short_video_still_downloads_the_whole_file(self) -> None:
+        resolved, info = self._long_video(90)
+        with patch.object(extractors, "_ytdlp_metadata", return_value=(info, [])), patch.object(
+            extractors, "_select_subtitle_track", return_value=(None, "none", "")
+        ), patch.object(
+            extractors, "_download_media_selection_with_ytdlp", return_value=extractors.DownloadSelection(path=Path("v.mp4"))
+        ) as download:
+            outcome = extractors.extract_with_ytdlp(resolved, Path("."))
+        self.assertEqual(download.call_args.kwargs["content_type"], "video")
+        self.assertIsNone(outcome.deferred_video)
+
+    def test_audio_first_failure_falls_back_to_the_whole_video(self) -> None:
+        resolved, info = self._long_video(7365)
+        results = [extractors.DownloadError("audio blocked"), extractors.DownloadSelection(path=Path("v.mp4"))]
+
+        def download(url, capture_dir, **kwargs):
+            item = results.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        with patch.object(extractors, "_ytdlp_metadata", return_value=(info, [])), patch.object(
+            extractors, "_select_subtitle_track", return_value=(None, "none", "")
+        ), patch.object(extractors, "_download_media_selection_with_ytdlp", side_effect=download):
+            outcome = extractors.extract_with_ytdlp(resolved, Path("."))
+        self.assertEqual(outcome.media_file_path, "v.mp4")
+        self.assertIsNone(outcome.deferred_video)
+
+    def test_download_budget_grows_with_length(self) -> None:
+        base = extractors.YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+        self.assertEqual(extractors._media_download_budget(30, video=False), base)
+        self.assertGreater(extractors._media_download_budget(11779, video=True), 2900)
+        self.assertGreater(extractors._media_download_budget(11779, video=False), 600)
+
+    def test_deferred_ytdlp_video_is_moved_next_to_the_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+
+            def download(url, work_dir, **kwargs):
+                path = work_dir / "BV1demo.mp4"
+                path.write_bytes(b"video")
+                self.assertEqual(kwargs["content_type"], "video")
+                return extractors.DownloadSelection(path=path)
+
+            with patch.object(extractors, "_download_media_selection_with_ytdlp", side_effect=download):
+                result = extractors.complete_deferred_ytdlp_video(
+                    {"platform": "ytdlp", "url": "https://example.com/v", "duration_seconds": 7365}, root
+                )
+            self.assertEqual(result, root / "source_video.mp4")
+            self.assertEqual(result.read_bytes(), b"video")
+            self.assertFalse((root / "deferred-video").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

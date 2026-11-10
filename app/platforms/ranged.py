@@ -40,7 +40,14 @@ def split(total: int, parts: int) -> list[tuple[int, int]]:
     return [(start, min(start + step, total) - 1) for start in range(0, total, step)]
 
 
-def _fetch_part(client_factory: ClientFactory, url: str, start: int, end: int, path: Path) -> None:
+def _fetch_part(
+    client_factory: ClientFactory,
+    url: str,
+    start: int,
+    end: int,
+    path: Path,
+    check: Callable[[], None] | None = None,
+) -> None:
     expected = end - start + 1
     last_error: Exception | None = None
     for _ in range(ATTEMPTS_PER_PART):
@@ -51,6 +58,8 @@ def _fetch_part(client_factory: ClientFactory, url: str, start: int, end: int, p
                         raise httpx.HTTPError(f"range not honoured: HTTP {response.status_code}")
                     with open(path, "wb") as handle:
                         for chunk in response.iter_bytes():
+                            if check is not None:
+                                check()
                             handle.write(chunk)
             if path.stat().st_size == expected:
                 return
@@ -67,7 +76,9 @@ def download_in_parts(
     *,
     parts: int = 4,
     min_part_bytes: int = MIN_PART_BYTES,
+    check: Callable[[], None] | None = None,
 ) -> Path | None:
+    """``check`` runs between chunks in every part; raising from it stops the download."""
     total = probe_size(client_factory, url)
     if not total or total < 2 * min_part_bytes:
         return None
@@ -76,7 +87,7 @@ def download_in_parts(
     try:
         with ThreadPoolExecutor(max_workers=len(ranges)) as pool:
             futures = [
-                pool.submit(_fetch_part, client_factory, url, start, end, path)
+                pool.submit(_fetch_part, client_factory, url, start, end, path, check)
                 for (start, end), path in zip(ranges, part_paths)
             ]
             for future in futures:

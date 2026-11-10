@@ -659,6 +659,7 @@ def _public_capture(capture) -> CaptureListItemModel:
         created_at=capture.created_at,
         updated_at=capture.updated_at,
         preview_text=preview,
+        cancelled=getattr(capture, "error_stage", None) == "cancelled" and public_status == "needs_user_action",
     )
 
 
@@ -1011,6 +1012,19 @@ async def health() -> dict[str, Any]:
         "browser_session": _browser_session_status(),
         "transcription_runtime": transcription_runtime_status(),
     }
+
+
+@app.get("/v1/app/update")
+def get_app_update() -> dict[str, Any]:
+    """Whether a newer release exists. Runs off the event loop; never raises."""
+    if DEPLOYMENT_MODE == "cloud_preview":
+        return {"current": APP_VERSION, "latest": None, "update_available": False, "url": None}
+    from app.update_check import update_status
+
+    try:
+        return update_status(APP_VERSION)
+    except Exception:  # noqa: BLE001 - an update notice must never break the app
+        return {"current": APP_VERSION, "latest": None, "update_available": False, "url": None}
 
 
 @app.get("/config")
@@ -1433,6 +1447,17 @@ async def create_v1_capture(request: Request, file: UploadFile | None = File(def
         "primary_result_type": "",
         "input_warning": resolved.input_warning,
     }
+
+
+@app.post("/v1/captures/{capture_id}/cancel")
+async def cancel_v1_capture(capture_id: str) -> dict[str, Any]:
+    from app.pipeline import cancel_capture
+
+    capture = repository.get(capture_id)
+    if capture is None:
+        raise HTTPException(status_code=404, detail="这条内容已经不存在。")
+    stopped = await asyncio.to_thread(cancel_capture, capture_id)
+    return {"capture_id": capture_id, "cancelled": stopped}
 
 
 @app.post("/v1/captures/{capture_id}/retry")

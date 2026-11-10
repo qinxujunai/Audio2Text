@@ -33,6 +33,13 @@ class _FakeRecognizer:
         self.decoded = stream
 
 
+def _offsets(chunks):
+    offset = 0
+    for chunk in chunks:
+        yield offset, chunk
+        offset += len(chunk)
+
+
 class SenseVoiceProviderTestCase(unittest.TestCase):
     def test_streaming_decode_preserves_every_sample_and_boundaries(self):
         import numpy as np
@@ -57,7 +64,7 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
             recognizer = _FakeRecognizer()
             progress = []
             with (
-                patch.object(provider, "_decode_audio", return_value=[0.0, 0.1]),
+                patch.object(provider, "_iter_timed_chunks", return_value=iter([(0, [0.0, 0.1])])),
                 patch.object(provider, "_recognizer", return_value=recognizer),
             ):
                 result = provider.transcribe(
@@ -70,7 +77,8 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
         self.assertEqual(result.provider, "local_sensevoice")
         self.assertEqual(result.transcript_text, "轻量模型转写成功")
         self.assertEqual(recognizer.stream.accepted[0], 16000)
-        self.assertEqual([item[0] for item in progress], [0.1, 1.0])
+        self.assertEqual(progress[0], (0.02, "正在准备识别。"))
+        self.assertEqual(progress[-1], (1.0, "识别完成，正在整理原文。"))
 
     def test_provider_chunks_long_audio_before_recognition(self) -> None:
         sample_count = transcription.LocalSenseVoiceProvider.sample_rate * 65
@@ -81,7 +89,9 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
             provider = transcription.LocalSenseVoiceProvider(raw_root)
             recognizer = _FakeRecognizer()
             with (
-                patch.object(provider, "_decode_audio", return_value=samples),
+                patch.object(provider, "_iter_timed_chunks", side_effect=lambda path: (
+                    (offset, chunk) for offset, chunk in _offsets(provider._split_audio(samples))
+                )),
                 patch.object(provider, "_recognizer", return_value=recognizer),
             ):
                 result = provider.transcribe(
@@ -159,3 +169,79 @@ class SenseVoiceProviderTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class _FakeSegment:
+    def __init__(self, start, length):
+        import numpy as np
+        self.start = start
+        self.samples = np.full(length, 0.25, dtype="float32")
+
+
+class _FakeDetector:
+    """Replays fixed speech segments once enough audio has been fed."""
+
+    def __init__(self, segments):
+        self.queue = []
+        self.segments = list(segments)
+
+    def accept_waveform(self, samples):
+        pass
+
+    def flush(self):
+        self.queue.extend(self.segments)
+        self.segments = []
+
+    def empty(self):
+        return not self.queue
+
+    @property
+    def front(self):
+        return self.queue[0]
+
+    def pop(self):
+        self.queue.pop(0)
+
+
+class VadChunkingTestCase(unittest.TestCase):
+    def _wav(self, root, seconds):
+        import numpy as np
+        import wave
+        path = Path(root) / "speech.wav"
+        samples = (np.sin(np.arange(16000 * seconds) / 40) * 9000).astype("int16")
+        with wave.open(str(path), "wb") as handle:
+            handle.setnchannels(1); handle.setsampwidth(2); handle.setframerate(16000)
+            handle.writeframes(samples.tobytes())
+        return path
+
+    def _run(self, segments, seconds=70):
+        import sys
+        from types import SimpleNamespace as NS
+        rate = 16000
+        detector = _FakeDetector([_FakeSegment(int(s * rate), int(n * rate)) for s, n in segments])
+        config = NS(silero_vad=NS(model="", threshold=0, min_silence_duration=0, min_speech_duration=0,
+                                  max_speech_duration=0, window_size=512), sample_rate=0, num_threads=0)
+        fake = NS(VadModelConfig=lambda: config, VoiceActivityDetector=lambda cfg, buffer_size_in_seconds: detector)
+        with tempfile.TemporaryDirectory() as root, patch.dict(sys.modules, {"sherpa_onnx": fake}):
+            path = self._wav(root, seconds)
+            return list(transcription._iter_vad_chunks(path, Path(root) / "vad.onnx", rate, 28))
+
+    def test_neighbouring_speech_is_merged_up_to_the_limit_and_keeps_real_start_times(self):
+        chunks = self._run([(1, 10), (12, 10), (24, 8), (40, 5)])
+        starts = [start / 16000 for start, _ in chunks]
+        self.assertEqual(starts, [1.0, 24.0])
+        self.assertTrue(all(len(samples) <= 28 * 16000 for _, samples in chunks))
+
+    def test_without_vad_model_falls_back_to_fixed_length_pieces(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(transcription, "SENSEVOICE_MODEL_DIR", Path(root)):
+            path = self._wav(root, 40)
+            provider = transcription.LocalSenseVoiceProvider(root)
+            pieces = list(provider._iter_timed_chunks(path))
+        self.assertEqual(pieces[0][0], 0)
+        self.assertEqual(pieces[1][0], len(pieces[0][1]))
+
+    def test_progress_is_expressed_in_listening_time(self):
+        ratio, detail = transcription._recognition_progress(750, 11779)
+        self.assertEqual(detail, "已识别 12:30 / 3:16:19")
+        self.assertLess(ratio, 1)
+        self.assertEqual(transcription._recognition_progress(30, 0)[1], "已识别 0:30")

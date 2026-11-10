@@ -93,6 +93,9 @@ def transcription_options(*, device: str, model_path: Path, compute_type: str,
     default_path = (MODELS_DIR / "sensevoice" / "small-fp32" if execution_device == "cuda"
                     else SENSEVOICE_MODEL_DIR) if engine == "sensevoice" else model_path
     selected_path = Path(data.get("model_path") or default_path)
+    if selected_path == MODELS_DIR / "sensevoice" / "small-int8":
+        # 2.4 replaced the Cantonese fine-tune with the general model; the old folder is removed after the update.
+        selected_path = SENSEVOICE_MODEL_DIR
     return {"device": selected_device, "model_path": selected_path,
             "engine": engine, "execution_device": execution_device,
             "sdk_path": Path(data.get("sdk_path") or RUNTIME_DIR / "candidates" / "sensevoice-cuda" / "site"),

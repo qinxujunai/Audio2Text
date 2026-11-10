@@ -206,9 +206,72 @@ img {
 .stage-shell-idle,
 .stage-shell-processing {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
   min-height: calc(100vh - 110px);
+}
+
+/* Centre when there is room; when the history makes the page taller than the
+   window, start at the top instead of overflowing under the header. */
+.stage-shell-idle > *,
+.stage-shell-processing > * {
+  margin-block: auto;
+}
+
+.idle-column {
+  width: 100%;
+  padding-top: 24px;
+}
+
+.update-notice {
+  width: fit-content;
+  margin: 0 auto 18px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: #4b4b4b;
+  font-size: 13px;
+  box-shadow: var(--shadow-soft);
+}
+
+.update-notice-link,
+.update-notice-close {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+}
+
+.update-notice-link {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: #111111;
+  font-weight: 600;
+}
+
+.update-notice-close {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #8a8a8a;
+}
+
+.update-notice-link:hover,
+.update-notice-close:hover {
+  background: rgba(17, 17, 17, 0.05);
+}
+
+.update-notice-link:focus-visible,
+.update-notice-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .stage-shell-ready {
@@ -1067,12 +1130,41 @@ img {
 /* Elapsed time and a coarse estimate: proof that a long job is alive. */
 .processing-meter-time {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-top: 10px;
   color: #6e6e6e;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.processing-cancel {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: transparent;
+  color: #4b4b4b;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.processing-cancel:hover:not(:disabled) {
+  background: rgba(17, 17, 17, 0.05);
+  color: #111111;
+}
+
+.processing-cancel:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.processing-cancel:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2835,12 +2927,11 @@ img {
     min-height: 220px;
   }
 
-  .hero-form-footer,
+  /* The desktop window can be as narrow as 760px: keep the input tools, the
+     arrow, the chosen file and the history header on one row until 640px. */
   .result-surface-head,
   .image-gallery-head,
-  .media-panel-head,
-  .selected-file-card,
-  .recent-inline-head {
+  .media-panel-head {
     flex-direction: column;
     align-items: stretch;
   }
@@ -2934,6 +3025,15 @@ img {
   .image-viewer-toolbar {
     max-width: calc(100vw - 48px);
     gap: 6px;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-form-footer,
+  .selected-file-card,
+  .recent-inline-head {
+    flex-direction: column;
+    align-items: stretch;
   }
 }
 

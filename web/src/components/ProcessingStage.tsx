@@ -13,6 +13,8 @@ type ProcessingStageProps = {
   progressPercent?: number;
   progressDetail?: string;
   onReset?: () => void;
+  onCancel?: () => void;
+  cancelling?: boolean;
   onRetry?: () => void;
   onRefreshSession?: () => void;
   onOpenPlatformSession?: () => void;
@@ -76,6 +78,8 @@ export function ProcessingStage({
   progressPercent,
   progressDetail,
   onReset,
+  onCancel,
+  cancelling = false,
   onRetry,
   onRefreshSession,
   onOpenPlatformSession,
@@ -134,6 +138,11 @@ export function ProcessingStage({
             </div>
             <div className="processing-meter-time" aria-live="off">
               <span>已用 {formatElapsed(elapsed)}</span>
+              {phase === "processing" && onCancel ? (
+                <button className="processing-cancel" disabled={cancelling} onClick={onCancel} type="button">
+                  {cancelling ? "正在取消…" : "取消"}
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}

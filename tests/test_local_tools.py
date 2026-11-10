@@ -179,7 +179,7 @@ class LocalToolsTests(unittest.TestCase):
             with patch("app.sensevoice_cuda.get_worker", return_value=worker):
                 provider = transcription.LocalSenseVoiceCudaProvider(Path(root), Path(root))
             parts = [[0.0]*16000, [0.0]*32000, [0.0]*16000, [0.0]*16000, [0.0]*16000]
-            with patch.object(provider, "_iter_audio_chunks", return_value=parts), patch("app.providers.transcription._probe_audio_duration", return_value=6):
+            with patch.object(provider, "_iter_audio_chunks", return_value=parts), patch.object(provider, "_vad_model_path", return_value=None), patch("app.providers.transcription._probe_audio_duration", return_value=6):
                 result = provider.transcribe(str(media), capture_id="cap", output_folder=root)
             self.assertEqual(result.segment_count, 5)
             self.assertEqual(result.timeline_text.splitlines()[-1], "5.000s -> 6.000s 片段16000")

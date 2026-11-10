@@ -250,6 +250,13 @@ export function deleteCapture(captureId: string) {
   );
 }
 
+export function cancelCapture(captureId: string) {
+  return request<{ capture_id: string; cancelled: boolean }>(
+    `/v1/captures/${encodeURIComponent(captureId)}/cancel`,
+    { method: "POST" },
+  );
+}
+
 export function retryCapture(captureId: string) {
   return request<{ capture_id: string; status: string }>(
     `/v1/captures/${captureId}/retry`,
@@ -295,6 +302,17 @@ export function ensureCaptureCover(captureId: string) {
 
 export function captureEventsUrl(captureId: string) {
   return resolveApiUrl(`/v1/captures/${captureId}/events`, true);
+}
+
+export type AppUpdateStatus = {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  url: string | null;
+};
+
+export function getAppUpdate() {
+  return request<AppUpdateStatus>("/v1/app/update");
 }
 
 export function listRuntimePacks() {

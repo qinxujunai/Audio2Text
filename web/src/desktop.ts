@@ -35,6 +35,15 @@ export function revealSavedArtifact(captureId: string, artifactType: string) {
   return invokeDesktop<void>("reveal_saved_artifact", captureId, artifactType);
 }
 
+export async function openUpdatePage(url: string) {
+  if (!isDesktopApp()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_update_page");
+}
+
 export async function openCaptureSource(captureId: string) {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<void>("open_capture_source", { captureId });

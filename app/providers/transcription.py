@@ -88,6 +88,109 @@ def _build_worker_auth_headers(path: Path, *, secret: str, duration_seconds: flo
     }
 
 
+VAD_MODEL_FILENAME = "silero_vad.onnx"
+
+
+def _safe_duration(path: Path) -> float:
+    try:
+        return _probe_audio_duration(path)
+    except Exception:
+        return 0.0
+
+
+def _clock(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def _recognition_progress(done_seconds: float, duration_seconds: float) -> tuple[float, str]:
+    """Progress in listening time, which is what a person can relate to."""
+    if duration_seconds > 0:
+        done = min(done_seconds, duration_seconds)
+        ratio = min(0.99, 0.02 + 0.97 * done / duration_seconds)
+        return ratio, f"已识别 {_clock(done)} / {_clock(duration_seconds)}"
+    return 0.5, f"已识别 {_clock(done_seconds)}"
+
+
+def _iter_vad_chunks(path: Path, vad_model: Path, sample_rate: int, max_chunk_seconds: float):
+    """Stream-decode ``path`` and yield ``(start_sample, samples)`` split at pauses."""
+    import numpy as np
+    import sherpa_onnx
+
+    config = sherpa_onnx.VadModelConfig()
+    config.silero_vad.model = str(vad_model)
+    config.silero_vad.threshold = 0.5
+    config.silero_vad.min_silence_duration = 0.3
+    config.silero_vad.min_speech_duration = 0.25
+    config.silero_vad.max_speech_duration = 20
+    config.sample_rate = sample_rate
+    config.num_threads = 1
+    window = config.silero_vad.window_size
+    detector = sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=max_chunk_seconds * 3)
+    gap = np.zeros(int(sample_rate * 0.1), dtype="float32")
+    limit = int(max_chunk_seconds * sample_rate)
+    pending: list = []
+    pending_start = 0
+    pending_end = 0
+
+    def flush():
+        nonlocal pending
+        if not pending:
+            return None
+        pieces = []
+        for index, segment in enumerate(pending):
+            if index:
+                pieces.append(gap)
+            pieces.append(segment)
+        item = (pending_start, np.concatenate(pieces).astype("float32", copy=False))
+        pending = []
+        return item
+
+    def drain():
+        nonlocal pending_start, pending_end
+        while not detector.empty():
+            segment = detector.front
+            start = int(segment.start)
+            samples = np.asarray(segment.samples, dtype="float32")
+            detector.pop()
+            if pending and (start + len(samples) - pending_start) > limit:
+                item = flush()
+                if item is not None:
+                    yield item
+            if not pending:
+                pending_start = start
+            pending.append(samples)
+            pending_end = start + len(samples)
+
+    remainder = np.zeros(0, dtype="float32")
+    with av.open(str(path)) as container:
+        if not container.streams.audio:
+            raise RuntimeError("媒体文件中没有可识别的音轨。")
+        resampler = av.AudioResampler(format="flt", layout="mono", rate=sample_rate)
+
+        def frames():
+            for frame in container.decode(audio=0):
+                yield from resampler.resample(frame)
+            yield from resampler.resample(None)
+
+        for converted in frames():
+            data = np.concatenate([remainder, converted.to_ndarray().reshape(-1).astype("float32", copy=False)])
+            usable = len(data) - len(data) % window
+            for offset in range(0, usable, window):
+                detector.accept_waveform(data[offset:offset + window])
+            remainder = data[usable:]
+            yield from drain()
+    if len(remainder):
+        detector.accept_waveform(np.concatenate([remainder, np.zeros(window - len(remainder), dtype="float32")]))
+    detector.flush()
+    yield from drain()
+    item = flush()
+    if item is not None:
+        yield item
+
+
 class TranscriptionProvider(Protocol):
     name: str
 
@@ -280,7 +383,8 @@ class LocalSenseVoiceProvider:
 
     def __init__(self, model_dir: str | Path | None = None, *, num_threads: int | None = None) -> None:
         self.model_dir = Path(model_dir or SENSEVOICE_MODEL_DIR)
-        self.num_threads = max(1, num_threads or 2)
+        import os
+        self.num_threads = max(1, num_threads or max(2, min(4, (os.cpu_count() or 4) // 2)))
         self._recognizer_instance = None
 
     def _recognizer(self):
@@ -358,6 +462,37 @@ class LocalSenseVoiceProvider:
             chunks.append(samples[start:total])
         return chunks
 
+    def _vad_model_path(self) -> Path | None:
+        for folder in (self.model_dir, SENSEVOICE_MODEL_DIR):
+            candidate = Path(folder) / VAD_MODEL_FILENAME
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _iter_timed_chunks(self, path: Path):
+        """Yield ``(start_sample, samples)`` cut at pauses in speech.
+
+        Silero VAD (shipped next to the model) finds where people stop talking;
+        neighbouring speech is merged into pieces of at most ``max_chunk_seconds``
+        so a sentence is not cut in half. Without the VAD model, or when it finds
+        no speech at all, fall back to the energy-based fixed-length pieces.
+        """
+        vad_model = self._vad_model_path()
+        if vad_model is not None:
+            produced = False
+            try:
+                for item in _iter_vad_chunks(path, vad_model, self.sample_rate, self.max_chunk_seconds):
+                    produced = True
+                    yield item
+            except ImportError:
+                produced = False
+            if produced:
+                return
+        offset = 0
+        for chunk in self._iter_audio_chunks(path):
+            yield offset, chunk
+            offset += len(chunk)
+
     @classmethod
     def _iter_audio_chunks(cls, path: Path):
         """Decode long media with at most ~29 seconds of resident PCM."""
@@ -400,27 +535,27 @@ class LocalSenseVoiceProvider:
         if not path.is_file():
             raise FileNotFoundError(path)
         if progress_callback is not None:
-            progress_callback(0.1, "正在使用轻量引擎识别音频。")
-        samples = self._decode_audio(path)
-        chunks = self._split_audio(samples)
+            progress_callback(0.02, "正在准备识别。")
+        duration = _safe_duration(path)
         recognizer = self._recognizer()
         transcript_parts = []
         timeline_parts = []
-        start_sample = 0
-        for index, chunk in enumerate(chunks):
+        for start_sample, chunk in self._iter_timed_chunks(path):
             stream = recognizer.create_stream()
             stream.accept_waveform(self.sample_rate, chunk)
             recognizer.decode_stream(stream)
             text = str(stream.result.text or "").strip()
+            end_sample = start_sample + len(chunk)
             if text:
                 transcript_parts.append(text)
-                start_sec = start_sample / self.sample_rate
-                end_sec = (start_sample + len(chunk)) / self.sample_rate
-                timeline_parts.append(f"{start_sec:.3f}s -> {end_sec:.3f}s {text}")
-            start_sample += len(chunk)
+                timeline_parts.append(
+                    f"{start_sample / self.sample_rate:.3f}s -> {end_sample / self.sample_rate:.3f}s {text}"
+                )
             if progress_callback is not None:
-                ratio = 0.1 + (0.9 * (index + 1) / len(chunks))
-                progress_callback(ratio, f"正在识别音频片段 {index + 1}/{len(chunks)}。")
+                ratio, detail = _recognition_progress(end_sample / self.sample_rate, duration)
+                progress_callback(ratio, detail)
+        if progress_callback is not None:
+            progress_callback(1.0, "识别完成，正在整理原文。")
         transcript = "\n".join(transcript_parts)
         _transcription_runtime.update(active_provider=self.name, fallback_active=False,
                                       actual_device="cpu", compute_type="int8")
@@ -451,31 +586,27 @@ class LocalSenseVoiceCudaProvider(LocalSenseVoiceProvider):
             progress_callback(0.02, "正在准备本地显卡识别。")
         self.worker.warm()
         from itertools import islice
-        chunks = iter(self._iter_audio_chunks(path))
-        try:
-            duration = _probe_audio_duration(path)
-        except RuntimeError:
-            duration = 0
+        chunks = iter(self._iter_timed_chunks(path))
+        duration = _safe_duration(path)
         texts, timeline = [], []
-        offset, processed = 0, 0
+        offset = 0
         while batch := list(islice(chunks, 4)):
-            results = self.worker.decode(batch)
+            results = self.worker.decode([samples for _, samples in batch])
             if len(results) != len(batch):
                 raise RuntimeError("显卡转写返回不完整，请重试。")
-            for chunk, text in zip(batch, results):
-                end = offset + len(chunk)
+            for (start, chunk), text in zip(batch, results):
+                end = start + len(chunk)
                 if text:
                     texts.append(text)
-                    timeline.append(f"{offset/self.sample_rate:.3f}s -> {end/self.sample_rate:.3f}s {text}")
-                offset = end
+                    timeline.append(f"{start/self.sample_rate:.3f}s -> {end/self.sample_rate:.3f}s {text}")
+                offset = max(offset, end)
             if progress_callback:
-                processed += len(batch)
-                ratio = min(0.99, 0.1 + 0.9 * offset / self.sample_rate / duration) if duration else 0.5
-                progress_callback(ratio, f"正在使用显卡识别，已完成 {processed} 个片段。")
+                ratio, detail = _recognition_progress(offset / self.sample_rate, duration)
+                progress_callback(ratio, detail)
         if not offset:
             raise RuntimeError("媒体文件中没有可识别的音频内容。")
         if progress_callback:
-            progress_callback(1.0, "显卡识别完成，正在整理原文。")
+            progress_callback(1.0, "识别完成，正在整理原文。")
         _transcription_runtime.update(active_provider=self.name, fallback_active=False,
                                       actual_device="cuda", compute_type="float32")
         return TranscriptionResult(provider=self.name, transcript_text="\n".join(texts),
@@ -495,7 +626,9 @@ class UnavailableTranscriptionProvider:
         source_url: str | None = None,
         progress_callback: TranscriptionProgressCallback | None = None,
     ) -> TranscriptionResult:
-        raise RuntimeError("当前云端预览未配置转写服务。请配置 OpenAI-compatible 转写服务后再处理音视频。")
+        if DEPLOYMENT_MODE == "cloud_preview":
+            raise RuntimeError("当前云端预览未配置转写服务。请配置 OpenAI-compatible 转写服务后再处理音视频。")
+        raise RuntimeError("识别组件还没有准备好。请回到首页，按提示下载识别组件后再试。")
 
 
 class FallbackTranscriptionProvider:

@@ -119,7 +119,7 @@ PLAYWRIGHT_BROWSERS_DIR = RUNTIME_DIR / "playwright-browsers"
 SENSEVOICE_MODEL_DIR = _path_setting(
     "sensevoice_model_path",
     "AUDIO2TEXT_SENSEVOICE_MODEL_PATH",
-    MODELS_DIR / "sensevoice" / "small-int8",
+    MODELS_DIR / "sensevoice" / "general-int8",
 )
 
 LEGACY_BUNDLED_MODEL_PATH = PROJECT_ROOT / "Assets" / "Models" / "FasterWhisper" / "medium"

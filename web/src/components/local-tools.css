@@ -13,3 +13,4 @@
 @media(prefers-reduced-motion:reduce){.local-runtime-settings>summary::before,.local-settings-button,.local-tools-dialog button{transition:none}.local-tools-dialog .is-spinning{animation:none}}
 .local-model-field{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 16px;align-items:center}.local-model-field input{grid-column:1/-1}.local-model-field button{background:transparent;border-color:transparent;color:#555}.local-tools-status{display:inline-flex;align-items:center;gap:4px}.local-tools-edit:has(input:checked){border-color:#0006}
 @media(forced-colors:active){.local-tools-dialog,.local-tools-dialog button,.local-tools-edit,.local-tools-preview{border:1px solid ButtonText}.local-tools-edit:has(input:checked){outline:2px solid Highlight}}
+.local-tools-body input:not([type=checkbox]),.local-tools-body select{font-size:14px}

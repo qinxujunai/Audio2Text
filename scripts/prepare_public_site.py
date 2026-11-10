@@ -17,6 +17,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 VERSION_PATTERN = re.compile(r"^v(?P<version>\d+\.\d+\.\d+)$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 EXPECTED_INSTALLER = "Wanxiang-Windows-x64-Setup.exe"
+# Same file on a mainland-China mirror (Tencent Cloud COS, Shanghai); same SHA-256 as the Release asset.
+MIRROR_BASE = "https://media-1416754078.cos.ap-shanghai.myqcloud.com/wanxiang/releases"
 EXPECTED_CHECKSUMS = ("SHA256SUMS.txt", "Wanxiang-Windows-x64-Setup.exe.sha256")
 TRIAL_URL = "https://wanxiang.praxisai.online"
 
@@ -125,6 +127,7 @@ def _validated_release(release: dict, *, token: str = "", checksums_file: str | 
         "version": match.group("version"),
         "tag": str(release["tag_name"]),
         "installer_url": str(installer["browser_download_url"]),
+        "mirror_url": f"{MIRROR_BASE}/{release['tag_name']}/{EXPECTED_INSTALLER}",
         "installer_size": int(installer["size"]),
         "installer_size_label": _format_size(int(installer["size"])),
         "sha256": digest,
@@ -146,6 +149,7 @@ def _render_site(source: Path, output: Path, metadata: dict, *, trial_available:
     replacements = {
         "__WANXIANG_VERSION__": metadata["version"],
         "__WANXIANG_INSTALLER_URL__": metadata["installer_url"],
+        "__WANXIANG_MIRROR_URL__": metadata["mirror_url"],
         "__WANXIANG_INSTALLER_SIZE__": metadata["installer_size_label"],
         "__WANXIANG_SHA256__": metadata["sha256"],
         "__WANXIANG_TRIAL_LINK__": trial_link,

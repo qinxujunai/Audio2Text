@@ -37,7 +37,13 @@ class PipelineAndStoreTestCase(unittest.TestCase):
 
         self.assertEqual(error.reason_code, "transcribe_runtime_unavailable")
         self.assertFalse(error.retryable)
-        self.assertIn("转写运行时", pipeline._public_error_message_with_reason("transcribe", error.reason_code))
+        self.assertIn("识别组件", pipeline._public_error_message_with_reason("transcribe", error.reason_code))
+
+    def test_media_without_sound_is_reported_as_a_content_problem(self) -> None:
+        error = pipeline._transcription_error_from_exception(RuntimeError("媒体文件中没有可识别的音轨。"))
+        self.assertEqual(error.reason_code, "transcribe_no_audio")
+        self.assertTrue(error.retryable)
+        self.assertIn("没有拿到可以识别的声音", pipeline._public_error_message_with_reason("transcribe", error.reason_code))
 
     def test_capture_store_never_persists_whole_capture_failed_state(self) -> None:
         root = Path.cwd() / "tests_runtime" / "store_runs" / uuid4().hex

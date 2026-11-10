@@ -19,7 +19,9 @@ import av
 import httpx
 
 from app.capture_diagnostics import CaptureDiagnostics, write_capture_event
-from app.extractors import ExtractionError, ExtractionOutcome, complete_deferred_bilibili_video
+from app.cancellation import CURRENT_CAPTURE, CaptureCancelled, is_cancelled, raise_if_cancelled, request_cancel
+from app.cancellation import clear as clear_cancel
+from app.extractors import DownloadError, ExtractionError, ExtractionOutcome, complete_deferred_bilibili_video, complete_deferred_ytdlp_video
 from app.providers import TranscriptionResult, get_transcription_provider
 from app.resolver import resolve_file_type, resolve_url, RetiredSourceError, YOUTUBE_RETIRED_MESSAGE
 from app.schemas import (
@@ -1524,9 +1526,15 @@ def _load_deferred_video(capture_id: str) -> dict | None:
 def _complete_deferred_video(capture, result: ResultDocumentModel, spec: dict) -> ResultDocumentModel:
     """Download the original video of a text-first capture and add it to the result."""
     artifact_dir = ARTIFACTS_DIR / capture.id
-    if spec.get("platform") != "bilibili":
+    if spec.get("platform") == "bilibili":
+        video_path = complete_deferred_bilibili_video(spec, artifact_dir)
+    elif spec.get("platform") == "ytdlp":
+        try:
+            video_path = complete_deferred_ytdlp_video(spec, artifact_dir)
+        except DownloadError as exc:
+            raise ExtractionError("download", "原视频暂未下载完成。", reason_code="download_failed", retryable=True) from exc
+    else:
         raise ExtractionError("download", "不支持的后台视频来源。", reason_code="download_failed", retryable=True)
-    video_path = complete_deferred_bilibili_video(spec, artifact_dir)
     if video_path is None or not Path(video_path).is_file():
         raise ExtractionError("download", "原视频暂未下载完成。", reason_code="download_failed", retryable=True)
     added = [
@@ -1841,11 +1849,15 @@ def _transcription_error_from_exception(exc: BaseException) -> ExtractionError:
         "尚未配置",
         "尚未安装",
         "尚未准备",
-        "没有可识别的音轨",
-        "没有可识别的音频",
-        "无法确认音频时长",
+        "还没有准备好",
     )
-    if isinstance(exc, FileNotFoundError) or any(marker in lowered for marker in unavailable_markers):
+    # A file without sound is a problem with the content (often a video-only
+    # download), not with the app: say so instead of blaming the engine.
+    no_audio_markers = ("没有可识别的音轨", "没有可识别的音频", "无法确认音频时长")
+    if any(marker in message for marker in no_audio_markers):
+        reason_code = "transcribe_no_audio"
+        retryable = True
+    elif isinstance(exc, FileNotFoundError) or any(marker in lowered for marker in unavailable_markers):
         reason_code = "transcribe_runtime_unavailable"
         retryable = False
     elif isinstance(exc, (httpx.HTTPError, TimeoutError, ConnectionError)) or any(
@@ -1972,7 +1984,9 @@ def _public_error_message_with_reason(stage: str, reason_code: str | None = None
     if reason_code == "transcribe_failed":
         return "媒体已拿到，文字还在准备中。建议稍后重试，或换一个更清晰的音视频文件。"
     if reason_code == "transcribe_runtime_unavailable":
-        return "转写运行时还没有准备好，媒体文件已保留。请稍后重试，或检查本机转写配置。"
+        return "识别组件还没有准备好，媒体文件已保留。请回到首页按提示准备识别组件后再试。"
+    if reason_code == "transcribe_no_audio":
+        return "这条内容里没有拿到可以识别的声音，可能只下载到了画面。请稍后重新处理，或换一条内容。"
     if reason_code == "image_assets_missing":
         return "这条内容没有拿到可用图片。请检查链接是否有效，或换一条公开内容再试。"
     if reason_code == "media_or_subtitle_missing":
@@ -2109,6 +2123,55 @@ def recover_pending_captures() -> None:
             _start_asset_preparation(capture.id)
 
 
+CANCELLED_MESSAGE = "已取消。需要时可以重新处理这条内容。"
+
+
+def _finish_cancelled(capture, diagnostics=None, recovery_seconds: float = 0.0) -> None:
+    """Record a capture the person stopped: kept in history, can be processed again."""
+    logger.info("Capture cancelled by the user: %s", capture.id)
+    if diagnostics is not None:
+        diagnostics.finish_capture(
+            status="needs_user_action",
+            recovery_seconds=recovery_seconds,
+            error_stage="cancelled",
+            reason_code="user_cancelled",
+            retryable=True,
+        )
+    current = repository.get(capture.id) or capture
+    repository.update(
+        capture.id,
+        status="needs_user_action",
+        result_state="awaiting_user",
+        finished_at=now_iso(),
+        error_stage="cancelled",
+        error_message=CANCELLED_MESSAGE,
+        processing=_update_processing(
+            current,
+            current_stage="awaiting_user",
+            progress_percent=current.processing.progress_percent if current.processing else 0,
+            progress_detail=CANCELLED_MESSAGE,
+            trace=[_make_trace("cancelled", CANCELLED_MESSAGE)],
+            failure_reason_code="user_cancelled",
+            retryable=True,
+        ),
+    )
+
+
+def cancel_capture(capture_id: str) -> bool:
+    """Stop a queued or running capture. Returns False when there is nothing to stop."""
+    capture = repository.get(capture_id)
+    if capture is None or capture.status not in {"queued", "processing"}:
+        return False
+    with worker_lock:
+        running = capture_id in active_capture_ids
+        queued_capture_ids.discard(capture_id)
+    if running:
+        request_cancel(capture_id)
+    else:
+        _finish_cancelled(capture)
+    return True
+
+
 def process_capture(capture_id: str) -> None:
     capture = repository.get(capture_id)
     with worker_lock:
@@ -2138,9 +2201,11 @@ def process_capture(capture_id: str) -> None:
         input_type=capture.input_type,
     )
 
+    cancel_token = CURRENT_CAPTURE.set(capture_id)
     try:
         def persist_capture(*, processing=None, **fields):
             nonlocal capture
+            raise_if_cancelled(capture_id)
             capture = repository.update(capture.id, processing=processing, **fields) or capture
             return capture
 
@@ -2341,7 +2406,7 @@ def process_capture(capture_id: str) -> None:
 
             def transcription_progress(progress_ratio: float, detail: str) -> None:
                 bounded_ratio = min(max(progress_ratio, 0.0), 1.0)
-                percent = 60 + int(round(32 * bounded_ratio))
+                percent = 50 + int(round(46 * bounded_ratio))  # transcription is most of the wait on long audio
                 update_live_progress("transcribe", percent, detail)
 
             transcription_provider = get_transcription_provider(platform=source.platform)
@@ -2465,7 +2530,12 @@ def process_capture(capture_id: str) -> None:
         logger.info("Capture stage durations: %s | %s", capture.id, diagnostics.summary_text(recovery_seconds=recovery_seconds))
         logger.info("Capture completed: %s", capture.id)
 
+    except CaptureCancelled:
+        _finish_cancelled(capture, diagnostics, recovery_seconds)
     except ExtractionError as exc:
+        if is_cancelled(capture_id):
+            _finish_cancelled(capture, diagnostics, recovery_seconds)
+            return
         can_retry_automatically = _should_automatically_retry(capture, exc)
         if can_retry_automatically:
             next_retry_count = capture.processing.retry_count + 1
@@ -2604,6 +2674,9 @@ def process_capture(capture_id: str) -> None:
             ),
         )
     except Exception as exc:  # noqa: BLE001
+        if is_cancelled(capture_id):
+            _finish_cancelled(capture, diagnostics, recovery_seconds)
+            return
         next_retry_count = _queue_internal_retry(capture)
         if next_retry_count is not None:
             logger.warning(
@@ -2658,6 +2731,8 @@ def process_capture(capture_id: str) -> None:
 
 
     finally:
+        CURRENT_CAPTURE.reset(cancel_token)
+        clear_cancel(capture_id)
         with worker_lock:
             active_capture_ids.discard(capture_id)
         if retry_after_cleanup:

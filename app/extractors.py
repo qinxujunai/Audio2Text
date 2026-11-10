@@ -24,6 +24,8 @@ from youtube_transcript_api import YouTubeTranscriptApi
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
+from app.cancellation import CURRENT_CAPTURE, raise_if_cancelled, tracked_process
+
 from app.platforms import douyin as douyin_platform
 from app.platforms import ranged as ranged_download
 from app.resolver import ResolvedSource
@@ -129,6 +131,23 @@ try:
     )
 except (TypeError, ValueError):
     YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 120.0
+
+
+AUDIO_FIRST_MIN_SECONDS = 600.0
+AUDIO_ONLY_FORMAT = "bestaudio[ext=m4a]/bestaudio"
+
+
+def _media_download_budget(duration_seconds: float | None, *, video: bool) -> float:
+    """Time allowed for one yt-dlp download, scaled to the length of the content.
+
+    A fixed two-minute budget is fine for a short clip but makes a two-hour
+    interview fail every time. Assume a modest home connection.
+    """
+    base = YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+    duration = max(float(duration_seconds or 0), 0.0)
+    if video:
+        return max(base, 120.0 + duration * 0.25)
+    return max(base, 60.0 + duration * 0.05)
 
 
 @dataclass(frozen=True, slots=True)
@@ -707,6 +726,7 @@ def _download_file(
                     response.raise_for_status()
                     with open(target_path, "wb") as handle:
                         for chunk in response.iter_bytes():
+                            raise_if_cancelled()
                             handle.write(chunk)
             return target_path
         except httpx.HTTPError as exc:
@@ -740,11 +760,13 @@ def _download_large_file(
     request_headers = _request_headers()
     if headers:
         request_headers.update(headers)
+    capture_id = CURRENT_CAPTURE.get()
     try:
         done = ranged_download.download_in_parts(
             lambda: _httpx_client(proxy=_proxy_for_platform(platform), headers=request_headers),
             url,
             target_path,
+            check=lambda: raise_if_cancelled(capture_id),
         )
     except httpx.HTTPError:
         done = None
@@ -1512,10 +1534,12 @@ def _run_ytdlp_media_download(
         creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
     )
     try:
-        stdout, stderr = process.communicate(
-            json.dumps(request, ensure_ascii=False),
-            timeout=max(1.0, timeout_seconds),
-        )
+        with tracked_process(process, _terminate_ytdlp_worker):
+            stdout, stderr = process.communicate(
+                json.dumps(request, ensure_ascii=False),
+                timeout=max(1.0, timeout_seconds),
+            )
+        raise_if_cancelled()
     except subprocess.TimeoutExpired as exc:
         _terminate_ytdlp_worker(process)
         try:
@@ -1547,12 +1571,15 @@ def _download_media_selection_with_ytdlp(
     cookie_text: str = "",
     platform: str = "",
     content_type: str = "",
+    *,
+    timeout_seconds: float | None = None,
+    format_selector: str | None = None,
 ) -> DownloadSelection:
     cookie_file = _cookie_file(cookie_text, capture_dir)
     output_template = str(capture_dir / "%(id)s.%(ext)s")
     is_video = content_type == "video"
-    primary_selector = _download_format_selector_for_platform(content_type, platform)
-    fallback_selector = _download_format_fallback_for_platform(content_type, platform)
+    primary_selector = format_selector or _download_format_selector_for_platform(content_type, platform)
+    fallback_selector = None if format_selector else _download_format_fallback_for_platform(content_type, platform)
     format_selectors = [primary_selector]
     if fallback_selector and fallback_selector != primary_selector:
         format_selectors.append(fallback_selector)
@@ -1591,7 +1618,7 @@ def _download_media_selection_with_ytdlp(
         )
     last_exc: Exception | None = None
     info = None
-    deadline = time.monotonic() + YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+    deadline = time.monotonic() + (timeout_seconds or YTDLP_MEDIA_DOWNLOAD_TIMEOUT_SECONDS)
     for browser_cookie_source in _browser_cookie_sources(cookie_file, platform):
         for selector_index, selector in enumerate(format_selectors):
             remaining = deadline - time.monotonic()
@@ -2455,6 +2482,26 @@ def _download_bilibili_audio_first(
         return None, None, [f"音轨优先下载失败，改为整段下载：{exc.message}"]
 
 
+def complete_deferred_ytdlp_video(spec: dict, capture_dir: Path) -> Path | None:
+    """Fetch the original video of a text-first capture that came through yt-dlp."""
+    url = str(spec.get("url") or "")
+    if not url:
+        return None
+    work_dir = capture_dir / "deferred-video"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    selection = _download_media_selection_with_ytdlp(
+        url,
+        work_dir,
+        platform=str(spec.get("source_platform") or ""),
+        content_type="video",
+        timeout_seconds=max(900.0, _media_download_budget(spec.get("duration_seconds"), video=True)),
+    )
+    target = capture_dir / f"source_video{selection.path.suffix or '.mp4'}"
+    shutil.move(str(selection.path), target)
+    shutil.rmtree(work_dir, ignore_errors=True)
+    return target
+
+
 def complete_deferred_bilibili_video(spec: dict, capture_dir: Path) -> Path | None:
     """Complete the original video without making the delivered text wait for it.
 
@@ -2768,13 +2815,43 @@ def extract_with_ytdlp(
         try:
             if progress_callback is not None:
                 progress_callback(36 if content_type == "video" else 34, "正在下载原视频文件。" if content_type == "video" else "正在下载音频文件。")
-            media_selection = _download_media_selection_with_ytdlp(
-                resolved.normalized_url,
-                capture_dir,
-                cookie_text=cookie_text,
-                platform=resolved.platform,
-                content_type=content_type,
-            )
+            duration = float(info["duration"]) if info.get("duration") else None
+            media_selection = None
+            if content_type == "video" and outcome.needs_transcription and (duration or 0) >= AUDIO_FIRST_MIN_SECONDS:
+                # Long videos: deliver the text from the audio track first and fetch
+                # the picture in the background, the same as the direct Bilibili path.
+                try:
+                    if progress_callback is not None:
+                        progress_callback(36, "正在下载音频，文字会先出来，原视频随后补齐。")
+                    media_selection = _download_media_selection_with_ytdlp(
+                        resolved.normalized_url,
+                        capture_dir,
+                        cookie_text=cookie_text,
+                        platform=resolved.platform,
+                        content_type="audio",
+                        timeout_seconds=_media_download_budget(duration, video=False),
+                        format_selector=AUDIO_ONLY_FORMAT,
+                    )
+                    outcome.deferred_video = {
+                        "platform": "ytdlp",
+                        "source_platform": resolved.platform,
+                        "url": resolved.normalized_url,
+                        "duration_seconds": duration,
+                        "audio_path": str(media_selection.path),
+                    }
+                    outcome.strategy.append("audio_first")
+                except DownloadError as exc:
+                    outcome.warnings.append(f"音轨优先下载失败，改为整段下载：{exc}")
+                    media_selection = None
+            if media_selection is None:
+                media_selection = _download_media_selection_with_ytdlp(
+                    resolved.normalized_url,
+                    capture_dir,
+                    cookie_text=cookie_text,
+                    platform=resolved.platform,
+                    content_type=content_type,
+                    timeout_seconds=_media_download_budget(duration, video=content_type == "video"),
+                )
             outcome.media_file_path = str(media_selection.path)
             outcome.strategy.append("media_download")
             outcome.provider_traces.append(

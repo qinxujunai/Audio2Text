@@ -790,7 +790,11 @@ function PodcastPanel({
 
   return (
     <>
-    <section className="podcast-panel" aria-label="播客播放器" ref={panelRef}>
+    <section
+      className={coverArtifact ? "podcast-panel" : "podcast-panel is-compact"}
+      aria-label="音频播放器"
+      ref={panelRef}
+    >
       <audio
         ref={audioRef}
         preload="metadata"
@@ -805,17 +809,13 @@ function PodcastPanel({
           onTimeChange(nextTime);
         }}
       />
-      <div className="podcast-cover-wrap">
-        {coverArtifact ? (
+      {coverArtifact ? (
+        <div className="podcast-cover-wrap">
           <img alt="节目封面" className="podcast-cover" src={artifactPreviewUrl(coverArtifact)} />
-        ) : (
-          <div className="podcast-cover is-placeholder" aria-hidden="true">
-            <Headphones size={32} />
-          </div>
-        )}
-      </div>
+        </div>
+      ) : null}
       <div className="podcast-heading">
-        <span className="result-section-kicker">播客</span>
+        <span className="result-section-kicker">{capture.source.platform === "xiaoyuzhou" ? "播客" : "音频"}</span>
         <strong>{capture.source.title || capture.capture.title || "音频节目"}</strong>
         {capture.source.author ? <span>{capture.source.author}</span> : null}
       </div>
@@ -1006,7 +1006,8 @@ export function DeliverableStage({
   const [previewMode, setPreviewMode] = useState<ImagePreviewMode>("image");
   const [retryingImage, setRetryingImage] = useState<number | null>(null);
   const [saveReceipt, setSaveReceipt] = useState<SaveReceipt | null>(null);
-  const [playbackTime, setPlaybackTime] = useState(0);
+  // -1 until the audio has played or been seeked: nothing is highlighted before that.
+  const [playbackTime, setPlaybackTime] = useState(-1);
   const [coverRequested, setCoverRequested] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const viewerTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -1127,7 +1128,10 @@ export function DeliverableStage({
       ? "deliverable-workspace has-images"
       : "deliverable-workspace";
 
-  const secondaryFacts = visibleFacts.filter((fact) => fact.key !== "title");
+  // Platform, type and duration already sit as pills under the title.
+  const secondaryFacts = visibleFacts.filter(
+    (fact) => !["title", "platform", "content_type", "duration"].includes(fact.key),
+  );
   const factsSection = secondaryFacts.length || sourceUrl ? (
     <section className="facts-strip">
       {secondaryFacts.length || sourceUrl ? (

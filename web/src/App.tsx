@@ -20,12 +20,14 @@ import {
   restartDesktopRuntime,
   revealDiagnosticsFolder,
   retryCapture,
+  cancelCapture,
 } from "./api";
 import { DeliverableStage } from "./components/DeliverableStage";
 import { Header } from "./components/Header";
 import { InputStage } from "./components/InputStage";
 import { ProcessingStage } from "./components/ProcessingStage";
 import { RuntimeSetup } from "./components/RuntimeSetup";
+import { UpdateNotice } from "./components/UpdateNotice";
 import { LocalSettingsButton } from "./components/LocalTools";
 import { isDesktopApp } from "./desktop";
 import type { CaptureEnvelope, CaptureListItem, ConfigResponse, RuntimePack } from "./types";
@@ -91,30 +93,30 @@ type RequestError = Error & {
 function stageLabel(stage?: string | null) {
   return (
     {
-      queued: "\u7B49\u5F85\u5F00\u59CB",
-      resolve: "\u8BC6\u522B\u6765\u6E90",
-      extract: "\u63D0\u53D6\u5185\u5BB9",
-      transcribe: "\u8F6C\u5199\u97F3\u9891",
-      compose: "\u6574\u7406\u7ED3\u679C",
-      completed: "\u5904\u7406\u5B8C\u6210",
-      processing: "\u5904\u7406\u4E2D",
+      queued: "等待开始",
+      resolve: "识别来源",
+      extract: "提取内容",
+      transcribe: "转写音频",
+      compose: "整理结果",
+      completed: "处理完成",
+      processing: "处理中",
       failed: "需要处理",
-      limit: "\u8D85\u51FA\u65F6\u957F\u9650\u5236",
-    }[stage || ""] || "\u5904\u7406\u4E2D"
+      limit: "超出时长限制",
+    }[stage || ""] || "处理中"
   );
 }
 
 function processingDescription(capture: CaptureEnvelope | null) {
   const stage = capture?.capture.current_stage || capture?.capture.status || "";
   if (stage === "resolve")
-    return "\u6B63\u5728\u8BC6\u522B\u6765\u6E90\u548C\u5185\u5BB9\u7C7B\u578B\u3002";
+    return "正在识别来源和内容类型。";
   if (stage === "extract")
-    return "\u6B63\u5728\u63D0\u53D6\u53EF\u4EA4\u4ED8\u7684\u6B63\u6587\u3001\u5B57\u5E55\u3001\u5A92\u4F53\u6216\u56FE\u7247\u3002";
+    return "正在提取可交付的正文、字幕、媒体或图片。";
   if (stage === "transcribe")
-    return "\u6B63\u5728\u8F6C\u5199\u97F3\u9891\u5185\u5BB9\uFF0C\u8BF7\u4FDD\u6301\u5F53\u524D\u9875\u9762\u3002";
+    return "正在转写音频内容，请保持当前页面。";
   if (stage === "compose")
-    return "\u6B63\u5728\u6574\u7406\u6700\u7EC8\u7ED3\u679C\u3002";
-  return "\u8BF7\u4FDD\u6301\u5F53\u524D\u9875\u9762\uFF0C\u6211\u4EEC\u4F1A\u81EA\u52A8\u5B8C\u6210\u6574\u7406\u3002";
+    return "正在整理最终结果。";
+  return "请保持当前页面，我们会自动完成整理。";
 }
 
 function errorMessageForCapture(
@@ -135,38 +137,42 @@ function errorMessageForCapture(
 
   const stage = capture?.capture.error_stage || "";
   if (stage === "limit") {
-    return "\u8FD9\u6761\u5185\u5BB9\u8D85\u51FA\u4E86\u5F53\u524D\u5728\u7EBF\u4F53\u9A8C\u7684\u5904\u7406\u8303\u56F4\u3002\u684C\u9762\u7248\u4E0D\u9650\u5236\u672C\u5730\u5904\u7406\u65F6\u957F\u3002";
+    return "这条内容超出了当前在线体验的处理范围。桌面版不限制本地处理时长。";
   }
   if (stage === "input") {
-    return "\u8FD9\u6761\u5185\u5BB9\u5F53\u524D\u4E0D\u53EF\u7528\u3002\u4F60\u53EF\u4EE5\u6362\u4E00\u4E2A\u516C\u5F00\u94FE\u63A5\uFF0C\u6216\u91CD\u65B0\u4E0A\u4F20\u6587\u4EF6\u518D\u8BD5\u3002";
+    return "这条内容当前不可用。你可以换一个公开链接，或重新上传文件再试。";
   }
   if (stage === "extract") {
-    return "\u6765\u6E90\u8BC6\u522B\u6210\u529F\uFF0C\u4F46\u6CA1\u6709\u7A33\u5B9A\u62FF\u5230\u6B63\u6587\u3001\u5B57\u5E55\u3001\u5A92\u4F53\u6216\u56FE\u7247\u7ED3\u679C\u3002\u5EFA\u8BAE\u6362\u4E00\u6761\u5185\u5BB9\u518D\u8BD5\u3002";
+    return "来源识别成功，但没有稳定拿到正文、字幕、媒体或图片结果。建议换一条内容再试。";
   }
   if (stage === "transcribe") {
-    return "\u5A92\u4F53\u5DF2\u7ECF\u62FF\u5230\u4E86\uFF0C\u6587\u5B57\u8FD8\u5728\u51C6\u5907\u4E2D\u3002\u5EFA\u8BAE\u7A0D\u540E\u91CD\u8BD5\uFF0C\u6216\u6362\u4E00\u4E2A\u66F4\u6E05\u6670\u7684\u97F3\u89C6\u9891\u6587\u4EF6\u3002";
+    return "媒体已经拿到了，文字还在准备中。建议稍后重试，或换一个更清晰的音视频文件。";
   }
   if (stage === "internal") {
-    return "\u5904\u7406\u8FC7\u7A0B\u4E2D\u53D1\u751F\u4E86\u5185\u90E8\u95EE\u9898\u3002\u8BF7\u8FD4\u56DE\u9996\u9875\uFF0C\u6362\u4E00\u6761\u5185\u5BB9\u91CD\u65B0\u8BD5\u8BD5\u3002";
+    return "处理过程中发生了内部问题。请返回首页，换一条内容重新试试。";
   }
-  return "\u8FD9\u6761\u5185\u5BB9\u6682\u65F6\u8FD8\u6CA1\u6709\u5B8C\u6210\u3002\u8BF7\u8FD4\u56DE\u9996\u9875\uFF0C\u6362\u4E00\u4E2A\u94FE\u63A5\u6216\u6587\u4EF6\u518D\u8BD5\u3002";
+  return "这条内容暂时还没有完成。请返回首页，换一个链接或文件再试。";
 }
 
 function processingFailureEyebrow(reason: string) {
+  if (reason === "user_cancelled") return "已取消";
   if (CONTENT_UNAVAILABLE_REASON_CODES.has(reason)) return "内容暂不可用";
   if (isTransientConnectionReason(reason)) return "连接暂时不稳定";
   if (isRateLimitedReason(reason)) return "来源请求较多";
-  if (reason === "transcribe_runtime_unavailable") return "转写组件未准备好";
+  if (reason === "transcribe_runtime_unavailable") return "识别组件未准备好";
+  if (reason === "transcribe_no_audio") return "没有拿到声音";
   if (reason === "transcribe_failed") return "转写未完成";
   if (reason === "download_failed") return "资源未准备好";
   return "暂时未完成";
 }
 
 function processingFailureTitle(reason: string) {
+  if (reason === "user_cancelled") return "已取消处理";
   if (CONTENT_UNAVAILABLE_REASON_CODES.has(reason)) return "这条内容暂时不可用";
   if (isTransientConnectionReason(reason)) return "暂时连不上来源";
   if (isRateLimitedReason(reason)) return "来源正在稍后响应";
-  if (reason === "transcribe_runtime_unavailable") return "转写组件还没有准备好";
+  if (reason === "transcribe_runtime_unavailable") return "识别组件还没有准备好";
+  if (reason === "transcribe_no_audio") return "这条内容没有可识别的声音";
   if (reason === "transcribe_failed") return "文字还没有准备好";
   if (reason === "download_failed") return "资源还没有准备好";
   if (reason === "internal_error") return "处理暂时中断";
@@ -233,6 +239,7 @@ export default function App() {
   const [input, setInput] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [clearBusy, setClearBusy] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [loadingDeepLink, setLoadingDeepLink] = useState(false);
@@ -267,9 +274,9 @@ export default function App() {
 
   const inputSubtitle = useMemo(() => {
     if (selectedFile) {
-      return "\u9009\u597D\u6587\u4EF6\u540E\u5373\u53EF\u76F4\u63A5\u5F00\u59CB\u5904\u7406\u3002";
+      return "选好文件后即可直接开始处理。";
     }
-    return "\u652F\u6301 \u54D4\u54E9\u54D4\u54E9\u3001\u5C0F\u5B87\u5B99\u3001\u6296\u97F3\u3001\u5C0F\u7EA2\u4E66\u3001\u5FAE\u4FE1\u516C\u4F17\u53F7\u56FE\u6587\uFF0C\u4E5F\u652F\u6301\u672C\u5730\u97F3\u89C6\u9891\u6587\u4EF6\u3002";
+    return "支持 哔哩哔哩、小宇宙、抖音、小红书、微信公众号图文，也支持本地音视频文件。";
   }, [selectedFile]);
 
   useEffect(() => {
@@ -370,6 +377,21 @@ export default function App() {
       setToast(calmErrorMessage(error, "暂时无法重新处理，请稍后再试。"));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function cancelCurrentCapture() {
+    if (!currentCapture || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelCapture(currentCapture.capture.id);
+      resetWorkspace();
+      await refreshHistory().catch(() => undefined);
+      setToast("已取消，这条内容保留在最近回看里，需要时可以重新处理。");
+    } catch (error) {
+      setToast(calmErrorMessage(error, "暂时无法取消，请稍后再试。"));
+    } finally {
+      setCancelling(false);
     }
   }
 
@@ -601,7 +623,7 @@ export default function App() {
       ) {
         resetWorkspace();
       }
-      setToast(`\u5DF2\u6E05\u7A7A ${result.cleared} \u6761\u8BB0\u5F55\u3002`);
+      setToast(`已清空 ${result.cleared} 条记录。`);
     } catch (error) {
       setCaptures(pending.captures);
       setCurrentCapture(pending.currentCapture);
@@ -679,7 +701,7 @@ export default function App() {
 
   async function submitText() {
     if (!input.trim()) {
-      setToast("\u5148\u8D34\u5165\u4E00\u4E2A\u516C\u5F00\u94FE\u63A5\u3002");
+      setToast("先贴入一个公开链接。");
       return;
     }
 
@@ -715,7 +737,7 @@ export default function App() {
   async function submitFile() {
     if (!selectedFile) {
       setToast(
-        "\u8BF7\u5148\u9009\u62E9\u4E00\u4E2A\u672C\u5730\u6587\u4EF6\u3002",
+        "请先选择一个本地文件。",
       );
       return;
     }
@@ -745,7 +767,7 @@ export default function App() {
     );
     if (!removableItems.length) {
       setToast(
-        "\u6682\u65F6\u6CA1\u6709\u53EF\u6E05\u7A7A\u7684\u8BB0\u5F55\u3002",
+        "暂时没有可清空的记录。",
       );
       return;
     }
@@ -858,7 +880,7 @@ export default function App() {
         ? "需要完整链接"
         : phase === "attention"
         ? processingFailureEyebrow(platformRecoveryReason)
-        : "\u6B63\u5728\u63D0\u53D6\u5185\u5BB9",
+        : "正在提取内容",
     title:
       platformSessionRequired
         ? "完成平台验证后继续"
@@ -893,7 +915,7 @@ export default function App() {
     >
       {showAppHeader ? (
         <Header
-          featureName={config?.product_feature_name || "\u4E07\u8C61\u6210\u6587"}
+          featureName={config?.product_feature_name || "万象成文"}
           onReset={resetWorkspace}
         />
       ) : null}
@@ -923,36 +945,39 @@ export default function App() {
               transition={{ duration: 0.4, ease: "easeInOut" }}
               className="stage-shell stage-shell-idle"
             >
-              <InputStage
-                settingsControl={config && config.deployment_mode !== "cloud_preview" ? <LocalSettingsButton /> : null}
-                input={input}
-                subtitle={inputSubtitle}
-                selectedFile={selectedFile}
-                submitting={submitting || clearBusy}
-                supportedExtensions={supportedExtensions}
-                maxUploadSizeMb={config?.max_upload_size_mb || 0}
-                captures={recentCaptures}
-                currentCaptureId={currentCapture?.capture.id}
-                onInputChange={setInput}
-                onSubmitText={() => void submitText()}
-                onPaste={() => void pasteFromClipboard()}
-                onSelectFile={setSelectedFile}
-                onSubmitFile={() => void submitFile()}
-                onOpenCapture={(captureId) => {
-                  void openCapture(captureId).catch((error) => {
-                    setToast(
-                      calmErrorMessage(
-                        error,
-                        "这条记录暂时无法打开，请稍后重试。",
-                      ),
-                    );
-                  });
-                }}
-                onClearHistory={() => {
-                  if (!clearBusy) void clearHistory();
-                }}
-                onDeleteCapture={queueCaptureRemoval}
-              />
+              <div className="idle-column">
+                {config && config.deployment_mode !== "cloud_preview" ? <UpdateNotice /> : null}
+                <InputStage
+                  settingsControl={config && config.deployment_mode !== "cloud_preview" ? <LocalSettingsButton /> : null}
+                  input={input}
+                  subtitle={inputSubtitle}
+                  selectedFile={selectedFile}
+                  submitting={submitting || clearBusy}
+                  supportedExtensions={supportedExtensions}
+                  maxUploadSizeMb={config?.max_upload_size_mb || 0}
+                  captures={recentCaptures}
+                  currentCaptureId={currentCapture?.capture.id}
+                  onInputChange={setInput}
+                  onSubmitText={() => void submitText()}
+                  onPaste={() => void pasteFromClipboard()}
+                  onSelectFile={setSelectedFile}
+                  onSubmitFile={() => void submitFile()}
+                  onOpenCapture={(captureId) => {
+                    void openCapture(captureId).catch((error) => {
+                      setToast(
+                        calmErrorMessage(
+                          error,
+                          "这条记录暂时无法打开，请稍后重试。",
+                        ),
+                      );
+                    });
+                  }}
+                  onClearHistory={() => {
+                    if (!clearBusy) void clearHistory();
+                  }}
+                  onDeleteCapture={queueCaptureRemoval}
+                />
+              </div>
             </motion.div>
           ) : null}
 
@@ -982,21 +1007,21 @@ export default function App() {
                   bootstrapping
                     ? "正在启动"
                     : loadingDeepLink
-                      ? "\u6062\u590D\u5185\u5BB9"
+                      ? "恢复内容"
                     : processingCopy.eyebrow
                 }
                 title={
                   bootstrapping
                     ? "正在准备万象成文"
                     : loadingDeepLink
-                      ? "\u6B63\u5728\u6062\u590D\u4E0A\u4E00\u6761\u5185\u5BB9"
+                      ? "正在恢复上一条内容"
                     : processingCopy.title
                 }
                 description={
                   bootstrapping
                     ? "正在检查本地处理组件和运行环境，准备好后会自动进入首页。"
                     : loadingDeepLink
-                      ? "\u5982\u679C\u4F60\u662F\u4ECE\u6DF1\u94FE\u63A5\u8FDB\u5165\uFF0C\u8FD9\u91CC\u4F1A\u76F4\u63A5\u6062\u590D\u5230\u5BF9\u5E94\u5185\u5BB9\u7684\u5F53\u524D\u72B6\u6001\u3002"
+                      ? "如果你是从深链接进入，这里会直接恢复到对应内容的当前状态。"
                       : processingCopy.description
                 }
                 stageLabel={
@@ -1022,6 +1047,12 @@ export default function App() {
                     ? resetWorkspace
                     : undefined
                 }
+                onCancel={
+                  phase === "processing" && currentCapture
+                    ? () => void cancelCurrentCapture()
+                    : undefined
+                }
+                cancelling={cancelling}
                 onRetry={
                   phase === "attention" && !workspaceError
                     ? currentCapture?.capture.retryable
@@ -1089,7 +1120,7 @@ export default function App() {
               exit={{ opacity: 0, y: 12 }}
               transition={{ duration: 0.2 }}
             >
-              <span>{`\u5DF2\u6E05\u7A7A ${pendingHistoryClear.removedCount} \u6761\u8BB0\u5F55`}</span>
+              <span>{`已清空 ${pendingHistoryClear.removedCount} 条记录`}</span>
               <button
                 className="toast-action"
                 onClick={undoPendingHistoryClear}

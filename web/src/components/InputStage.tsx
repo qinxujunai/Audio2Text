@@ -93,6 +93,13 @@ function displayPreview(item: CaptureListItem) {
   return preview;
 }
 
+function historyStatusLabel(item: CaptureListItem) {
+  if (item.cancelled) return "已取消";
+  if (item.status === "queued" || item.status === "processing") return "处理中";
+  if (item.status === "needs_user_action") return "未完成";
+  return "";
+}
+
 function clampText(value: string, limit = 34) {
   return value.length > limit ? `${value.slice(0, limit)}...` : value;
 }
@@ -130,6 +137,13 @@ export function InputStage({
 }: InputStageProps) {
   const [showAllHistory, setShowAllHistory] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const acceptAttribute = useMemo(
+    () =>
+      supportedExtensions.length
+        ? supportedExtensions.map((item) => (item.startsWith(".") ? item : `.${item}`)).join(",")
+        : ".mp3,.m4a,.wav,.flac,.aac,.ogg,.opus,.mp4,.mov,.mkv",
+    [supportedExtensions],
+  );
   const extensionLabel = useMemo(
     () => extensionSummary(supportedExtensions),
     [supportedExtensions],
@@ -165,6 +179,12 @@ export function InputStage({
           className="hero-form"
           onSubmit={(event) => {
             event.preventDefault();
+            // A chosen file and a typed link never coexist (see onChange below),
+            // so one arrow starts whichever the person gave us.
+            if (selectedFile && !input.trim()) {
+              void onSubmitFile();
+              return;
+            }
             void onSubmitText();
           }}
         >
@@ -188,11 +208,15 @@ export function InputStage({
               name="source"
               ref={textareaRef}
               value={input}
-              onChange={(event) => onInputChange(event.target.value)}
+              onChange={(event) => {
+                if (selectedFile && event.target.value.trim()) onSelectFile(null);
+                onInputChange(event.target.value);
+              }}
               onPaste={(event) => {
                 const text = event.clipboardData.getData("text/plain");
                 if (text.trim()) {
                   event.preventDefault();
+                  if (selectedFile) onSelectFile(null);
                   onInputChange(text);
                 }
               }}
@@ -233,10 +257,14 @@ export function InputStage({
                   <input
                     type="file"
                     hidden
-                    accept=".mp3,.m4a,.wav,.flac,.mp4,.mov,.mkv"
-                    onChange={(event) =>
-                      onSelectFile(event.target.files?.[0] || null)
-                    }
+                    accept={acceptAttribute}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0] || null;
+                      if (file && input.trim()) onInputChange("");
+                      onSelectFile(file);
+                      // Allow choosing the same file again after removing it.
+                      event.target.value = "";
+                    }}
                   />
                 </label>
                 {settingsControl}
@@ -244,9 +272,9 @@ export function InputStage({
 
               <button
                 className="hero-submit"
-                disabled={submitting || !input.trim()}
+                disabled={submitting || (!input.trim() && !selectedFile)}
                 type="submit"
-                aria-label="开始处理"
+                aria-label={selectedFile && !input.trim() ? "处理这个文件" : "开始处理"}
               >
                 <ArrowRight size={18} />
               </button>
@@ -269,7 +297,7 @@ export function InputStage({
                   ? `${fileSizeLabel(selectedFile.size)} · ${extensionLabel}`
                   : fileSizeLabel(selectedFile.size)}
               </span>
-              <small>{`${maxUploadSizeMb} MB 以内可直接处理。`}</small>
+              <small>{`${maxUploadSizeMb} MB 以内 · 点箭头开始处理`}</small>
             </div>
             <div className="selected-file-actions">
               <button
@@ -278,15 +306,7 @@ export function InputStage({
                 disabled={submitting}
                 type="button"
               >
-                移除文件
-              </button>
-              <button
-                className="inline-action"
-                onClick={onSubmitFile}
-                disabled={submitting}
-                type="button"
-              >
-                处理这个文件
+                移除
               </button>
             </div>
           </div>
@@ -358,6 +378,7 @@ export function InputStage({
                       ) : null}
                       <span className="recent-inline-foot">
                         {contentTypeLabel(item.content_type)}
+                        {historyStatusLabel(item) ? ` · ${historyStatusLabel(item)}` : ""}
                       </span>
                     </button>
 

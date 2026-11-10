@@ -120,7 +120,7 @@ async function downloadText(captureId: string, version: string) {
     await invoke("save_text_export", { captureId, version, text: data.text });
     return;
   }
-  const url = URL.createObjectURL(new Blob(["\uFEFF", data.text], { type: "text/plain;charset=utf-8" }));
+  const url = URL.createObjectURL(new Blob(["﻿", data.text], { type: "text/plain;charset=utf-8" }));
   const link = document.createElement("a"); link.href = url; link.download = `${captureId}_${version === "original" ? "原文" : "校对版"}.txt`; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

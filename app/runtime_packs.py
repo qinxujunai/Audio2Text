@@ -30,12 +30,26 @@ class RuntimePack:
     install_subdir: str
     archive_format: str = "zip"
     required: bool = False
+    mirrors: tuple[str, ...] = ()
+    replaces: tuple[str, ...] = ()
+
+    @property
+    def urls(self) -> tuple[str, ...]:
+        """Mirrors first (a domestic mirror is much faster in mainland China), the canonical URL last."""
+        return (*self.mirrors, self.url)
 
 
 def _safe_subdir(value: str) -> str:
     path = Path(value)
     if not value or path.is_absolute() or ".." in path.parts:
         raise RuntimePackError("运行组件安装目录无效。")
+    return value
+
+
+def _https_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise RuntimePackError("运行组件必须使用可信的 HTTPS 下载地址。")
     return value
 
 
@@ -61,7 +75,15 @@ def _parse_pack(item: dict[str, Any]) -> RuntimePack:
         raise RuntimePackError("运行组件缺少有效的文件大小。")
     if archive_format not in {"zip", "raw"}:
         raise RuntimePackError("运行组件压缩格式不受支持。")
+    raw_mirrors = item.get("mirrors") or []
+    raw_replaces = item.get("replaces") or []
+    if not isinstance(raw_mirrors, list) or not isinstance(raw_replaces, list):
+        raise RuntimePackError("运行组件清单格式不正确。")
+    mirrors = tuple(_https_url(str(entry).strip()) for entry in raw_mirrors if str(entry).strip())
+    replaces = tuple(_safe_subdir(str(entry).strip()) for entry in raw_replaces if str(entry).strip())
     return RuntimePack(
+        mirrors=mirrors,
+        replaces=replaces,
         pack_id=pack_id,
         version=version,
         url=url,
@@ -152,31 +174,46 @@ class RuntimePackManager:
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             raise
+        else:
+            self._remove_replaced(pack)
         finally:
             archive_path.unlink(missing_ok=True)
         return {"id": pack.pack_id, "version": pack.version, "installed": True}
 
     def _download(self, pack: RuntimePack, destination: Path) -> None:
-        attempts = 4
-        for attempt in range(attempts):
-            try:
-                self._download_once(pack, destination)
-                return
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                retryable = status in {408, 429} or status >= 500
-                if not retryable or attempt == attempts - 1:
-                    raise RuntimePackError(
-                        f"运行组件下载服务暂时不可用（HTTP {status}），请稍后重试。"
-                    ) from exc
-            except (httpx.RequestError, OSError) as exc:
-                if attempt == attempts - 1:
-                    raise RuntimePackError(
-                        "运行组件暂未完成下载，请检查网络后重试；已下载的进度会继续保留。"
-                    ) from exc
-            time.sleep(min(2**attempt, 8))
+        """Try each source in turn; a partial file is resumed from the next source (same bytes, same SHA-256)."""
+        urls = pack.urls
+        attempts = 4 if len(urls) == 1 else 2
+        last_error: RuntimePackError | None = None
+        for url in urls:
+            for attempt in range(attempts):
+                try:
+                    self._download_once(pack, destination, url)
+                    return
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code
+                    last_error = RuntimePackError(f"运行组件下载服务暂时不可用（HTTP {status}），请稍后重试。")
+                    if not (status in {408, 429} or status >= 500):
+                        break
+                except (httpx.RequestError, OSError):
+                    last_error = RuntimePackError("运行组件暂未完成下载，请检查网络后重试；已下载的进度会继续保留。")
+                except RuntimePackError as exc:
+                    last_error = exc
+                    break
+                if attempt < attempts - 1:
+                    time.sleep(min(2**attempt, 8))
+        raise last_error or RuntimePackError("运行组件暂未完成下载，请稍后重试。")
 
-    def _download_once(self, pack: RuntimePack, destination: Path) -> None:
+    def _remove_replaced(self, pack: RuntimePack) -> None:
+        """Delete folders of the pack this one replaces, once the new pack is in place."""
+        root = self.runtime_dir.resolve()
+        for subdir in pack.replaces:
+            folder = (self.runtime_dir / subdir).resolve()
+            if folder == root or root not in folder.parents or folder == (self.runtime_dir / pack.install_subdir).resolve():
+                continue
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def _download_once(self, pack: RuntimePack, destination: Path, url: str | None = None) -> None:
         existing = destination.stat().st_size if destination.exists() else 0
         if existing == pack.size_bytes:
             return
@@ -185,7 +222,7 @@ class RuntimePackManager:
             existing = 0
         headers = {"Range": f"bytes={existing}-"} if existing else {}
         with httpx.Client(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=False) as client:
-            current_url = pack.url
+            current_url = url or pack.url
             response = None
             for _ in range(4):
                 request = client.build_request("GET", current_url, headers=headers)
