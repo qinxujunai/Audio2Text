@@ -645,6 +645,19 @@ fn set_background_task_active(active: bool, state: State<'_, DesktopState>) -> R
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn fit_macos_window(window: &tauri::WebviewWindow) {
+    if let (Ok(size), Ok(pixel_ratio)) = (window.inner_size(), window.scale_factor()) {
+        let width = f64::from(size.width) / pixel_ratio;
+        // The native title bar occupies part of the reported window height.
+        // Full-screen windows have no title bar in the content area.
+        let title_bar = if window.is_fullscreen().unwrap_or(false) { 0.0 } else { 32.0 };
+        let height = (f64::from(size.height) / pixel_ratio - title_bar).max(1.0);
+        let zoom = (width / 1100.0).min(height / 820.0).min(1.25);
+        let _ = window.set_zoom(zoom);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -694,6 +707,8 @@ pub fn run() {
                 .build(app)?;
 
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                fit_macos_window(&window);
                 window.show()?;
                 window.set_focus()?;
             }
@@ -758,6 +773,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. }) {
+                if let Some(webview) = window.app_handle().get_webview_window(window.label()) {
+                    fit_macos_window(&webview);
+                }
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<DesktopState>();
                 let has_active_task = state
@@ -765,7 +786,7 @@ pub fn run() {
                     .lock()
                     .map(|guard| *guard)
                     .unwrap_or(false);
-                if has_active_task {
+                if cfg!(target_os = "macos") || has_active_task {
                     api.prevent_close();
                     let _ = window.hide();
                 } else {
@@ -776,6 +797,13 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build Wanxiang Chengwen")
         .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { has_visible_windows: false, .. } = &event {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
             if matches!(
                 event,
                 tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }

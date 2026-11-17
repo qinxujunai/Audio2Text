@@ -3245,53 +3245,24 @@ img {
   .deliverable-workspace { height: 450px; min-height: 450px; }
 }
 
-/* Mac windows can be much shorter than the original Windows layout. */
-body.is-macos-desktop .input-stage-inner { padding: 12px 20px 24px; }
-body.is-macos-desktop .hero-copy { margin-bottom: 16px; }
-body.is-macos-desktop .hero-copy h1 { font-size: clamp(27px, 3.3vw, 42px); margin-bottom: 10px; }
-body.is-macos-desktop .hero-copy p { font-size: clamp(14px, 1.4vw, 17px); line-height: 1.5; }
-body.is-macos-desktop .hero-form-card { min-height: 156px; padding: 14px 16px; }
-body.is-macos-desktop .hero-form-card textarea { min-height: 90px; padding: 10px 40px 0 10px; }
-body.is-macos-desktop .hero-form-footer { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0 0; }
-body.is-macos-desktop .hero-form-tools { flex: 1 1 260px; }
-body.is-macos-desktop .result-actions,
-body.is-macos-desktop .media-panel-actions {
-  flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; justify-content: flex-start; gap: 6px; scrollbar-width: thin; padding-bottom: 4px;
-}
+/* The native window scales this complete canvas uniformly as it is resized. */
+body.is-macos-desktop.has-result-stage,
+body.is-macos-desktop.has-result-stage #root,
+body.is-macos-desktop.has-result-stage .app-shell { height: 100vh; min-height: 0; overflow: hidden; }
+body.is-macos-desktop.has-result-stage .main-stage { height: 100%; min-height: 0; padding: 0; align-items: center; overflow: hidden; }
+body.is-macos-desktop .stage-shell-ready { width: 1100px; height: 820px; flex: 0 0 1100px; padding: 0; overflow: hidden; }
+body.is-macos-desktop .deliverable-stage { height: 820px; }
+body.is-macos-desktop .deliverable-stage-inner { width: 1100px; max-width: 1100px; height: 820px; max-height: 820px; overflow: hidden; }
+body.is-macos-desktop .deliverable-workspace-shell { flex: 1; min-height: 0; height: auto; overflow: hidden; }
+body.is-macos-desktop .deliverable-workspace { height: auto; min-height: 0; }
+body.is-macos-desktop .deliverable-hero h1 { font-size: 30px; }
+body.is-macos-desktop .hero-copy h1 { font-size: 46px; }
 body.is-macos-desktop .result-surface-head,
-body.is-macos-desktop .media-panel-head,
-body.is-macos-desktop .image-gallery-head { gap: 10px; margin-bottom: 12px; }
-body.is-macos-desktop .deliverable-hero { margin-bottom: 12px; }
-body.is-macos-desktop .deliverable-hero-pill { margin-bottom: 8px; padding: 5px 10px; }
-body.is-macos-desktop .deliverable-hero h1 { font-size: clamp(22px, 2.5vw, 32px); margin-bottom: 8px; }
-body.is-macos-desktop .deliverable-hero p { font-size: 14px; line-height: 1.45; }
-body.is-macos-desktop .deliverable-hero-tags { margin-top: 8px; }
-body.is-macos-desktop .result-surface,
-body.is-macos-desktop .media-panel,
-body.is-macos-desktop .image-gallery { padding: 16px; }
-@media (min-width: 961px) {
-  body.is-macos-desktop.has-result-stage,
-  body.is-macos-desktop.has-result-stage #root,
-  body.is-macos-desktop.has-result-stage .app-shell { height: auto; min-height: 100vh; overflow: visible; }
-  body.is-macos-desktop.has-result-stage .main-stage,
-  body.is-macos-desktop .stage-shell-ready,
-  body.is-macos-desktop .deliverable-stage-inner,
-  body.is-macos-desktop .deliverable-workspace-shell { height: auto; max-height: none; overflow: visible; }
-  body.is-macos-desktop .deliverable-workspace-shell { flex: 0 1 auto; }
-  body.is-macos-desktop .deliverable-workspace { height: auto; min-height: 420px; grid-auto-rows: auto; overflow: visible; }
-  body.is-macos-desktop .deliverable-primary,
-  body.is-macos-desktop .image-gallery,
-  body.is-macos-desktop .media-panel { height: auto; min-height: 420px; overflow: visible; }
-  body.is-macos-desktop .result-content-shell,
-  body.is-macos-desktop .image-gallery-body { height: auto; max-height: 55vh; overflow: auto; }
-}
-
-body.is-macos-desktop .result-actions::-webkit-scrollbar,
-body.is-macos-desktop .media-panel-actions::-webkit-scrollbar { display: block; height: 4px; }
-body.is-macos-desktop .result-actions::-webkit-scrollbar-thumb,
-body.is-macos-desktop .media-panel-actions::-webkit-scrollbar-thumb { background: #aaa; border-radius: 4px; }
-body.is-macos-desktop .result-actions > *, body.is-macos-desktop .media-panel-actions > * { flex: 0 0 auto; }
-body.is-macos-desktop .result-actions .copy-action, body.is-macos-desktop .result-actions .inline-action, body.is-macos-desktop .media-panel-actions .copy-action { --action-padding-x: 10px; --action-font-size: 13px; }
-body.is-macos-desktop .hero-form-footer { flex-wrap: nowrap; }
-body.is-macos-desktop .hero-form-tools { min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
-body.is-macos-desktop .hero-form-tools > * { flex: 0 0 auto; }
+body.is-macos-desktop .media-panel-head { flex-wrap: nowrap; gap: 8px; }
+body.is-macos-desktop .result-surface-copy { flex: 0 0 45px; max-width: 45px; }
+body.is-macos-desktop .result-actions,
+body.is-macos-desktop .media-panel-actions { flex-wrap: nowrap; gap: 6px; }
+body.is-macos-desktop .result-actions .copy-action,
+body.is-macos-desktop .result-actions .inline-action,
+body.is-macos-desktop .media-panel-actions .copy-action,
+body.is-macos-desktop .media-panel-actions .inline-action { --action-padding-x: 8px; --action-font-size: 12px; }

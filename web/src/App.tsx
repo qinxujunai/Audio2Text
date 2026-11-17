@@ -225,6 +225,7 @@ async function reloadIfFrontendAssetIsStale(): Promise<boolean> {
 
 export default function App() {
   const desktopApp = isDesktopApp();
+  const macDesktop = desktopApp && /Mac/i.test(navigator.platform);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [captures, setCaptures] = useState<CaptureListItem[]>([]);
   const [currentCapture, setCurrentCapture] = useState<CaptureEnvelope | null>(
@@ -244,13 +245,13 @@ export default function App() {
   const [pendingRemovals, setPendingRemovals] = useState<PendingRemoval[]>([]);
   const [pendingHistoryClear, setPendingHistoryClear] =
     useState<PendingHistoryClear | null>(null);
-  const initialPathRef = useRef(window.location.pathname);
+  const initialPathRef = useRef(macDesktop ? "/" : window.location.pathname);
   const pendingRemovalTimersRef = useRef<Record<string, number>>({});
   const pendingHistoryClearTimerRef = useRef<number | null>(null);
 
   const phase: AppPhase = useMemo(() => {
     if (workspaceError) return "attention";
-    if (bootstrapping) return "processing";
+    if (bootstrapping && !macDesktop) return "processing";
     if (submitting && !currentCapture) return "processing";
     if (!currentCapture) return "idle";
     if (["queued", "processing"].includes(currentCapture.capture.status))
@@ -262,7 +263,7 @@ export default function App() {
     if (currentCapture.capture.status === "failed") return "attention";
     if (currentCapture.capture.status === "done") return "done";
     return "idle";
-  }, [bootstrapping, currentCapture, submitting, workspaceError]);
+  }, [bootstrapping, currentCapture, submitting, workspaceError, macDesktop]);
   const showAppHeader = !desktopApp;
 
   const inputSubtitle = useMemo(() => {
@@ -933,7 +934,7 @@ export default function App() {
                 input={input}
                 subtitle={inputSubtitle}
                 selectedFile={selectedFile}
-                submitting={submitting || clearBusy}
+                submitting={submitting || clearBusy || (macDesktop && bootstrapping)}
                 supportedExtensions={supportedExtensions}
                 maxUploadSizeMb={config?.max_upload_size_mb || 0}
                 captures={recentCaptures}
@@ -961,7 +962,7 @@ export default function App() {
             </motion.div>
           ) : null}
 
-          {(bootstrapping || loadingDeepLink ||
+          {((bootstrapping && !macDesktop) || loadingDeepLink ||
             phase === "processing" ||
             phase === "attention") && (
             <motion.div
