@@ -603,7 +603,7 @@ fn restart_backend(app: AppHandle, state: State<'_, DesktopState>) -> Result<(),
     );
     stop_backend(&state);
     let (mut child, runtime) = spawn_backend(&app)?;
-    if !wait_for_backend(&runtime, Duration::from_secs(8)) {
+    if !wait_for_backend(&runtime, Duration::from_secs(if cfg!(target_os = "macos") { 35 } else { 8 })) {
         let _ = child.kill();
         let _ = child.wait();
         *state
@@ -708,7 +708,7 @@ pub fn run() {
             thread::spawn(move || {
                 let status = match spawn_backend(&handle) {
                     Ok((mut child, runtime))
-                        if wait_for_backend(&runtime, Duration::from_secs(8)) =>
+                        if wait_for_backend(&runtime, Duration::from_secs(if cfg!(target_os = "macos") { 35 } else { 8 })) =>
                     {
                         let state = handle.state::<DesktopState>();
                         if state.shutting_down.load(Ordering::Acquire) {

@@ -22,16 +22,23 @@ def _windows_process_is_alive(pid: int) -> bool:
 
 def _watch_desktop_parent() -> None:
     raw_pid = os.getenv("AUDIO2TEXT_DESKTOP_PARENT_PID", "").strip()
-    if not raw_pid or os.name != "nt":
+    if not raw_pid:
         return
     try:
         parent_pid = int(raw_pid)
     except ValueError:
         return
+    if parent_pid <= 1:
+        return
 
     def watch() -> None:
-        while _windows_process_is_alive(parent_pid):
-            time.sleep(0.1)
+        if os.name == "nt":
+            while _windows_process_is_alive(parent_pid):
+                time.sleep(0.1)
+        else:
+            # A terminated desktop process leaves its child reparented to launchd.
+            while os.getppid() == parent_pid:
+                time.sleep(0.5)
         os._exit(0)
 
     threading.Thread(target=watch, name="desktop-parent-watch", daemon=True).start()

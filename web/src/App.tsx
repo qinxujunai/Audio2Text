@@ -452,6 +452,11 @@ export default function App() {
   }, [config]);
 
   useEffect(() => {
+    document.body.classList.toggle("is-macos-desktop", config?.runtime_target === "macos_desktop");
+    return () => document.body.classList.remove("is-macos-desktop");
+  }, [config?.runtime_target]);
+
+  useEffect(() => {
     const className = "has-result-stage";
     if (phase === "done") {
       document.body.classList.add(className);
