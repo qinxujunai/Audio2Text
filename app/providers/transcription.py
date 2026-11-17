@@ -540,7 +540,7 @@ def transcription_runtime_status(*, platform: str = "") -> dict[str, object]:
     from scripts.config import COMPUTE_TYPE
     import os
     options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
-                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") == "windows_desktop")
+                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") in {"windows_desktop", "macos_desktop"})
     provider = get_transcription_provider(platform=platform)
     primary = provider.primary if isinstance(provider, FallbackTranscriptionProvider) else provider
     fallback = provider.fallback if isinstance(provider, FallbackTranscriptionProvider) else None
@@ -578,7 +578,7 @@ def get_transcription_provider(*, platform: str = "") -> TranscriptionProvider:
     from scripts.config import COMPUTE_TYPE
     import os
     options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
-                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") == "windows_desktop")
+                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") in {"windows_desktop", "macos_desktop"})
     device = options.get("execution_device", options["device"])
     if TRANSCRIPTION_PROVIDER == "openai_compatible" and OPENAI_COMPATIBLE_BASE_URL and OPENAI_COMPATIBLE_API_KEY and OPENAI_COMPATIBLE_MODEL:
         return OpenAICompatibleTranscriptionProvider(

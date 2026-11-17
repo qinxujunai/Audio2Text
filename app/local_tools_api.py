@@ -36,7 +36,7 @@ def local_only(request: Request):
             raise HTTPException(403, "请求来源未获授权。")
     # WebView2 correctly labels Tauri -> loopback as cross-site. The desktop
     # middleware already validates the exact origin and per-process token.
-    if request.headers.get("sec-fetch-site") == "cross-site" and not (RUNTIME_TARGET == "windows_desktop" and desktop_origin):
+    if request.headers.get("sec-fetch-site") == "cross-site" and not (RUNTIME_TARGET in {"windows_desktop", "macos_desktop"} and desktop_origin):
         raise HTTPException(403, "请求来源未获授权。")
 
 
@@ -114,7 +114,7 @@ def preferences():
     config = data.get("proofreading", {})
     stored_transcription = data.get("transcription", {})
     options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
-                                    desktop=RUNTIME_TARGET == "windows_desktop")
+                                    desktop=RUNTIME_TARGET in {"windows_desktop", "macos_desktop"})
     from app.providers.transcription import transcription_runtime_status
     from scripts.config import MODELS_DIR
     candidates = [options["model_path"], MODEL_PATH, SENSEVOICE_MODEL_DIR, MODELS_DIR / "sensevoice" / "small-fp32"]
@@ -173,7 +173,7 @@ def patch_preferences(payload: PreferencesPatch):
             raise ValueError("请检查要保存的设置。")
         if section == "transcription":
             current = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
-                                            desktop=RUNTIME_TARGET == "windows_desktop")
+                                            desktop=RUNTIME_TARGET in {"windows_desktop", "macos_desktop"})
             values = {k: values.get(k, str(current[k])) for k in allowed}
         else:
             current = read_preferences().get("proofreading", {})

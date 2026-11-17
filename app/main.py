@@ -179,7 +179,7 @@ def _validated_browser_session_url(value: str | None) -> str | None:
 
 @app.middleware("http")
 async def enforce_desktop_loopback_boundary(request: Request, call_next):
-    if RUNTIME_TARGET != "windows_desktop" or not DESKTOP_TOKEN:
+    if RUNTIME_TARGET not in {"windows_desktop", "macos_desktop"} or not DESKTOP_TOKEN:
         return await call_next(request)
 
     client_host = request.client.host if request.client else ""
@@ -681,7 +681,7 @@ def _selected_transcription_available() -> bool:
     from app.local_preferences import transcription_options
     from scripts.config import COMPUTE_TYPE, DEVICE, MODEL_PATH
     options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
-                                    desktop=RUNTIME_TARGET == "windows_desktop")
+                                    desktop=RUNTIME_TARGET in {"windows_desktop", "macos_desktop"})
     if options["engine"] != "sensevoice":
         return TRANSCRIPTION_AVAILABLE
     directory = options["model_path"]
@@ -711,18 +711,18 @@ def _config_payload() -> dict[str, Any]:
             "file_upload": True,
             "source_audio": True,
             "hardware_auto_selection": True,
-            "desktop_runtime_management": RUNTIME_TARGET == "windows_desktop",
+            "desktop_runtime_management": RUNTIME_TARGET in {"windows_desktop", "macos_desktop"},
             "cloud_demo": DEPLOYMENT_MODE == "cloud_preview",
         },
     }
 
 
 def _component_status() -> dict[str, str]:
-    local_runtime = RUNTIME_TARGET in {"local_web", "windows_desktop"}
+    local_runtime = RUNTIME_TARGET in {"local_web", "windows_desktop", "macos_desktop"}
     transcription_ready = _selected_transcription_available()
     return {
         "api": "ready",
-        "frontend": "embedded" if RUNTIME_TARGET == "windows_desktop" else ("ready" if _dist_available() else "missing"),
+        "frontend": "embedded" if RUNTIME_TARGET in {"windows_desktop", "macos_desktop"} else ("ready" if _dist_available() else "missing"),
         "storage": "ready" if repository is not None else "unavailable",
         "transcription": "ready" if transcription_ready else "unavailable",
         "ffmpeg": "ready" if FFMPEG_PATH.exists() else ("missing" if local_runtime else "not_required"),
@@ -919,7 +919,7 @@ async def on_startup() -> None:
             )
     recover_pending_captures()
     ensure_worker_started()
-    if RUNTIME_TARGET == "windows_desktop":
+    if RUNTIME_TARGET in {"windows_desktop", "macos_desktop"}:
         import threading
         def warm_local_engine():
             from app.providers.transcription import warm_desktop_transcription
@@ -1021,7 +1021,7 @@ async def config() -> dict[str, Any]:
 @app.post("/v1/runtime/browser/refresh")
 async def refresh_v1_browser_runtime() -> dict[str, Any]:
     """Refresh only the isolated browser context, preserving its profile."""
-    if RUNTIME_TARGET not in {"local_web", "windows_desktop"}:
+    if RUNTIME_TARGET not in {"local_web", "windows_desktop", "macos_desktop"}:
         raise HTTPException(status_code=404, detail="该功能仅在本地运行时可用。")
     try:
         await asyncio.to_thread(refresh_browser_runtime)
@@ -1034,7 +1034,7 @@ async def refresh_v1_browser_runtime() -> dict[str, Any]:
 async def open_v1_browser_session(payload: BrowserSessionRequest | None = None) -> dict[str, Any]:
     """Open the isolated browser profile for a user-led platform check."""
     global _browser_session_process
-    if RUNTIME_TARGET not in {"local_web", "windows_desktop"}:
+    if RUNTIME_TARGET not in {"local_web", "windows_desktop", "macos_desktop"}:
         raise HTTPException(status_code=404, detail="该功能仅在本地运行时可用。")
     script = PROJECT_ROOT / "scripts" / "refresh_browser_session.py"
     if not script.is_file():
@@ -1106,7 +1106,7 @@ async def open_v1_browser_session(payload: BrowserSessionRequest | None = None) 
 
 @app.get("/v1/runtime/packs")
 async def list_runtime_packs() -> dict[str, Any]:
-    if RUNTIME_TARGET != "windows_desktop":
+    if RUNTIME_TARGET not in {"windows_desktop", "macos_desktop"}:
         raise HTTPException(status_code=404, detail="该功能仅在 Windows 应用中可用。")
     try:
         return {"packs": runtime_pack_manager.status()}
@@ -1116,7 +1116,7 @@ async def list_runtime_packs() -> dict[str, Any]:
 
 @app.post("/v1/runtime/packs/{pack_id}/install")
 async def install_runtime_pack(pack_id: str) -> dict[str, Any]:
-    if RUNTIME_TARGET != "windows_desktop":
+    if RUNTIME_TARGET not in {"windows_desktop", "macos_desktop"}:
         raise HTTPException(status_code=404, detail="该功能仅在 Windows 应用中可用。")
     try:
         return await asyncio.to_thread(runtime_pack_manager.install, pack_id)

@@ -282,7 +282,7 @@ export default function App() {
       try {
         const runtimeConfig = await withTimeout(configRequest, 8000);
         setConfig(runtimeConfig);
-        if (runtimeConfig.runtime_target === "windows_desktop") {
+        if (["windows_desktop", "macos_desktop"].includes(runtimeConfig.runtime_target ?? "")) {
           try {
             const runtime = await listRuntimePacks();
             setRuntimePacks(
@@ -882,7 +882,7 @@ export default function App() {
   const runtimeSetupRequired =
     !loadingDeepLink &&
     phase === "idle" &&
-    config?.runtime_target === "windows_desktop" &&
+    ["windows_desktop", "macos_desktop"].includes(config?.runtime_target ?? "") &&
     runtimePacks.length > 0;
 
   return (
@@ -1067,7 +1067,7 @@ export default function App() {
             >
               <DeliverableStage
                 capture={currentCapture}
-                localToolsAvailable={Boolean(config && config.deployment_mode !== "cloud_preview" && (config.runtime_target === "local_web" || config.runtime_target === "windows_desktop"))}
+                localToolsAvailable={Boolean(config && config.deployment_mode !== "cloud_preview" && (config.runtime_target === "local_web" || ["windows_desktop", "macos_desktop"].includes(config.runtime_target ?? "")))}
                 onCaptureUpdated={setCurrentCapture}
                 onNotify={setToast}
                 onReset={resetWorkspace}

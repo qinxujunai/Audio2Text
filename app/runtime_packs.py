@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import shutil
+import sys
 import tempfile
 import time
 import zipfile
@@ -87,7 +88,7 @@ class RuntimePackManager:
             raise RuntimePackError("运行组件清单不可用，请重新安装应用。") from exc
         if payload.get("schema_version") != 1 or not isinstance(payload.get("packs"), list):
             raise RuntimePackError("运行组件清单版本不受支持。")
-        packs = [_parse_pack(item) for item in payload["packs"] if isinstance(item, dict)]
+        packs = [_parse_pack(item) for item in payload["packs"] if isinstance(item, dict) and not (sys.platform == "darwin" and "windows" in str(item.get("id", "")))]
         if len({pack.pack_id for pack in packs}) != len(packs):
             raise RuntimePackError("运行组件清单包含重复项目。")
         return packs

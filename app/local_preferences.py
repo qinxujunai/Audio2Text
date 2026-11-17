@@ -6,6 +6,7 @@ import ctypes
 import hashlib
 import json
 import os
+import sys
 import threading
 import uuid
 from functools import lru_cache
@@ -29,8 +30,26 @@ def cuda_available() -> bool:
 def _credential(value: str, *, decrypt: bool = False) -> str:
     if not value:
         return ""
+    if sys.platform == "darwin":
+        from keyring.backends.macOS import Keyring
+        from keyring.errors import KeyringError
+        store = Keyring()
+        service = "online.praxisai.wanxiang.proofreading"
+        try:
+            if decrypt:
+                if not value.startswith("keychain:"):
+                    raise ValueError("密钥来源不兼容，请重新配置。")
+                secret = store.get_password(service, value[len("keychain:"):])
+                if secret is None:
+                    raise ValueError("钥匙串中找不到密钥，请重新配置。")
+                return secret
+            account = uuid.uuid4().hex
+            store.set_password(service, account, value)
+            return "keychain:" + account
+        except KeyringError as exc:
+            raise ValueError("无法访问 macOS 钥匙串，请解锁后重试。") from exc
     if os.name != "nt":
-        raise ValueError("此平台暂不支持保存密钥，请使用 Windows 本地版。")
+        raise ValueError("此平台暂不支持安全保存密钥。")
 
     class Blob(ctypes.Structure):
         _fields_ = [("length", ctypes.c_ulong), ("data", ctypes.POINTER(ctypes.c_ubyte))]

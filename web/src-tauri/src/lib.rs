@@ -289,7 +289,7 @@ fn project_root() -> PathBuf {
 fn sidecar_command(app: &AppHandle) -> Result<(Command, PathBuf), String> {
     if cfg!(debug_assertions) {
         let root = project_root();
-        let python = root.join(".venv").join("Scripts").join("python.exe");
+        let python = if cfg!(windows) { root.join(".venv").join("Scripts").join("python.exe") } else { root.join(".venv").join("bin").join("python") };
         if !python.is_file() {
             return Err("开发环境缺少可用的项目 Python。".into());
         }
@@ -303,7 +303,7 @@ fn sidecar_command(app: &AppHandle) -> Result<(Command, PathBuf), String> {
         .resource_dir()
         .map_err(|error| format!("无法定位应用资源目录：{error}"))?;
     let sidecar_dir = resource_dir.join("sidecar").join("wanxiang-api");
-    let executable = sidecar_dir.join("wanxiang-api.exe");
+    let executable = sidecar_dir.join(if cfg!(windows) { "wanxiang-api.exe" } else { "wanxiang-api" });
     if !executable.is_file() {
         return Err("应用运行组件不完整，请重新安装万象成文。".into());
     }
@@ -323,11 +323,17 @@ fn spawn_backend(app: &AppHandle) -> Result<(Child, DesktopRuntimeInfo), String>
         .app_local_data_dir()
         .map_err(|error| format!("无法定位应用数据目录：{error}"))?
         .join("workspace");
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new("/opt/homebrew/bin/ffmpeg").is_file() {
+            command.env("AUDIO2TEXT_FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg");
+        }
+    }
     command
         .current_dir(working_dir)
         .env("AUDIO2TEXT_API_HOST", "127.0.0.1")
         .env("AUDIO2TEXT_API_PORT", port.to_string())
-        .env("AUDIO2TEXT_RUNTIME_TARGET", "windows_desktop")
+        .env("AUDIO2TEXT_RUNTIME_TARGET", if cfg!(target_os = "macos") { "macos_desktop" } else { "windows_desktop" })
         .env("AUDIO2TEXT_VERSION", env!("CARGO_PKG_VERSION"))
         .env(
             "AUDIO2TEXT_DESKTOP_PARENT_PID",
@@ -527,6 +533,11 @@ fn reveal_diagnostics_folder(app: AppHandle) -> Result<(), String> {
 }
 
 fn find_edge_executable() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"].into_iter().map(PathBuf::from).find(|path| path.is_file());
+    }
+    #[cfg(not(target_os = "macos"))]
     ["PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"]
         .into_iter()
         .filter_map(std::env::var_os)
@@ -548,7 +559,7 @@ fn open_platform_session(app: AppHandle, platform: String) -> Result<(), String>
         _ => return Err("当前平台不支持会话更新。".into()),
     };
     let executable = find_edge_executable()
-        .ok_or_else(|| "未找到 Microsoft Edge，请先完成系统更新。".to_string())?;
+        .ok_or_else(|| "未找到可用的 Chrome 或 Microsoft Edge 浏览器。".to_string())?;
     let profile_dir = app
         .path()
         .app_local_data_dir()

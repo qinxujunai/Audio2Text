@@ -16,7 +16,7 @@ logger = get_logger("model_loader", "transcribe.log")
 def _load_model():
     global _model, _model_runtime, _model_key
     options = transcription_options(device=DEVICE, model_path=MODEL_PATH, compute_type=COMPUTE_TYPE,
-                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") == "windows_desktop")
+                                    desktop=os.environ.get("AUDIO2TEXT_RUNTIME_TARGET") in {"windows_desktop", "macos_desktop"})
     selected_device = options["device"]
     if selected_device == "auto":
         selected_device = "cuda" if cuda_available() else "cpu"
