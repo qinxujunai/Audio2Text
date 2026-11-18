@@ -1315,7 +1315,7 @@ export function DeliverableStage({
                       </ArtifactAction>
                     ) : null}
 
-                    {showCopyAction && localToolsAvailable ? <ProofreadingButton captureId={capture.capture.id} /> : null}
+                    {showCopyAction && localToolsAvailable ? <ProofreadingButton captureId={capture.capture.id} originalText={capture.result.primary_text || ""} /> : null}
                     {showCopyAction && localToolsAvailable ? <SummaryButton captureId={capture.capture.id} /> : null}
                     {showCopyAction ? (
                       <button

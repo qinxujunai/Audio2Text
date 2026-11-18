@@ -53,11 +53,11 @@ class LocalToolsUI(UISmokeTestCase):
                 path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         self.capture_path = self.workspace_dir / "captures/demovideo001/capture.json"
         data = json.loads(self.capture_path.read_text(encoding="utf-8"))
-        data["result"]["primary_text"] = "这里有错别宇。金额123元。\n保留原话和全部内容。"
+        data["result"]["primary_text"] = "😀这里有错别宇。金额123元。\n保留原话和全部内容。"
         data["result"]["views"]["primary"] = data["result"]["primary_text"]
         self.capture_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         self.original = self.capture_path.read_bytes()
-        self.context.add_init_script("""window.__exports=[]; window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
+        self.context.add_init_script("""Object.defineProperty(navigator, 'platform', {value: 'Win32'}); window.__exports=[]; window.__TAURI_INTERNALS__={invoke:async(command,args)=>{
           if(command==='desktop_runtime_info') return {api_base:location.origin,token:''};
           if(command==='save_text_export'){window.__exports.push(args);return {file_name:'fixture.txt'};}
           throw Error('Unexpected native command '+command);
@@ -131,10 +131,18 @@ class LocalToolsUI(UISmokeTestCase):
         self.assertTrue(dialog.is_visible())
         dialog.get_by_role("button", name="开始校对").click()
         dialog.get_by_text("1 处候选修正", exact=False).wait_for()
-        self.assertEqual(dialog.locator("input[type=checkbox]:checked").count(), 0)
-        dialog.locator("input[type=checkbox]").check()
-        dialog.get_by_role("button", name="保存所选修正", exact=False).click()
+        change = dialog.locator(".proof-inline-change")
+        self.assertEqual(change.count(), 1)
+        self.assertIn("😀这里有", dialog.locator(".proof-document").inner_text())
+        self.assertEqual(change.get_attribute("aria-pressed"), "true")
+        change.click()
+        self.assertEqual(change.get_attribute("aria-pressed"), "false")
+        dialog.get_by_role("button", name="确认并保存校对版", exact=False).click()
         dialog.get_by_text("校对版已单独保存", exact=False).wait_for()
+        self.assertIn("错别宇", dialog.locator("pre").inner_text())
+        change.click()
+        dialog.get_by_role("button", name="确认并保存校对版", exact=False).click()
+        dialog.locator("pre").get_by_text("错别字", exact=False).wait_for()
         self.assertIn("金额123元", dialog.locator("pre").inner_text())
         self.assertIn("错别字", dialog.locator("pre").inner_text())
         dialog.get_by_role("button", name="下载原文", exact=True).click()
