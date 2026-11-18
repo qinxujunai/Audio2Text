@@ -325,7 +325,10 @@ fn spawn_backend(app: &AppHandle) -> Result<(Child, DesktopRuntimeInfo), String>
         .join("workspace");
     #[cfg(target_os = "macos")]
     {
-        if Path::new("/opt/homebrew/bin/ffmpeg").is_file() {
+        let bundled_ffmpeg = resource_dir.join("sidecar").join("ffmpeg").join("ffmpeg");
+        if bundled_ffmpeg.is_file() {
+            command.env("AUDIO2TEXT_FFMPEG_PATH", bundled_ffmpeg);
+        } else if Path::new("/opt/homebrew/bin/ffmpeg").is_file() {
             command.env("AUDIO2TEXT_FFMPEG_PATH", "/opt/homebrew/bin/ffmpeg");
         }
     }

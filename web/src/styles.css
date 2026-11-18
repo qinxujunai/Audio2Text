@@ -3256,7 +3256,6 @@ body.is-macos-desktop .deliverable-stage-inner { width: 1100px; max-width: 1100p
 body.is-macos-desktop .deliverable-workspace-shell { flex: 1; min-height: 0; height: auto; overflow: hidden; }
 body.is-macos-desktop .deliverable-workspace { height: auto; min-height: 0; }
 body.is-macos-desktop .deliverable-hero h1 { font-size: 30px; }
-body.is-macos-desktop .hero-copy h1 { font-size: 46px; }
 body.is-macos-desktop .result-surface-head,
 body.is-macos-desktop .media-panel-head { flex-wrap: nowrap; gap: 8px; }
 body.is-macos-desktop .result-surface-copy { flex: 0 0 45px; max-width: 45px; }

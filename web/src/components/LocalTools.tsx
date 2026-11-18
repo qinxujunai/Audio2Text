@@ -113,7 +113,7 @@ export function LocalSettingsButton() {
   return <><button type="button" className="local-settings-button" title="本地设置" aria-label="本地设置" onClick={() => setOpen(true)}><Settings2 size={18} aria-hidden="true" /></button>{open && createPortal(<PreferencesDialog onClose={() => setOpen(false)} />, document.body)}</>;
 }
 
-async function downloadText(captureId: string, version: string) {
+export async function downloadText(captureId: string, version: string) {
   const data = await localRequest<{ text: string }>(`/captures/${captureId}/proofreading/text?version=${version}`);
   if (isDesktopApp()) {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -125,7 +125,7 @@ async function downloadText(captureId: string, version: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function ProofreadingDialog({ captureId, originalText, onClose }: { captureId: string; originalText: string; onClose: () => void }) {
+function ProofreadingDialog({ captureId, originalText, onClose, onAccepted }: { captureId: string; originalText: string; onClose: () => void; onAccepted: (text: string) => void }) {
   const [data, setData] = useState<Proof>({ job: null, saved: null });
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState("");
@@ -194,18 +194,18 @@ function ProofreadingDialog({ captureId, originalText, onClose }: { captureId: s
       <p role="status">{edits.length ? `${edits.length} 处候选修正，已选 ${selected.size} 处。红色是原文，绿色是建议；点击修改可排除或恢复。` : "未发现符合保守规则的明确错误。"}</p>
       {!offsetsValid ? <p role="alert">原文与校对结果不一致，请重新校对。</p> : <div className="proof-document" aria-label="原文中的校对建议">{markedText}</div>}
       <button disabled={Boolean(busy) || !offsetsValid} type="button" className="is-primary" onClick={() => void run("accept", async () => {
-        const saved = await localRequest<Saved>(`/captures/${captureId}/proofreading/accept`, { indices: Array.from(selected), job_id: data.job?.id }); setData(d => ({ ...d, saved })); setShowSaved(true); setMessage("校对版已单独保存，原文未改变。");
+        const saved = await localRequest<Saved>(`/captures/${captureId}/proofreading/accept`, { indices: Array.from(selected), job_id: data.job?.id }); onAccepted(saved.text); onClose();
       })}><PendingLabel pending={busy === "accept"} label={`确认并保存校对版 · ${selected.size} 处`} waiting="正在保存…" /></button>
     </>}
-    {data.saved && <section><h3>已保存校对版</h3><p>{data.saved.edits.length} 处修正 · {data.saved.saved_at}。结果页仍显示原文。</p><div className="local-tools-actions"><button type="button" onClick={() => setShowSaved(v => !v)}>{showSaved ? "收起校对版" : "查看校对版"}</button><button type="button" onClick={() => void run("copy", async () => { await navigator.clipboard.writeText(data.saved!.text); setMessage("已复制校对版。"); })}>复制校对版</button></div>{showSaved && <pre className="local-tools-preview">{data.saved.text}</pre>}</section>}
+    {data.saved && <section><h3>已保存校对版</h3><p>{data.saved.edits.length} 处修正 · {data.saved.saved_at}。原文仍完整保留。</p><div className="local-tools-actions"><button type="button" onClick={() => setShowSaved(v => !v)}>{showSaved ? "收起校对版" : "查看校对版"}</button><button type="button" onClick={() => void run("copy", async () => { await navigator.clipboard.writeText(data.saved!.text); setMessage("已复制校对版。"); })}>复制校对版</button></div>{showSaved && <pre className="local-tools-preview">{data.saved.text}</pre>}</section>}
     <div className="local-tools-actions"><button disabled={Boolean(busy)} type="button" onClick={() => void run("original", async () => { await downloadText(captureId, "original"); setMessage(isDesktopApp() ? "原文已保存到 下载/万象成文。" : "原文已下载。"); })}>{busy !== "original" && <Download size={16} aria-hidden="true" />}<PendingLabel pending={busy === "original"} label="下载原文" waiting="正在保存原文…" /></button><button disabled={Boolean(busy) || !data.saved} type="button" onClick={() => void run("corrected", async () => { await downloadText(captureId, "corrected"); setMessage(isDesktopApp() ? "校对版已保存到 下载/万象成文。" : "校对版已下载。"); })}>{busy !== "corrected" && <Download size={16} aria-hidden="true" />}<PendingLabel pending={busy === "corrected"} label="下载校对版" waiting="正在保存校对版…" /></button></div>
     {message && <p role="status" className="local-tools-message">{message}</p>}
   </div>{settingsOpen && <PreferencesDialog onClose={() => setSettingsOpen(false)} />}</Dialog>;
 }
 
-export function ProofreadingButton({ captureId, originalText }: { captureId: string; originalText: string }) {
+export function ProofreadingButton({ captureId, originalText, onAccepted }: { captureId: string; originalText: string; onAccepted: (text: string) => void }) {
   const [open, setOpen] = useState(false);
-  return <><button type="button" className="copy-action" onClick={() => setOpen(true)}><Check size={15} />校对</button>{open && <ProofreadingDialog key={captureId} captureId={captureId} originalText={originalText} onClose={() => setOpen(false)} />}</>;
+  return <><button type="button" className="copy-action" onClick={() => setOpen(true)}><Check size={15} />校对</button>{open && <ProofreadingDialog key={captureId} captureId={captureId} originalText={originalText} onAccepted={onAccepted} onClose={() => setOpen(false)} />}</>;
 }
 
 type SummaryPoint = { point: string; quote: string; start: number; end: number };

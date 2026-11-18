@@ -34,6 +34,7 @@ import {
 import {
   calmErrorMessage,
   ensureCaptureCover,
+  localRequest,
   resolveApiUrl,
   retryCaptureImage,
 } from "../api";
@@ -49,7 +50,7 @@ import type { Artifact, CaptureEnvelope, CaptureSourceImage, ResultSegment } fro
 import type { ImageViewerItem, ImageViewerMode } from "./ImageViewer";
 
 const ImageViewer = lazy(() => import("./ImageViewer"));
-import { ProofreadingButton, SummaryButton } from "./LocalTools";
+import { downloadText, ProofreadingButton, SummaryButton } from "./LocalTools";
 
 type DeliverableStageProps = {
   capture: CaptureEnvelope;
@@ -1008,12 +1009,24 @@ export function DeliverableStage({
   const [saveReceipt, setSaveReceipt] = useState<SaveReceipt | null>(null);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [coverRequested, setCoverRequested] = useState(false);
+  const [correctedText, setCorrectedText] = useState<string | null>(null);
+  const [textVersion, setTextVersion] = useState<"original" | "corrected">("original");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const viewerTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const primaryText =
+  const originalText =
     capture.result.views.primary || capture.result.primary_text || "";
+  const primaryText = textVersion === "corrected" && correctedText !== null ? correctedText : originalText;
   const markdownText = capture.result.views.markdown || "";
-  const copyPayload = markdownText.trim() || primaryText;
+  const copyPayload = primaryText;
+  useEffect(() => {
+    let active = true;
+    setCorrectedText(null);
+    setTextVersion("original");
+    if (localToolsAvailable) void localRequest<{ saved: { text: string } | null }>(`/captures/${capture.capture.id}/proofreading`)
+      .then(data => { if (active && data.saved) { setCorrectedText(data.saved.text); setTextVersion("corrected"); } })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [capture.capture.id, localToolsAvailable]);
   const isLongTextResult =
     primaryText.trim().length >= 900 ||
     primaryText.split("\n").filter((item) => item.trim()).length >= 8;
@@ -1291,7 +1304,9 @@ export function DeliverableStage({
                       </ArtifactAction>
                     ) : null}
 
-                    {textArtifact ? (
+                    {textArtifact && textVersion === "corrected" ? (
+                      <button className="copy-action" type="button" onClick={() => void downloadText(capture.capture.id, "corrected").then(() => onNotify("校对版已保存。")).catch(() => onNotify("保存失败，请重试。"))}><Download size={14} />{isDesktopApp() ? "保存 .txt" : "下载 .txt"}</button>
+                    ) : textArtifact ? (
                       <ArtifactAction
                         artifact={textArtifact}
                         captureId={capture.capture.id}
@@ -1303,7 +1318,7 @@ export function DeliverableStage({
                       </ArtifactAction>
                     ) : null}
 
-                    {markdownArtifact ? (
+                    {markdownArtifact && textVersion === "original" ? (
                       <ArtifactAction
                         artifact={markdownArtifact}
                         captureId={capture.capture.id}
@@ -1315,7 +1330,7 @@ export function DeliverableStage({
                       </ArtifactAction>
                     ) : null}
 
-                    {showCopyAction && localToolsAvailable ? <ProofreadingButton captureId={capture.capture.id} originalText={capture.result.primary_text || ""} /> : null}
+                    {showCopyAction && localToolsAvailable ? <ProofreadingButton captureId={capture.capture.id} originalText={capture.result.primary_text || ""} onAccepted={text => { setCorrectedText(text); setTextVersion("corrected"); onNotify("已保存校对版，原文可以随时切换查看。"); }} /> : null}
                     {showCopyAction && localToolsAvailable ? <SummaryButton captureId={capture.capture.id} /> : null}
                     {showCopyAction ? (
                       <button
@@ -1335,6 +1350,7 @@ export function DeliverableStage({
                   </div>
                 </div>
 
+                {correctedText !== null ? <div className="proof-version-switch" role="group" aria-label="正文版本"><button type="button" aria-pressed={textVersion === "corrected"} onClick={() => setTextVersion("corrected")}>校对版</button><button type="button" aria-pressed={textVersion === "original"} onClick={() => setTextVersion("original")}>原文</button></div> : null}
                 <div
                   className={
                     isLongTextResult
@@ -1342,7 +1358,7 @@ export function DeliverableStage({
                       : "result-content-shell"
                   }
                 >
-                  {hasPodcastPanel && timedSegments.length ? (
+                  {textVersion === "original" && hasPodcastPanel && timedSegments.length ? (
                     <TimedTranscript
                       activeTime={playbackTime}
                       onSeek={seekPodcast}

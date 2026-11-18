@@ -17,6 +17,7 @@ license text in the installer artifact.
 | yt-dlp | Public media extraction | Unlicense |
 | Playwright | Controlled browser fallback | Apache-2.0 |
 | FFmpeg 9.0 Essentials (Gyan.dev Windows build) | Media conversion | GPL-3.0-only; distributed as a separate runtime package |
+| FFmpeg 9.0 (Apple Silicon binary from imageio-ffmpeg 0.8.1) | Media conversion | GPL-2.0-or-later; separate executable, see `ffmpeg -L` and source links below |
 | Faster-Whisper / CTranslate2 | Local transcription | MIT |
 | ONNX Runtime | Optional native model runtime | MIT |
 | sherpa-onnx | SenseVoice CPU and isolated CUDA inference | Apache-2.0 |
@@ -49,6 +50,7 @@ not redistributed in this installer. Component provenance lives beside the SDK.
 - SenseVoice fine-tune source and license: https://huggingface.co/ASLP-lab/WSYue-ASR
 - FFmpeg 9.0 Essentials binary and checksums: https://www.gyan.dev/ffmpeg/builds/
 - FFmpeg corresponding source: https://github.com/FFmpeg/FFmpeg/tree/n9.0
+- macOS binary distributor and build scripts: https://github.com/imageio/imageio-ffmpeg/tree/v0.8.1
 
 
 
